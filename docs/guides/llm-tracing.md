@@ -83,27 +83,27 @@ def call_custom_llm(prompt, model="custom-model"):
         span.set_attribute("gen_ai.system", "custom")
         span.set_attribute("gen_ai.request.model", model)
         span.set_attribute("gen_ai.operation.name", "chat")
-        
+
         # Add input event
         span.add_event("gen_ai.content.prompt", {
             "gen_ai.prompt": prompt
         })
-        
+
         # Simulate LLM call
         start_time = time.time()
         response = f"Response to: {prompt}"  # Your LLM call here
         end_time = time.time()
-        
+
         # Add output event
         span.add_event("gen_ai.content.completion", {
             "gen_ai.completion": response
         })
-        
+
         # Set usage metrics
         span.set_attribute("gen_ai.usage.input_tokens", len(prompt) // 4)
         span.set_attribute("gen_ai.usage.output_tokens", len(response) // 4)
         span.set_attribute("llm.latency_ms", (end_time - start_time) * 1000)
-        
+
         return response
 
 # Use the function
@@ -126,38 +126,38 @@ def stream_llm_call(prompt):
         span.set_attribute("gen_ai.request.model", "gpt-3.5-turbo")
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("llm.streaming", True)
-        
+
         # Add prompt event
         span.add_event("gen_ai.content.prompt", {
             "gen_ai.prompt": prompt
         })
-        
+
         # Simulate streaming chunks
         chunks = ["Hello", " there!", " How", " can", " I", " help?"]
         full_response = ""
-        
+
         for i, chunk in enumerate(chunks):
             full_response += chunk
-            
+
             # Add chunk event
             span.add_event("gen_ai.content.chunk", {
                 "gen_ai.completion.chunk": chunk,
                 "chunk.index": i,
                 "chunk.timestamp": time.time()
             })
-            
+
             time.sleep(0.1)  # Simulate streaming delay
-        
+
         # Add final completion event
         span.add_event("gen_ai.content.completion", {
             "gen_ai.completion": full_response
         })
-        
+
         # Set final metrics
         span.set_attribute("gen_ai.usage.input_tokens", len(prompt) // 4)
         span.set_attribute("gen_ai.usage.output_tokens", len(full_response) // 4)
         span.set_attribute("llm.chunks_count", len(chunks))
-        
+
         return full_response
 
 # Use streaming function
@@ -275,26 +275,26 @@ def safe_llm_call(prompt):
     with tracer.start_span("llm_call") as span:
         span.set_attribute("gen_ai.system", "openai")
         span.set_attribute("gen_ai.request.model", "gpt-3.5-turbo")
-        
+
         try:
             # Your LLM call here
             response = call_llm_api(prompt)
-            
+
             span.add_event("gen_ai.content.completion", {
                 "gen_ai.completion": response
             })
-            
+
             return response
-            
+
         except Exception as e:
             # Record the exception
             span.record_exception(e)
             span.set_status("error", str(e))
-            
+
             # Add error-specific attributes
             span.set_attribute("error.type", type(e).__name__)
             span.set_attribute("error.message", str(e))
-            
+
             # Re-raise or handle as needed
             raise
 ```
@@ -313,28 +313,28 @@ class ConversationTracer:
     def __init__(self, conversation_id):
         self.conversation_id = conversation_id
         self.turn_count = 0
-    
+
     def trace_turn(self, user_message, assistant_response):
         self.turn_count += 1
-        
+
         with tracer.start_span("conversation_turn") as span:
             span.set_attribute("conversation.id", self.conversation_id)
             span.set_attribute("conversation.turn", self.turn_count)
-            
+
             # Trace the LLM call
             with tracer.start_span("llm_call") as llm_span:
                 llm_span.set_attribute("gen_ai.system", "openai")
                 llm_span.set_attribute("gen_ai.request.model", "gpt-3.5-turbo")
-                
+
                 # Add conversation context
                 llm_span.add_event("gen_ai.content.prompt", {
                     "gen_ai.prompt": user_message
                 })
-                
+
                 llm_span.add_event("gen_ai.content.completion", {
                     "gen_ai.completion": assistant_response
                 })
-                
+
                 # Set turn-specific attributes
                 llm_span.set_attribute("conversation.turn", self.turn_count)
                 llm_span.set_attribute("gen_ai.usage.input_tokens", len(user_message) // 4)
@@ -360,32 +360,32 @@ def process_batch(prompts):
     with tracer.start_span("batch_llm_processing") as batch_span:
         batch_span.set_attribute("batch.size", len(prompts))
         batch_span.set_attribute("batch.id", "batch_123")
-        
+
         results = []
         total_tokens = 0
-        
+
         for i, prompt in enumerate(prompts):
             with tracer.start_span(f"batch_item_{i}") as item_span:
                 item_span.set_attribute("batch.item_index", i)
                 item_span.set_attribute("gen_ai.system", "openai")
                 item_span.set_attribute("gen_ai.request.model", "gpt-3.5-turbo")
-                
+
                 # Process individual item
                 response = f"Response to: {prompt}"
                 results.append(response)
-                
+
                 # Track tokens
                 input_tokens = len(prompt) // 4
                 output_tokens = len(response) // 4
                 total_tokens += input_tokens + output_tokens
-                
+
                 item_span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
                 item_span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
-        
+
         # Set batch summary
         batch_span.set_attribute("batch.total_tokens", total_tokens)
         batch_span.set_attribute("batch.avg_tokens_per_item", total_tokens / len(prompts))
-        
+
         return results
 
 # Process a batch
@@ -408,39 +408,39 @@ def monitored_llm_call(prompt):
     with tracer.start_span("monitored_llm_call") as span:
         # Performance tracking
         start_time = time.time()
-        
+
         span.set_attribute("gen_ai.system", "openai")
         span.set_attribute("gen_ai.request.model", "gpt-3.5-turbo")
-        
+
         # Add performance markers
         span.add_event("llm.request_start", {"timestamp": start_time})
-        
+
         # Simulate LLM call with timing
         time.sleep(0.5)  # Simulate network latency
         first_token_time = time.time()
-        
+
         span.add_event("llm.first_token", {
             "timestamp": first_token_time,
             "ttft_ms": (first_token_time - start_time) * 1000
         })
-        
+
         # Simulate completion
         time.sleep(0.3)
         end_time = time.time()
-        
+
         # Set performance metrics
         total_latency = (end_time - start_time) * 1000
         ttft = (first_token_time - start_time) * 1000
-        
+
         span.set_attribute("llm.latency_ms", total_latency)
         span.set_attribute("llm.time_to_first_token_ms", ttft)
         span.set_attribute("llm.tokens_per_second", 50 / (total_latency / 1000))
-        
+
         span.add_event("llm.request_complete", {
             "timestamp": end_time,
             "total_latency_ms": total_latency
         })
-        
+
         return "LLM response"
 
 # Monitor performance
@@ -459,4 +459,3 @@ response = monitored_llm_call("Generate a summary")
 8. **Batch operations** for better performance
 9. **Use structured events** for better analysis
 10. **Monitor SDK overhead** in production
-

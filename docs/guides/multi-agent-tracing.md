@@ -32,7 +32,7 @@ coordinator_config = AgentConfig(
 
 worker_config = AgentConfig(
     name="worker",
-    agent_type="worker", 
+    agent_type="worker",
     description="Processes individual tasks",
     parent_agent="coordinator"
 )
@@ -79,7 +79,7 @@ async def chat_completion(messages):
 # Execute with specific agent context
 with AgentContext(coordinator):
     result = coordinate_workflow(task)
-    
+
     # Switch to worker context
     with AgentContext(worker):
         processed = process_task(subtask)
@@ -100,12 +100,12 @@ config = AgentConfig(
     agent_type="llm_processor",
     description="Processes LLM requests",
     version="1.2.0",
-    
+
     # Capabilities and metadata
     capabilities={"chat", "completion", "embedding"},
     tags={"production", "v2"},
     metadata={"team": "ai-platform", "owner": "john@company.com"},
-    
+
     # Tracing configuration
     custom_headers=CustomHeaders(
         project_id="my-project",
@@ -114,13 +114,13 @@ config = AgentConfig(
     ),
     sampling_rate=0.8,
     capture_llm_content=True,
-    
+
     # Agent-specific settings
     max_concurrent_traces=200,
     trace_retention_hours=48,
     enable_metrics=True,
     enable_evaluation=True,
-    
+
     # Relationships
     parent_agent="coordinator",
     child_agents={"worker-1", "worker-2"}
@@ -198,7 +198,7 @@ from noveum_trace import observe, update_current_span
 def data_processor(data):
     # Process data
     result = transform(data)
-    
+
     # Update span with component information
     update_current_span(
         input=data,
@@ -209,7 +209,7 @@ def data_processor(data):
             "items_processed": len(data)
         }
     )
-    
+
     return result
 
 @observe(
@@ -220,7 +220,7 @@ def data_processor(data):
 )
 async def llm_component(prompt, model="gpt-4"):
     response = await call_llm(prompt, model)
-    
+
     update_current_span(
         metadata={
             "model": model,
@@ -229,7 +229,7 @@ async def llm_component(prompt, model="gpt-4"):
             "quality_score": 0.88
         }
     )
-    
+
     return response
 ```
 
@@ -286,10 +286,10 @@ def complex_operation(data):
         input=data,
         metadata={"operation_type": "batch_processing"}
     )
-    
+
     # Process data
     result = process(data)
-    
+
     # Add output and metrics
     update_current_span(
         output=result,
@@ -300,7 +300,7 @@ def complex_operation(data):
         },
         custom_metric=42
     )
-    
+
     return result
 ```
 
@@ -316,7 +316,7 @@ def coordinate_workflow(task):
     # Coordinator processes the task
     subtasks = split_task(task)
     results = []
-    
+
     # Process with different agents
     for subtask in subtasks:
         if subtask.type == "analysis":
@@ -325,9 +325,9 @@ def coordinate_workflow(task):
         elif subtask.type == "generation":
             with AgentContext(generator_agent):
                 result = generate_content(subtask.prompt)
-        
+
         results.append(result)
-    
+
     return combine_results(results)
 ```
 
@@ -339,11 +339,11 @@ from noveum_trace.agents.context import AsyncAgentContext
 @trace(name="async_multi_agent_workflow")
 async def async_workflow(tasks):
     results = []
-    
+
     # Process tasks concurrently with different agents
     async with AsyncAgentContext(orchestrator_agent):
         concurrent_tasks = []
-        
+
         for task in tasks:
             if task.requires_llm:
                 async with AsyncAgentContext(llm_agent):
@@ -351,9 +351,9 @@ async def async_workflow(tasks):
             else:
                 async with AsyncAgentContext(data_agent):
                     concurrent_tasks.append(process_data_task(task))
-        
+
         results = await asyncio.gather(*concurrent_tasks)
-    
+
     return results
 ```
 
@@ -365,22 +365,22 @@ def hierarchical_workflow(project):
     # Manager level
     with AgentContext(manager_agent):
         project_plan = create_project_plan(project)
-        
+
         # Team lead level
         with AgentContext(team_lead_agent):
             tasks = break_down_project(project_plan)
-            
+
             # Developer level
             results = []
             for task in tasks:
                 with AgentContext(developer_agent):
                     result = implement_task(task)
                     results.append(result)
-            
+
             integration_result = integrate_results(results)
-        
+
         final_result = finalize_project(integration_result)
-    
+
     return final_result
 ```
 
@@ -392,34 +392,34 @@ def hierarchical_workflow(project):
 @trace(name="send_message")
 def send_message(message, target_agent):
     current_agent = get_current_agent()
-    
+
     message_data = {
         "content": message,
         "sender": current_agent.name,
         "target": target_agent,
         "timestamp": time.time()
     }
-    
+
     # Send through message queue
     message_queue.put(message_data)
-    
+
     update_current_span(
         output=message_data,
         metadata={"communication_type": "async_message"}
     )
-    
+
     return message_data
 
 @trace(name="receive_messages")
 def receive_messages():
     current_agent = get_current_agent()
     messages = message_queue.get_messages_for(current_agent.name)
-    
+
     update_current_span(
         output=messages,
         metadata={"messages_received": len(messages)}
     )
-    
+
     return messages
 ```
 
@@ -431,15 +431,15 @@ def cross_agent_operation(data):
     # Process with first agent
     with AgentContext(agent1):
         intermediate = process_step1(data)
-        
+
         # Pass context to second agent
         trace_context = get_current_trace()
-        
+
     # Continue with second agent (context is propagated)
     with AgentContext(agent2):
         # Context is automatically available
         final_result = process_step2(intermediate)
-    
+
     return final_result
 ```
 
@@ -489,7 +489,7 @@ class CustomAgent(Agent):
     def __init__(self, config, custom_param):
         super().__init__(config)
         self.custom_param = custom_param
-    
+
     def custom_method(self):
         # Custom agent behavior
         pass
@@ -617,4 +617,3 @@ For detailed API documentation, see:
 - [Decorator API Reference](../api/decorators.md)
 - [Registry API Reference](../api/registry.md)
 - [Context API Reference](../api/context.md)
-

@@ -1,32 +1,27 @@
 [build-system]
-requires = ["hatchling>=1.21.0"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "noveum-trace"
-dynamic = ["version"]
+version = "0.1.0"
 description = "High-performance LLM tracing SDK with OpenTelemetry compliance and real-time evaluation"
 readme = "README.md"
-license = "MIT"
-requires-python = ">=3.8"
+license = "Apache-2.0"
 authors = [
-    { name = "Noveum Team", email = "team@noveum.ai" },
+    {name = "Noveum AI", email = "team@noveum.ai"},
+]
+maintainers = [
+    {name = "Noveum AI", email = "team@noveum.ai"},
 ]
 keywords = [
-    "llm",
-    "tracing",
-    "observability",
-    "opentelemetry",
-    "ai",
-    "monitoring",
-    "evaluation",
-    "noveum",
-    "novaeval",
+    "llm", "tracing", "observability", "opentelemetry", "ai", "monitoring",
+    "evaluation", "noveum", "novaeval", "agents", "instrumentation"
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -34,62 +29,87 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Monitoring",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
 ]
+requires-python = ">=3.8"
 dependencies = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
     "opentelemetry-semantic-conventions>=0.41b0",
-    "msgpack>=1.0.0",
-    "aiohttp>=3.8.0",
     "pydantic>=2.0.0",
     "typing-extensions>=4.0.0",
+    "msgpack>=1.0.0",
+    "aiohttp>=3.8.0",
     "tenacity>=8.0.0",
     "structlog>=23.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
 elasticsearch = [
     "elasticsearch>=8.0.0",
 ]
+instrumentation = [
+    "openai>=1.0.0",
+    "anthropic>=0.8.0",
+]
 dev = [
-    "pytest>=7.0.0",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.0.0",
-    "black>=23.0.0",
+    "pytest-mock>=3.11.0",
+    "pytest-xdist>=3.3.0",
+    "black>=23.9.0",
     "isort>=5.12.0",
-    "flake8>=6.0.0",
-    "mypy>=1.0.0",
-    "pre-commit>=3.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.6.0",
+    "pre-commit>=3.5.0",
+    "bandit>=1.7.5",
+    "safety>=2.3.0",
+    "coverage>=7.3.0",
+    "commitizen>=3.12.0",
+    "python-dotenv>=1.0.0",
 ]
 docs = [
-    "sphinx>=6.0.0",
-    "sphinx-rtd-theme>=1.2.0",
-    "myst-parser>=1.0.0",
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=1.3.0",
+    "myst-parser>=2.0.0",
+    "sphinx-autodoc-typehints>=1.24.0",
+    "sphinx-copybutton>=0.5.2",
 ]
 all = [
-    "noveum-trace[elasticsearch,dev,docs]",
+    "elasticsearch>=8.0.0",
+    "openai>=1.0.0",
+    "anthropic>=0.8.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Noveum/noveum-trace"
 Documentation = "https://noveum-trace.readthedocs.io"
 Repository = "https://github.com/Noveum/noveum-trace"
-Issues = "https://github.com/Noveum/noveum-trace/issues"
+"Bug Tracker" = "https://github.com/Noveum/noveum-trace/issues"
 Changelog = "https://github.com/Noveum/noveum-trace/blob/main/CHANGELOG.md"
 
-[tool.hatch.version]
-path = "src/noveum_trace/__init__.py"
+[project.entry-points."noveum_trace.sinks"]
+console = "noveum_trace.sinks.console:ConsoleSink"
+file = "noveum_trace.sinks.file:FileSink"
+elasticsearch = "noveum_trace.sinks.elasticsearch:ElasticsearchSink"
+noveum = "noveum_trace.sinks.noveum:NoveumSink"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/noveum_trace"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
+[tool.setuptools.package-data]
+noveum_trace = ["py.typed", "*.yaml", "*.json"]
+
+# Black configuration
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -105,40 +125,86 @@ extend-exclude = '''
 )/
 '''
 
+# isort configuration
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 line_length = 88
 known_first_party = ["noveum_trace"]
+known_third_party = ["pytest", "pydantic", "opentelemetry", "aiohttp", "tenacity"]
 
+# Ruff configuration
+[tool.ruff]
+target-version = "py38"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "ARG001", # unused-function-args
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "TID", # flake8-tidy-imports
+    "Q", # flake8-quotes
+    "FLY", # flynt
+    "PERF", # perflint
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "B904",  # raise exceptions with raise ... from err (not critical)
+    "C901",  # too complex
+    "W191",  # indentation contains tabs
+    "PERF203",  # try-except within a loop incurs performance overhead
+    "PERF102",  # when using only values of dict use values() method
+    "RUF012",  # mutable class attributes should be annotated with ClassVar
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*" = ["ARG001", "S101"]
+
+# MyPy configuration
 [tool.mypy]
 python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
 check_untyped_defs = true
+disallow_any_generics = false  # Allow generic types without parameters for now
+disallow_incomplete_defs = true
 disallow_untyped_decorators = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
 no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
+show_error_codes = true
 strict_equality = true
+warn_redundant_casts = true
+warn_return_any = false  # Don't warn about returning Any
+warn_unreachable = false  # Don't warn about unreachable code
+warn_unused_configs = true
+warn_unused_ignores = false  # Don't warn about unused ignore comments
+
+# Disable specific error codes for non-critical issues
+disable_error_code = ["import-untyped", "type-arg"]
 
 [[tool.mypy.overrides]]
 module = [
     "msgpack.*",
     "elasticsearch.*",
     "tenacity.*",
+    "opentelemetry.*",
+    "structlog.*",
 ]
 ignore_missing_imports = true
 
+# Pytest configuration
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
+minversion = "7.0"
 addopts = [
     "--strict-markers",
     "--strict-config",
@@ -146,17 +212,34 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
+    "--disable-warnings",
+    "-ra",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
 ]
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
     "slow: Slow tests",
+    "e2e: End-to-end tests",
 ]
 
+# Coverage configuration
 [tool.coverage.run]
 source = ["src/noveum_trace"]
+branch = true
 omit = [
     "*/tests/*",
+    "*/test_*",
+    "*/__init__.py",
     "*/examples/*",
 ]
 
@@ -173,4 +256,103 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+show_missing = true
+skip_covered = false
 
+[tool.coverage.html]
+directory = "htmlcov"
+
+# Commitizen configuration
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_scheme = "pep440"
+version_provider = "pep621"
+update_changelog_on_bump = true
+major_version_zero = true
+tag_format = "v$major.$minor.$patch$prerelease"
+bump_message = "bump: version $current_version → $new_version"
+changelog_file = "CHANGELOG.md"
+changelog_format = "CHANGELOG.md"
+changelog_merge_prerelease = true
+version_files = [
+    "src/noveum_trace/__init__.py",
+    "pyproject.toml",
+]
+style = [
+    ["qmark", "fg:#ff9d00 bold"],
+    ["question", "bold"],
+    ["answer", "fg:#ff9d00 bold"],
+    ["pointer", "fg:#ff9d00 bold"],
+    ["highlighted", "fg:#ff9d00 bold"],
+    ["selected", "fg:#cc5454"],
+    ["separator", "fg:#cc5454"],
+    ["instruction", ""],
+    ["text", ""],
+    ["disabled", "fg:#858585 italic"]
+]
+
+[tool.commitizen.customize]
+message_template = "{{change_type}}{{scope}}: {{message}}"
+example = "feature: add span context management"
+schema = "<type>(<scope>): <subject>"
+schema_pattern = "^(build|ci|docs|feat|fix|perf|refactor|style|test|chore)(\\(.+\\))?!?: .+$"
+info_path = "cz_info.txt"
+info = """
+This is a customized info for commitizen.
+
+Types:
+  build: Changes that affect the build system or external dependencies
+  ci: Changes to CI configuration files and scripts
+  docs: Documentation only changes
+  feat: A new feature
+  fix: A bug fix
+  perf: A code change that improves performance
+  refactor: A code change that neither fixes a bug nor adds a feature
+  style: Changes that do not affect the meaning of the code (white-space, formatting, etc)
+  test: Adding missing tests or correcting existing tests
+  chore: Changes to the build process or auxiliary tools and libraries
+
+Breaking changes:
+  Add ! after the type/scope to indicate a breaking change
+  Example: feat!: remove deprecated tracing API
+"""
+
+[[tool.commitizen.customize.questions]]
+type = "list"
+name = "change_type"
+choices = [
+    {value = "feat", name = "feat: ✨ A new feature"},
+    {value = "fix", name = "fix: 🐛 A bug fix"},
+    {value = "docs", name = "docs: 📚 Documentation only changes"},
+    {value = "style", name = "style: 💎 Changes that do not affect the meaning of the code"},
+    {value = "refactor", name = "refactor: 📦 A code change that neither fixes a bug nor adds a feature"},
+    {value = "perf", name = "perf: 🚀 A code change that improves performance"},
+    {value = "test", name = "test: 🚨 Adding missing tests or correcting existing tests"},
+    {value = "build", name = "build: 🛠 Changes that affect the build system or external dependencies"},
+    {value = "ci", name = "ci: ⚙️ Changes to CI configuration files and scripts"},
+    {value = "chore", name = "chore: ♻️ Changes to the build process or auxiliary tools and libraries"},
+]
+message = "Select the type of change that you're committing:"
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "scope"
+message = "What is the scope of this change? (class or file name): (press [enter] to skip)"
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "message"
+message = "Write a short and imperative summary of the code changes: (lower case and no period)"
+
+[[tool.commitizen.customize.questions]]
+type = "confirm"
+name = "is_breaking_change"
+message = "Is this a BREAKING CHANGE? Correlates with MAJOR in SemVer"
+default = false
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "breaking_change_desc"
+message = "Describe the breaking change:"
+filter = "lambda x: x.strip()"
+when = "{{ cookiecutter.is_breaking_change }}"

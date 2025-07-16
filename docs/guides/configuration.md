@@ -151,7 +151,7 @@ sinks:
     directory: "./traces"
     max_file_size_mb: 100
     compression: true
-    
+
   - type: "elasticsearch"
     name: "es-sink"
     hosts: ["localhost:9200"]
@@ -365,4 +365,3 @@ print(f"Spans exported: {stats['spans_exported']}")
 5. **Monitor SDK performance and adjust settings**
 6. **Implement proper error handling**
 7. **Use meaningful service and span names**
-

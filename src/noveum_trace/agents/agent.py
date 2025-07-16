@@ -1,17 +1,20 @@
 """
-Agent class and configuration for multi-agent tracing.
+Agent class for managing individual AI agents and their lifecycle.
 """
 
-import uuid
+import logging
 import threading
-from typing import Any, Dict, List, Optional, Set
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import logging
+from typing import Any, Dict, Optional, Set
 
-from ..core.tracer import NoveumTracer, TracerConfig
-from ..types import CustomHeaders
-from ..utils.exceptions import ConfigurationError, ValidationError
+from noveum_trace.core.tracer import NoveumTracer, TracerConfig
+from noveum_trace.types import CustomHeaders
+from noveum_trace.utils.exceptions import (
+    ConfigurationError,
+    ValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,56 +22,54 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     """Configuration for an individual agent."""
-    
+
     # Agent identity
     name: str
     agent_type: str = "generic"  # Changed from 'type' to 'agent_type'
     id: Optional[str] = None  # Added id field
     description: Optional[str] = None
     version: str = "1.0.0"
-    
+
     # Agent capabilities and metadata
     capabilities: Set[str] = field(default_factory=set)
     metadata: Dict[str, Any] = field(default_factory=dict)
     tags: Set[str] = field(default_factory=set)
-    
+
     # Tracing configuration (inherits from project defaults)
     custom_headers: Optional[CustomHeaders] = None
     sampling_rate: Optional[float] = None
     capture_llm_content: Optional[bool] = None
-    
+
     # Agent-specific settings
     max_concurrent_traces: int = 100
     trace_retention_hours: int = 24
     enable_metrics: bool = True
     enable_evaluation: bool = True
-    
+
     # Relationship configuration
     parent_agent: Optional[str] = None
     child_agents: Set[str] = field(default_factory=set)
-    
+
     def validate(self) -> None:
         """Validate agent configuration."""
         if not self.name:
             raise ValidationError("Agent name must be a non-empty string")
-        
+
         if self.sampling_rate is not None and not (0.0 <= self.sampling_rate <= 1.0):
             raise ValidationError("Sampling rate must be between 0.0 and 1.0")
-        
+
         if self.max_concurrent_traces <= 0:
             raise ConfigurationError("max_concurrent_traces must be positive")
-        
+
         if self.trace_retention_hours <= 0:
             raise ConfigurationError("trace_retention_hours must be positive")
 
 
 class Agent:
     """Represents an individual agent in a multi-agent system."""
-    
+
     def __init__(
-        self, 
-        config: AgentConfig,
-        project_tracer_config: Optional[TracerConfig] = None
+        self, config: AgentConfig, project_tracer_config: Optional[TracerConfig] = None
     ):
         """Initialize the agent."""
         config.validate()
@@ -78,47 +79,47 @@ class Agent:
         self._active_traces: Dict[str, Any] = {}
         self._trace_count = 0
         self._lock = threading.RLock()
-        
+
         # Create agent-specific tracer configuration
         self._tracer_config = self._create_tracer_config(project_tracer_config)
         self._tracer = NoveumTracer(self._tracer_config)
-        
+
         # Agent state
         self._is_active = True
         self._last_activity = self._created_at
-        
+
         logger.info(f"Agent '{self.name}' initialized with ID {self._agent_id}")
-    
+
     @property
     def name(self) -> str:
         """Get agent name."""
         return self._config.name
-    
+
     @property
     def agent_id(self) -> str:
         """Get agent ID."""
         return self._agent_id
-    
+
     @property
     def agent_type(self) -> str:
         """Get agent type."""
         return self._config.agent_type
-    
+
     @property
     def config(self) -> AgentConfig:
         """Get agent configuration."""
         return self._config
-    
+
     @property
     def tracer(self) -> NoveumTracer:
         """Get agent's tracer."""
         return self._tracer
-    
+
     @property
     def is_active(self) -> bool:
         """Check if agent is active."""
         return self._is_active
-    
+
     @property
     def trace_count(self) -> int:
         """Get number of traces created by this agent."""
@@ -210,30 +211,30 @@ class Agent:
             "enable_metrics": self._config.enable_metrics,
             "enable_evaluation": self._config.enable_evaluation,
         }
-    
+
     def activate(self) -> None:
         """Activate the agent."""
         with self._lock:
             self._is_active = True
             self._last_activity = datetime.now(timezone.utc)
         logger.info(f"Agent '{self.name}' activated")
-    
+
     def deactivate(self) -> None:
         """Deactivate the agent."""
         with self._lock:
             self._is_active = False
         logger.info(f"Agent '{self.name}' deactivated")
-    
+
     def add_child_agent(self, child_agent_name: str) -> None:
         """Add a child agent."""
         self._config.child_agents.add(child_agent_name)
         logger.debug(f"Added child agent '{child_agent_name}' to '{self.name}'")
-    
+
     def remove_child_agent(self, child_agent_name: str) -> None:
         """Remove a child agent."""
         self._config.child_agents.discard(child_agent_name)
         logger.debug(f"Removed child agent '{child_agent_name}' from '{self.name}'")
-    
+
     def get_metrics(self) -> Dict[str, Any]:
         """Get agent metrics."""
         with self._lock:
@@ -248,24 +249,26 @@ class Agent:
                 "last_activity": self._last_activity.isoformat(),
                 "capabilities": list(self._config.capabilities),
                 "tags": list(self._config.tags),
-                "child_agents": list(self._config.child_agents)
+                "child_agents": list(self._config.child_agents),
             }
-    
+
     def shutdown(self) -> None:
         """Shutdown the agent."""
         logger.info(f"Shutting down agent '{self.name}'")
-        
+
         with self._lock:
             self._is_active = False
             self._active_traces.clear()
-        
+
         # Shutdown the tracer
         if self._tracer:
             self._tracer.shutdown()
-        
+
         logger.info(f"Agent '{self.name}' shutdown complete")
-    
-    def _create_tracer_config(self, project_config: Optional[TracerConfig]) -> TracerConfig:
+
+    def _create_tracer_config(
+        self, project_config: Optional[TracerConfig]
+    ) -> TracerConfig:
         """Create agent-specific tracer configuration."""
         if project_config:
             # Inherit from project configuration
@@ -279,24 +282,17 @@ class Agent:
                 custom_headers=project_config.custom_headers,
                 sampling_rate=project_config.sampling_rate,
                 max_queue_size=project_config.max_queue_size,
-                max_batch_size=project_config.max_batch_size,
+                batch_size=project_config.batch_size,
                 batch_timeout_ms=project_config.batch_timeout_ms,
-                max_export_timeout_ms=project_config.max_export_timeout_ms,
-                max_attribute_length=project_config.max_attribute_length,
-                max_event_count_per_span=project_config.max_event_count_per_span,
-                max_link_count_per_span=project_config.max_link_count_per_span,
-                enable_auto_instrumentation=project_config.enable_auto_instrumentation,
-                enable_context_propagation=project_config.enable_context_propagation,
-                capture_llm_content=project_config.capture_llm_content,
-                sinks=project_config.sinks.copy(),
+                max_spans_per_trace=project_config.max_spans_per_trace,
+                sinks=project_config.sinks,
             )
         else:
             # Create default config with required project_id
             config = TracerConfig(
-                project_id="default-agent-project",
-                project_name="Agent Project"
+                project_id="default-agent-project", project_name="Agent Project"
             )
-        
+
         # Apply agent-specific overrides
         if self._config.custom_headers:
             # Create agent-specific headers
@@ -310,20 +306,19 @@ class Agent:
                     "agent.name": self.name,
                     "agent.id": self._agent_id,
                     "agent.type": self.agent_type,
-                }
+                },
             )
-            config.custom_headers = agent_headers
-        
+            config.custom_headers = agent_headers.to_dict()
+
         # Apply other agent-specific overrides
         if self._config.sampling_rate is not None:
             config.sampling_rate = self._config.sampling_rate
-        
+
         if self._config.capture_llm_content is not None:
-            config.capture_llm_content = self._config.capture_llm_content
-        
+            config.capture_content = self._config.capture_llm_content
+
         return config
-    
+
     def __repr__(self) -> str:
         """Return string representation of the agent."""
         return f"Agent(name='{self.name}', id='{self._agent_id}', type='{self.agent_type}')"
-

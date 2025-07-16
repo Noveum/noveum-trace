@@ -2,8 +2,12 @@
 
 **Production-ready Python SDK for tracing LLM applications, multi-agent systems, and tool calls with OpenTelemetry compliance.**
 
+[![CI](https://github.com/Noveum/noveum-trace/actions/workflows/ci.yml/badge.svg)](https://github.com/Noveum/noveum-trace/actions/workflows/ci.yml)
+[![Release](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml/badge.svg)](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/Noveum/noveum-trace/branch/main/graph/badge.svg)](https://codecov.io/gh/Noveum/noveum-trace)
+[![PyPI version](https://badge.fury.io/py/noveum-trace.svg)](https://badge.fury.io/py/noveum-trace)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## 🚀 Quick Start
 
@@ -148,7 +152,7 @@ coordinator = Agent(AgentConfig(
 ))
 
 worker = Agent(AgentConfig(
-    name="data-worker", 
+    name="data-worker",
     agent_type="processor",
     id="worker-001"
 ))
@@ -159,15 +163,15 @@ with AgentContext(coordinator):
     def plan_task(task):
         # Coordinator planning
         return task_plan
-    
+
     plan = plan_task("analyze data")
-    
+
     with AgentContext(worker):
         @trace
         def execute_task(plan):
             # Worker execution
             return results
-        
+
         results = execute_task(plan)
 ```
 
@@ -196,23 +200,23 @@ def long_running_task():
         metadata={"step": "initialization"},
         progress=10
     )
-    
+
     # Do some work
     initialize()
-    
+
     update_current_span(
         metadata={"step": "processing"},
         progress=50
     )
-    
+
     # More work
     process_data()
-    
+
     update_current_span(
         metadata={"step": "completion"},
         progress=100
     )
-    
+
     return "completed"
 ```
 
@@ -239,7 +243,7 @@ Each trace contains:
 ```json
 {
   "trace_id": "uuid-v4",
-  "span_id": "uuid-v4", 
+  "span_id": "uuid-v4",
   "parent_span_id": "uuid-v4",
   "name": "operation-name",
   "kind": "internal|client|server",
@@ -267,7 +271,7 @@ Each trace contains:
   },
   "llm_response": {
     "id": "response-id",
-    "model": "gpt-4", 
+    "model": "gpt-4",
     "choices": [...],
     "usage": {
       "prompt_tokens": 100,
@@ -367,7 +371,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## 🆘 Support
 
@@ -387,4 +391,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ by the Noveum team**
-

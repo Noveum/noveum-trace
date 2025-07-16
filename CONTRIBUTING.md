@@ -55,7 +55,7 @@ By participating in this project, you agree to abide by our Code of Conduct. Ple
    ```bash
    # Run tests
    pytest
-   
+
    # Run linting
    black src/ tests/
    isort src/ tests/
@@ -144,10 +144,10 @@ def test_span_creation_with_attributes():
     # Arrange
     tracer = NoveumTracer()
     attributes = {"user.id": "123", "operation": "test"}
-    
+
     # Act
     span = tracer.start_span("test_span", attributes=attributes)
-    
+
     # Assert
     assert span.name == "test_span"
     assert span.get_attribute("user.id") == "123"
@@ -264,4 +264,3 @@ Contributors will be recognized in:
 - Project documentation
 
 Thank you for contributing to Noveum Trace SDK!
-

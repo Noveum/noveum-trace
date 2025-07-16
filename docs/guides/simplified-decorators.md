@@ -6,7 +6,7 @@ The Noveum Trace SDK uses a **unified decorator approach** that simplifies traci
 
 After analyzing competitor SDKs (DeepEval, Phoenix, Braintrust), we found they all provide multiple decorators (`@observe`, `@traced`, `@trace`) that essentially do the same thing - wrap functions in spans and capture input/output. The only differences are:
 
-1. **Naming conventions** 
+1. **Naming conventions**
 2. **Backend destinations**
 3. **Default attributes**
 
@@ -137,25 +137,25 @@ def long_running_task():
         metadata={"step": "initialization"},
         progress=10
     )
-    
+
     # Do initialization
     initialize()
-    
+
     update_current_span(
         metadata={"step": "processing"},
         progress=50,
         attributes={"items_processed": 100}
     )
-    
+
     # Process data
     process_data()
-    
+
     update_current_span(
         metadata={"step": "completion"},
         progress=100,
         status="success"
     )
-    
+
     return "completed"
 ```
 
@@ -304,8 +304,8 @@ with AgentContext(agent):
     @trace(type="planning")
     def create_plan():
         return plan
-    
-    @trace(type="execution") 
+
+    @trace(type="execution")
     def execute_plan(plan):
         return results
 ```
@@ -395,4 +395,3 @@ def my_function():
 6. **Better DX**: Less cognitive load, more productivity
 
 The unified decorator approach reduces complexity while maintaining full functionality - exactly what developers need for production AI applications.
-

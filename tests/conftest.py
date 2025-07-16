@@ -3,31 +3,35 @@ Pytest configuration and shared fixtures for Noveum Trace SDK tests.
 """
 
 import pytest
-from unittest.mock import Mock
+
 from noveum_trace import NoveumTracer, TracerConfig
 from noveum_trace.sinks.base import BaseSink, SinkConfig
 
 
 class MockSink(BaseSink):
     """Mock sink for testing."""
-    
+
     def __init__(self, name: str = "mock-sink"):
         config = SinkConfig(name=name)
         self.sent_spans = []
         super().__init__(config)
-    
+
     def _initialize(self) -> None:
         """Initialize mock sink."""
         pass
-    
+
     def _send_batch(self, spans) -> None:
         """Mock send batch implementation."""
         self.sent_spans.extend(spans)
-    
+
     def _health_check(self) -> bool:
         """Mock health check."""
         return True
-    
+
+    def _shutdown(self) -> None:
+        """Mock shutdown implementation."""
+        pass
+
     def clear_spans(self):
         """Clear sent spans for testing."""
         self.sent_spans.clear()
@@ -60,4 +64,3 @@ def tracer(tracer_config):
     tracer = NoveumTracer(tracer_config)
     yield tracer
     tracer.shutdown()
-
