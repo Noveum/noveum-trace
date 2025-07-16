@@ -3,10 +3,8 @@
 Test Anthropic integration with Noveum Trace.
 """
 import os
-import sys
 
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+import pytest
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -16,6 +14,10 @@ import noveum_trace
 load_dotenv()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 def test_anthropic_basic():
     """Test basic Anthropic functionality."""
     print("🔍 Testing Anthropic Basic Integration...")
@@ -57,6 +59,10 @@ def test_anthropic_basic():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 def test_anthropic_with_system_prompt():
     """Test Anthropic with system prompt."""
     print("\n🎯 Testing Anthropic with System Prompt...")
@@ -96,6 +102,10 @@ def test_anthropic_with_system_prompt():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 def test_anthropic_multimodal():
     """Test Anthropic with multimodal input (text only for now)."""
     print("\n🖼️ Testing Anthropic Multimodal (text-only)...")
@@ -135,6 +145,10 @@ def test_anthropic_multimodal():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 def test_anthropic_different_models():
     """Test different Anthropic models."""
     print("\n🤖 Testing Different Anthropic Models...")
@@ -189,4 +203,4 @@ if __name__ == "__main__":
         print("🎉 All Anthropic tests passed!")
     else:
         print("❌ Some Anthropic tests failed")
-        sys.exit(1)
+        exit(1)

@@ -5,8 +5,7 @@ Test LangChain integration with Noveum Trace.
 import os
 import sys
 
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+import pytest
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -16,6 +15,8 @@ import noveum_trace
 load_dotenv()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_langchain_openai():
     """Test LangChain with OpenAI integration."""
     print("🦜 Testing LangChain + OpenAI Integration...")
@@ -62,6 +63,10 @@ def test_langchain_openai():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 def test_langchain_anthropic():
     """Test LangChain with Anthropic integration."""
     print("\n🤖 Testing LangChain + Anthropic Integration...")
@@ -108,6 +113,8 @@ def test_langchain_anthropic():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_langchain_chains():
     """Test LangChain chains."""
     print("\n🔗 Testing LangChain Chains...")
@@ -160,9 +167,11 @@ def test_langchain_chains():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_langchain_agents():
     """Test LangChain agents."""
-    print("\n🕵️ Testing LangChain Agents...")
+    print("\n��️ Testing LangChain Agents...")
 
     # Initialize tracer
     noveum_trace.init(
@@ -224,6 +233,8 @@ def test_langchain_agents():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_langchain_retrieval():
     """Test LangChain retrieval (RAG)."""
     print("\n📚 Testing LangChain Retrieval (RAG)...")
@@ -345,4 +356,4 @@ if __name__ == "__main__":
         print("🎉 All LangChain tests passed!")
     else:
         print("❌ Some LangChain tests failed")
-        sys.exit(1)
+        exit(1)

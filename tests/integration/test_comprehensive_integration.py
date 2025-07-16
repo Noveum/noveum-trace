@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Comprehensive integration test for all Noveum Trace features.
-Tests multiple providers, frameworks, and advanced features.
+Comprehensive integration tests for Noveum Trace.
 """
 import os
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+import pytest
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -21,6 +18,8 @@ from noveum_trace.agents.context import AgentContext
 load_dotenv()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_multi_provider_scenario():
     """Test a complex scenario using multiple providers."""
     print("🌐 Testing Multi-Provider Scenario...")
@@ -129,6 +128,8 @@ def test_multi_provider_scenario():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_concurrent_tracing():
     """Test concurrent tracing with multiple threads."""
     print("\n🔄 Testing Concurrent Tracing...")
@@ -176,6 +177,8 @@ def test_concurrent_tracing():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_error_handling():
     """Test error handling and recovery."""
     print("\n⚠️ Testing Error Handling...")
@@ -222,6 +225,8 @@ def test_error_handling():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_performance_monitoring():
     """Test performance monitoring and metrics."""
     print("\n📊 Testing Performance Monitoring...")
@@ -263,6 +268,8 @@ def test_performance_monitoring():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_nested_trace_contexts():
     """Test deeply nested trace contexts."""
     print("\n🪆 Testing Nested Trace Contexts...")
@@ -314,6 +321,8 @@ def test_nested_trace_contexts():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_langchain_with_agents():
     """Test LangChain integration with Noveum agents."""
     print("\n🦜🤖 Testing LangChain with Noveum Agents...")
@@ -372,6 +381,8 @@ def test_langchain_with_agents():
         noveum_trace.shutdown()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_all_sink_types():
     """Test different sink types."""
     print("\n🗂️ Testing Different Sink Types...")
@@ -429,4 +440,4 @@ if __name__ == "__main__":
         print("❌ Some comprehensive tests failed")
         failed_tests = len(results) - sum(results)
         print(f"❌ {failed_tests} test(s) failed")
-        sys.exit(1)
+        exit(1)

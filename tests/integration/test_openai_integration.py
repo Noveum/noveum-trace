@@ -3,10 +3,8 @@
 Test OpenAI integration with Noveum Trace.
 """
 import os
-import sys
 
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+import pytest
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -16,6 +14,8 @@ import noveum_trace
 load_dotenv()
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_openai_basic():
     """Test basic OpenAI functionality."""
     print("🔍 Testing OpenAI Basic Integration...")
@@ -58,6 +58,8 @@ def test_openai_basic():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_openai_with_tools():
     """Test OpenAI with function calling."""
     print("\n🔧 Testing OpenAI with Tools...")
@@ -120,6 +122,8 @@ def test_openai_with_tools():
     return True
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 def test_openai_streaming():
     """Test OpenAI streaming functionality."""
     print("\n🌊 Testing OpenAI Streaming...")
@@ -169,4 +173,4 @@ if __name__ == "__main__":
         print("🎉 All OpenAI tests passed!")
     else:
         print("❌ Some OpenAI tests failed")
-        sys.exit(1)
+        exit(1)
