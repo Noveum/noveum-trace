@@ -129,7 +129,7 @@ def with_agent(agent: "Agent") -> Callable:
 
             return wrapper
         else:
-            raise TypeError("Expected callable, got {type(func)}")
+            raise TypeError(f"Expected callable, got {type(func)}")
 
     return decorator
 
@@ -146,7 +146,7 @@ def with_async_agent(agent: "Agent") -> Callable:
 
             return wrapper
         else:
-            raise TypeError("Expected callable, got {type(func)}")
+            raise TypeError(f"Expected callable, got {type(func)}")
 
     return decorator
 

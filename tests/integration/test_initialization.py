@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import noveum_trace
+from noveum_trace.utils.exceptions import SinkError
 
 
 class TestInitialization:
@@ -262,14 +263,25 @@ class TestErrorHandling:
             temp_file_path = temp_file.name
 
         try:
-            # This should not raise an exception, but should log a warning
-            tracer = noveum_trace.init(
+            # This should now raise a SinkError instead of silently deleting the file
+            noveum_trace.init(
                 project_id="invalid-dir-test",
                 log_directory=temp_file_path,  # This is a file, not a directory
             )
 
-            # Should fall back to console sink or handle the error gracefully
-            assert tracer is not None
+            # Should not reach here - the above should raise an exception
+            raise AssertionError(
+                "Expected SinkError to be raised for invalid log directory"
+            )
+
+        except SinkError as e:
+            # This is the expected behavior - FileSink should raise an error
+            # instead of silently deleting the file
+            assert "points to an existing file" in str(e)
+            print(f"✅ Correctly raised SinkError: {e}")
+
+            # Verify the original file was not deleted
+            assert os.path.exists(temp_file_path), "Original file should not be deleted"
 
         finally:
             # Clean up the temporary file

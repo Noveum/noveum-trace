@@ -79,8 +79,14 @@ class FileSink(BaseSink):
         # Check if directory path is already a file
         directory_path = Path(self._config.directory)
         if directory_path.exists() and directory_path.is_file():
-            # If it's a file, remove it to create directory
-            directory_path.unlink()
+            # Raise an error instead of silently deleting the file
+            raise SinkError(
+                f"Cannot initialize FileSink: Directory path '{self._config.directory}' "
+                f"points to an existing file. Please either:\n"
+                f"  1. Remove the file manually if it's not needed\n"
+                f"  2. Choose a different directory path\n"
+                f"  3. Move the file to a different location"
+            )
 
         # Create directory if it doesn't exist
         directory_path.mkdir(parents=True, exist_ok=True)
@@ -128,17 +134,25 @@ class FileSink(BaseSink):
         if self._config.file_format == "jsonl":
             line = json.dumps(span_dict, default=str) + "\n"
             if self._current_file is not None:
-                self._current_file.write(line)
-                self._current_file_size += len(line.encode("utf-8"))
+                try:
+                    self._current_file.write(line)
+                    self._current_file_size += len(line.encode("utf-8"))
+                except OSError as e:
+                    logger.error(f"Failed to write to file: {e}")
+                    raise SinkError(f"File write failed: {e}")
 
         elif self._config.file_format == "json":
             # For JSON format, we'll append to a list (less efficient but valid JSON)
             if self._current_file is not None:
-                json.dump(span_dict, self._current_file, default=str)
-                self._current_file.write("\n")
-                self._current_file_size += len(
-                    json.dumps(span_dict, default=str).encode("utf-8")
-                )
+                try:
+                    json.dump(span_dict, self._current_file, default=str)
+                    self._current_file.write("\n")
+                    self._current_file_size += len(
+                        json.dumps(span_dict, default=str).encode("utf-8")
+                    )
+                except OSError as e:
+                    logger.error(f"Failed to write to file: {e}")
+                    raise SinkError(f"File write failed: {e}")
 
         else:
             raise SinkError(f"Unsupported file format: {self._config.file_format}")
@@ -175,11 +189,14 @@ class FileSink(BaseSink):
         file_path = Path(self._config.directory) / filename
 
         # Open new file (intentionally not using context manager as file stays open)
-        self._current_file = open(file_path, "w", encoding="utf-8")  # noqa: SIM115
-        self._current_file_size = 0
-        self._file_counter += 1
-
-        logger.info(f"Rotated to new file: {file_path}")
+        try:
+            self._current_file = open(file_path, "w", encoding="utf-8")  # noqa: SIM115
+            self._current_file_size = 0
+            self._file_counter += 1
+            logger.info(f"Rotated to new file: {file_path}")
+        except OSError as e:
+            logger.error(f"Failed to create/open file {file_path}: {e}")
+            raise SinkError(f"File creation failed: {e}")
 
         # Clean up old files if needed
         self._cleanup_old_files()

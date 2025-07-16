@@ -446,11 +446,11 @@ def _add_agent_context(span: Span) -> None:
                 span.set_attribute("agent.tags", list(current_agent.config.tags))
 
             # Register the trace with the agent
-            trace_id = str(span.span_data.trace_id)
+            trace_id = str(span.trace_id)
             trace_data = {
-                "span_name": span.span_data.name,
+                "span_name": span.name,
                 "start_time": span.span_data.start_time,
-                "span_id": str(span.span_data.span_id),
+                "span_id": str(span.span_id),
             }
             current_agent.register_trace(trace_id, trace_data)
     except Exception:
