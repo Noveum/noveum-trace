@@ -6,9 +6,6 @@ import os
 import sys
 from typing import Any, Dict
 
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-
 # Load environment variables
 from dotenv import load_dotenv
 

@@ -2,8 +2,8 @@
 Tests for auto-instrumentation functionality.
 """
 
-import contextlib
 import importlib.util
+import logging
 import os
 import shutil
 import tempfile
@@ -16,6 +16,8 @@ import pytest
 import noveum_trace
 from noveum_trace.instrumentation import anthropic, openai
 
+logger = logging.getLogger(__name__)
+
 
 class TestAutoInstrumentation:
     """Test auto-instrumentation functionality."""
@@ -23,10 +25,19 @@ class TestAutoInstrumentation:
     def setup_method(self):
         """Setup for each test."""
         # Disable auto-instrumentation to start clean
-        with contextlib.suppress(Exception):
+        try:
             openai.uninstrument_openai()
-        with contextlib.suppress(Exception):
+        except (AttributeError, ImportError) as e:
+            logger.debug(f"Failed to uninstrument OpenAI: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error uninstrumenting OpenAI: {e}")
+
+        try:
             anthropic.uninstrument_anthropic()
+        except (AttributeError, ImportError) as e:
+            logger.debug(f"Failed to uninstrument Anthropic: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error uninstrumenting Anthropic: {e}")
 
         # Create temp directory for test traces
         self.temp_dir = tempfile.mkdtemp()
@@ -37,10 +48,19 @@ class TestAutoInstrumentation:
         noveum_trace.shutdown()
 
         # Disable instrumentation
-        with contextlib.suppress(Exception):
+        try:
             openai.uninstrument_openai()
-        with contextlib.suppress(Exception):
+        except (AttributeError, ImportError) as e:
+            logger.debug(f"Failed to uninstrument OpenAI: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error uninstrumenting OpenAI: {e}")
+
+        try:
             anthropic.uninstrument_anthropic()
+        except (AttributeError, ImportError) as e:
+            logger.debug(f"Failed to uninstrument Anthropic: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error uninstrumenting Anthropic: {e}")
 
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
