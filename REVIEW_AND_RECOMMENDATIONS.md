@@ -25,7 +25,7 @@ The Noveum Trace SDK has been successfully implemented as a comprehensive, produ
 #### 1. Span Implementation (`core/span.py`)
 - **Status**: ✅ Excellent
 - **Coverage**: 79% (Good)
-- **Recommendations**: 
+- **Recommendations**:
   - Add more validation for attribute values
   - Consider implementing span sampling at the span level
 
@@ -174,7 +174,7 @@ def _send_batch(self, spans: List[SpanData]) -> None:
 # More descriptive error messages
 class ConfigurationError(NoveumTracingError):
     """Configuration error with context."""
-    
+
     def __init__(self, message: str, config_key: str = None):
         super().__init__(f"Configuration error in '{config_key}': {message}")
 ```
@@ -263,4 +263,3 @@ The Noveum Trace SDK provides an excellent foundation for LLM observability. The
 4. **Compatibility**: Test across multiple Python versions and environments
 
 The SDK is well-positioned to become the leading solution for LLM tracing and observability.
-

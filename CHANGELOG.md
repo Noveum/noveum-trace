@@ -1,48 +1,31 @@
 # Changelog
 
-All notable changes to the Noveum Trace SDK will be documented in this file.
+All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2025-01-16
+
 ### Added
-- Initial release of Noveum Trace SDK
-- OpenTelemetry compliant LLM tracing
-- Elasticsearch sink implementation
-- Noveum.ai sink (placeholder implementation)
-- Automatic instrumentation decorators
-- Streaming LLM support with TTFB metrics
-- Context propagation and span relationships
-- Privacy-first design with PII anonymization
-- Comprehensive error handling and retry logic
-- Performance optimization with batching and sampling
-- Real-time evaluation integration (placeholder)
-- Dataset creation capabilities (placeholder)
+- Initial release of noveum-trace SDK
+- OpenTelemetry-compliant tracing for LLM applications
+- Automatic instrumentation for OpenAI and Anthropic APIs
+- Multi-agent workflow support
+- Real-time evaluation integration with Noveum.ai
+- Multiple sink implementations (console, file, Elasticsearch, Noveum)
+- Comprehensive test suite with unit and integration tests
+- Complete documentation and examples
 
 ### Changed
-- N/A (initial release)
-
-### Deprecated
-- N/A (initial release)
-
-### Removed
-- N/A (initial release)
+- Updated build system to use setuptools instead of hatchling
+- Migrated to Apache-2.0 license
+- Enhanced project configuration with comprehensive tooling
 
 ### Fixed
-- N/A (initial release)
-
-### Security
-- Built-in PII anonymization
-- Content filtering capabilities
-- Secure API key handling
-
-## [0.1.0] - 2024-01-15
-
-### Added
-- Initial beta release
-- Core tracing functionality
-- Basic sink implementations
-- Documentation and examples
-
+- Resolved import system issues in agents module
+- Fixed test initialization parameters
+- Corrected span and tracer implementation issues
+- Enhanced error handling and validation

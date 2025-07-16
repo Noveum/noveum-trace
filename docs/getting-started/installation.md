@@ -114,4 +114,3 @@ batch_timeout_ms: 1000
 - Read the [Quick Start Guide](quickstart.md)
 - Explore [Configuration Options](../guides/configuration.md)
 - Try the [Examples](../examples/)
-

@@ -76,26 +76,26 @@ tracer = noveum_trace.get_tracer()
 # Create nested spans
 with tracer.start_span("main_operation") as main_span:
     main_span.set_attribute("user.id", "user123")
-    
+
     # Nested operation
     with tracer.start_span("sub_operation") as sub_span:
         sub_span.set_attribute("operation.type", "llm_call")
         sub_span.set_attribute("gen_ai.system", "openai")
         sub_span.set_attribute("gen_ai.request.model", "gpt-4")
-        
+
         # Add events
         sub_span.add_event("gen_ai.content.prompt", {
             "gen_ai.prompt": "What is AI?"
         })
-        
+
         # Simulate processing
         import time
         time.sleep(0.1)
-        
+
         sub_span.add_event("gen_ai.content.completion", {
             "gen_ai.completion": "AI is artificial intelligence..."
         })
-        
+
         # Set usage metrics
         sub_span.set_attribute("gen_ai.usage.input_tokens", 10)
         sub_span.set_attribute("gen_ai.usage.output_tokens", 25)
@@ -193,4 +193,3 @@ with tracer.start_span("risky_operation") as span:
 - Learn about [LLM Tracing](../guides/llm-tracing.md)
 - Check out [Examples](../examples/)
 - Read [API Reference](../api-reference/)
-

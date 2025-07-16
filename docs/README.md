@@ -67,4 +67,3 @@ For major documentation changes, please open an issue first to discuss the propo
 - **[PyPI Package](https://pypi.org/project/noveum-trace/)** - Package downloads
 - **[Noveum Platform](https://noveum.ai)** - Main platform and services
 - **[OpenTelemetry](https://opentelemetry.io)** - OpenTelemetry specification
-

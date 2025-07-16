@@ -180,3 +180,9 @@ Gemfile.lock
 _site/
 .DS_Store
 junit.xml
+
+TODO.md
+
+chatbot_traces/
+example_traces/
+test_traces/

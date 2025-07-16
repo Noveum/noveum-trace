@@ -3,18 +3,17 @@ Sink implementations for the Noveum Trace SDK.
 """
 
 from .base import BaseSink, SinkConfig
-from .elasticsearch import ElasticsearchSink, ElasticsearchConfig
-from .noveum import NoveumSink, NoveumConfig
+from .elasticsearch import ElasticsearchConfig, ElasticsearchSink
 from .file import FileSink, FileSinkConfig
+from .noveum import NoveumConfig, NoveumSink
 
 __all__ = [
     "BaseSink",
-    "SinkConfig", 
-    "ElasticsearchSink",
     "ElasticsearchConfig",
-    "NoveumSink",
-    "NoveumConfig",
+    "ElasticsearchSink",
     "FileSink",
     "FileSinkConfig",
+    "NoveumConfig",
+    "NoveumSink",
+    "SinkConfig",
 ]
-

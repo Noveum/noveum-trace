@@ -148,7 +148,7 @@ coordinator = Agent(AgentConfig(
 ))
 
 worker = Agent(AgentConfig(
-    name="data-worker", 
+    name="data-worker",
     agent_type="processor",
     id="worker-001"
 ))
@@ -159,15 +159,15 @@ with AgentContext(coordinator):
     def plan_task(task):
         # Coordinator planning
         return task_plan
-    
+
     plan = plan_task("analyze data")
-    
+
     with AgentContext(worker):
         @trace
         def execute_task(plan):
             # Worker execution
             return results
-        
+
         results = execute_task(plan)
 ```
 
@@ -196,23 +196,23 @@ def long_running_task():
         metadata={"step": "initialization"},
         progress=10
     )
-    
+
     # Do some work
     initialize()
-    
+
     update_current_span(
         metadata={"step": "processing"},
         progress=50
     )
-    
+
     # More work
     process_data()
-    
+
     update_current_span(
         metadata={"step": "completion"},
         progress=100
     )
-    
+
     return "completed"
 ```
 
@@ -239,7 +239,7 @@ Each trace contains:
 ```json
 {
   "trace_id": "uuid-v4",
-  "span_id": "uuid-v4", 
+  "span_id": "uuid-v4",
   "parent_span_id": "uuid-v4",
   "name": "operation-name",
   "kind": "internal|client|server",
@@ -267,7 +267,7 @@ Each trace contains:
   },
   "llm_response": {
     "id": "response-id",
-    "model": "gpt-4", 
+    "model": "gpt-4",
     "choices": [...],
     "usage": {
       "prompt_tokens": 100,
@@ -387,4 +387,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ by the Noveum team**
-

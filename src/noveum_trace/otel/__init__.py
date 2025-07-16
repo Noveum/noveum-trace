@@ -8,7 +8,6 @@ from .provider import NoveumTracerProvider
 
 __all__ = [
     "NoveumSpanExporter",
-    "NoveumSpanProcessor", 
+    "NoveumSpanProcessor",
     "NoveumTracerProvider",
 ]
-

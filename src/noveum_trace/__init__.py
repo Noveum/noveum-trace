@@ -7,10 +7,10 @@ Provides automatic instrumentation, real-time evaluation, and dataset creation.
 Quick Start:
     ```python
     import noveum_trace
-    
+
     # Simple initialization
     noveum_trace.init()
-    
+
     # Your LLM calls are now automatically traced!
     import openai
     client = openai.OpenAI()
@@ -24,120 +24,127 @@ __version__ = "0.1.0"
 __author__ = "Noveum Team"
 __email__ = "team@noveum.ai"
 
-# Simplified API (recommended for most users)
-from .init import (
-    init,
-    configure,
-    setup,
-    enable_auto_instrumentation,
-    disable_auto_instrumentation,
-    get_tracer,
-    shutdown,
-    flush,
-    NoveumTrace,
+# Multi-agent support
+from .agents import (
+    Agent,
+    AgentConfig,
+    AgentContext,
+    AgentRegistry,
+    get_agent_registry,
+    get_current_agent,
+    set_current_agent,
 )
+
+# Backward compatibility aliases
+# Simplified decorators (unified approach)
+from .agents.decorators import llm_trace, observe, trace, update_current_span
+from .core.context import TraceContext
+from .core.span import Span
 
 # Core components (for advanced users)
 from .core.tracer import NoveumTracer, TracerConfig
-from .core.span import Span
-from .core.context import TraceContext
+
+# Simplified API (recommended for most users)
+from .init import (
+    NoveumTrace,
+    configure,
+    disable_auto_instrumentation,
+    enable_auto_instrumentation,
+    flush,
+    get_tracer,
+    init,
+    setup,
+    shutdown,
+)
+from .instrumentation import anthropic, openai
+
+# Instrumentation
+from .instrumentation.decorators import (
+    trace_function,
+    trace_llm_call,
+    trace_streaming_llm_call,
+)
 
 # Sinks
 from .sinks.base import BaseSink
-from .sinks.file import FileSink, FileSinkConfig
-from .sinks.noveum import NoveumSink, NoveumConfig
 from .sinks.console import ConsoleSink, ConsoleSinkConfig
+from .sinks.elasticsearch import ElasticsearchConfig, ElasticsearchSink
+from .sinks.file import FileSink, FileSinkConfig
+from .sinks.noveum import NoveumConfig, NoveumSink
 
 # Types
 from .types import (
-    SpanData, LLMRequest, LLMResponse, Message, TokenUsage,
-    OperationType, AISystem, SpanKind, SpanStatus
+    AISystem,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    OperationType,
+    SpanData,
+    SpanKind,
+    SpanStatus,
+    TokenUsage,
 )
-
-# Instrumentation
-from .instrumentation.decorators import trace_function, trace_llm_call
-from .instrumentation import openai, anthropic
 
 # Exceptions
 from .utils.exceptions import (
-    NoveumTracingError, ConfigurationError, NetworkError, ValidationError
+    ConfigurationError,
+    NetworkError,
+    NoveumTracingError,
+    ValidationError,
 )
-
-# Multi-agent support
-from .agents import (
-    AgentRegistry, get_agent_registry,
-    Agent, AgentConfig,
-    AgentContext, get_current_agent, set_current_agent
-)
-
-# Simplified decorators (unified approach)
-from .agents.decorators import trace, update_current_span
-
-# Backward compatibility aliases
-from .agents.decorators import observe, llm_trace
 
 # Main exports (what users typically need)
 __all__ = [
-    # Simplified API
-    "init",
-    "configure", 
-    "setup",
-    "enable_auto_instrumentation",
-    "disable_auto_instrumentation", 
-    "get_tracer",
-    "shutdown",
-    "flush",
-    "NoveumTrace",
-    
-    # Core components
-    "NoveumTracer",
-    "TracerConfig",
-    "Span",
-    "TraceContext",
-    
-    # Sinks
-    "BaseSink",
-    "FileSink",
-    "FileSinkConfig",
-    "NoveumSink", 
-    "NoveumConfig",
-    "ConsoleSink",
-    "ConsoleSinkConfig",
-    
-    # Types
-    "SpanData",
-    "LLMRequest",
-    "LLMResponse", 
-    "Message",
-    "TokenUsage",
-    "OperationType",
     "AISystem",
-    "SpanKind",
-    "SpanStatus",
-    
-    # Instrumentation
-    "trace_function",
-    "trace_llm_call",
-    "openai",
-    "anthropic",
-    
-    # Multi-agent support
-    "AgentRegistry",
-    "get_agent_registry",
+    # Sorted alphabetically
     "Agent",
     "AgentConfig",
     "AgentContext",
-    "get_current_agent",
-    "set_current_agent",
-    "trace",
-    "observe",
-    "llm_trace",
-    "update_current_span",
-    
-    # Exceptions
-    "NoveumTracingError",
-    "ConfigurationError", 
+    "AgentRegistry",
+    "BaseSink",
+    "ConfigurationError",
+    "ConsoleSink",
+    "ConsoleSinkConfig",
+    "ElasticsearchConfig",
+    "ElasticsearchSink",
+    "FileSink",
+    "FileSinkConfig",
+    "LLMRequest",
+    "LLMResponse",
+    "Message",
     "NetworkError",
+    "NoveumConfig",
+    "NoveumSink",
+    "NoveumTrace",
+    "NoveumTracer",
+    "NoveumTracingError",
+    "OperationType",
+    "Span",
+    "SpanData",
+    "SpanKind",
+    "SpanStatus",
+    "TokenUsage",
+    "TraceContext",
+    "TracerConfig",
     "ValidationError",
+    "anthropic",
+    "configure",
+    "disable_auto_instrumentation",
+    "enable_auto_instrumentation",
+    "flush",
+    "get_agent_registry",
+    "get_current_agent",
+    "get_tracer",
+    "init",
+    "llm_trace",
+    "observe",
+    "openai",
+    "set_current_agent",
+    "setup",
+    "shutdown",
+    "trace",
+    "trace_function",
+    "trace_llm_call",
+    "trace_streaming_llm_call",
+    "update_current_span",
 ]
-
