@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected span and tracer implementation issues
 - Enhanced error handling and validation
 
+## v0.1.2 (2025-07-16)
+
 ## v0.1.1 (2025-07-16)
 
 ### Fix
