@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "noveum-trace"
-version = "0.1.0"
+version = "0.1.1"
 description = "High-performance LLM tracing SDK with OpenTelemetry compliance and real-time evaluation"
 readme = "README.md"
 license = "Apache-2.0"
@@ -65,7 +65,7 @@ dev = [
     "pytest-xdist>=3.3.0",
     "black>=23.9.0",
     "isort>=5.12.0",
-    "ruff>=0.1.0",
+    "ruff>=0.1.1",
     "mypy>=1.6.0",
     "pre-commit>=3.5.0",
     "bandit>=1.7.5",

@@ -20,7 +20,7 @@ Quick Start:
 For more advanced usage, see the documentation and examples.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Noveum Team"
 __email__ = "team@noveum.ai"
 
