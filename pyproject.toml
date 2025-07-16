@@ -82,7 +82,9 @@ docs = [
     "sphinx-copybutton>=0.5.2",
 ]
 all = [
-    "noveum-trace[elasticsearch,instrumentation,dev,docs]",
+    "elasticsearch>=8.0.0",
+    "openai>=1.0.0",
+    "anthropic>=0.8.0",
 ]
 
 [project.urls]

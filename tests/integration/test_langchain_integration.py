@@ -318,42 +318,120 @@ def test_langchain_retrieval():
     return True
 
 
+def cleanup_artifacts():
+    """Clean up test artifacts like log files and trace directories."""
+    import shutil
+
+    artifacts_to_clean = ["test_traces", "logs", "trace_logs", "langchain_traces"]
+
+    print("\n🧹 Cleaning up test artifacts...")
+
+    for artifact in artifacts_to_clean:
+        if os.path.exists(artifact):
+            try:
+                if os.path.isdir(artifact):
+                    shutil.rmtree(artifact)
+                    print(f"  🗑️  Removed directory: {artifact}")
+                else:
+                    os.remove(artifact)
+                    print(f"  🗑️  Removed file: {artifact}")
+            except Exception as e:
+                print(f"  ⚠️  Could not remove {artifact}: {e}")
+
+    # Clean up any .log files in current directory
+    for file in os.listdir("."):
+        if file.endswith(".log"):
+            try:
+                os.remove(file)
+                print(f"  🗑️  Removed log file: {file}")
+            except Exception as e:
+                print(f"  ⚠️  Could not remove {file}: {e}")
+
+    print("✅ Cleanup completed")
+
+
 if __name__ == "__main__":
     print("🚀 Starting LangChain Integration Tests...")
 
-    # Install required packages
-    try:
-        import subprocess
+    # Verify required packages
+    pkg_map = {
+        "langchain": "langchain",
+        "langchain-openai": "langchain_openai",
+        "langchain-anthropic": "langchain_anthropic",
+        "langchain-community": "langchain_community",
+        "faiss-cpu": "faiss",
+    }
 
-        packages = [
-            "langchain",
-            "langchain-openai",
-            "langchain-anthropic",
-            "langchain-community",
-            "faiss-cpu",
-        ]
+    missing = []
+    for pkg, module in pkg_map.items():
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(pkg)
 
-        for package in packages:
-            try:
-                __import__(package.replace("-", "_"))
-            except ImportError:
-                print(f"📦 Installing {package}...")
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", package], check=True
-                )
-    except Exception as e:
-        print(f"⚠️ Could not install packages: {e}")
+    if missing:
+        print(f"⚠️ Missing packages: {missing}")
+        print("Please install with versions pinned, e.g.:")
+        print("  pip install \\")
+        print("    langchain>=0.2.0 \\")
+        print("    langchain-openai>=0.1.0 \\")
+        print("    langchain-anthropic>=0.1.0 \\")
+        print("    langchain-community>=0.2.0 \\")
+        print("    faiss-cpu>=1.7.0")
+        print("Note: Check PyPI for the latest compatible versions")
+        sys.exit(1)
+
+    # Define test functions with proper error handling
+    test_functions = [
+        test_langchain_openai,
+        test_langchain_anthropic,
+        test_langchain_chains,
+        test_langchain_agents,
+        test_langchain_retrieval,
+    ]
 
     results = []
-    results.append(test_langchain_openai())
-    results.append(test_langchain_anthropic())
-    results.append(test_langchain_chains())
-    results.append(test_langchain_agents())
-    results.append(test_langchain_retrieval())
+    failed_tests = []
 
-    print(f"\n📊 Results: {sum(results)}/{len(results)} tests passed")
+    print("\n🧪 Running LangChain Integration Tests...")
+    print("=" * 50)
+
+    for test_func in test_functions:
+        test_name = test_func.__name__
+        try:
+            print(f"\n🔄 Running {test_name}...")
+            result = test_func()
+
+            # Assert test outcome
+            assert isinstance(
+                result, bool
+            ), f"Test {test_name} should return boolean, got {type(result)}"
+
+            if result:
+                print(f"✅ {test_name}: PASSED")
+                results.append(True)
+            else:
+                print(f"❌ {test_name}: FAILED (returned False)")
+                results.append(False)
+                failed_tests.append(test_name)
+
+        except Exception as e:
+            print(f"💥 {test_name}: ERROR - {e!s}")
+            print(f"   Exception type: {type(e).__name__}")
+            results.append(False)
+            failed_tests.append(f"{test_name} (Exception: {e!s})")
+
+    # Cleanup test artifacts
+    cleanup_artifacts()
+
+    # Final results
+    print("\n" + "=" * 50)
+    print(f"📊 Results: {sum(results)}/{len(results)} tests passed")
+
     if all(results):
         print("🎉 All LangChain tests passed!")
     else:
-        print("❌ Some LangChain tests failed")
-        exit(1)
+        print("❌ Some LangChain tests failed:")
+        for failed_test in failed_tests:
+            print(f"  - {failed_test}")
+        sys.exit(1)
