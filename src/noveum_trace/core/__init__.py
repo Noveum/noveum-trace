@@ -1,34 +1,31 @@
 """
-Core components of the Noveum Trace SDK.
+Core module for Noveum Trace SDK.
+
+This module contains the fundamental tracing primitives including
+configuration, context management, spans, traces, and the main client.
 """
 
-from .context import (
-    AsyncSpanContext,
-    SpanContext,
+from noveum_trace.core.client import NoveumClient
+from noveum_trace.core.config import Config, configure, get_config
+from noveum_trace.core.context import (
     TraceContext,
-    end_trace,
     get_current_span,
     get_current_trace,
-    set_current_span,
-    set_current_trace,
-    start_trace,
+    trace_context,
 )
-from .span import Span
-from .tracer import NoveumTracer, TracerConfig, get_current_tracer, set_current_tracer
+from noveum_trace.core.span import Span, SpanStatus
+from noveum_trace.core.trace import Trace
 
 __all__ = [
-    "AsyncSpanContext",
-    "NoveumTracer",
-    "Span",
-    "SpanContext",
+    "NoveumClient",
+    "Config",
+    "configure",
+    "get_config",
     "TraceContext",
-    "TracerConfig",
-    "end_trace",
-    "get_current_span",
+    "trace_context",
     "get_current_trace",
-    "get_current_tracer",
-    "set_current_span",
-    "set_current_trace",
-    "set_current_tracer",
-    "start_trace",
+    "get_current_span",
+    "Span",
+    "SpanStatus",
+    "Trace",
 ]

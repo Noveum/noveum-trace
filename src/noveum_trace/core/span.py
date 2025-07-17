@@ -1,135 +1,103 @@
 """
 Span implementation for Noveum Trace SDK.
+
+A span represents a single operation within a trace, such as a function call,
+LLM interaction, or agent decision.
 """
 
-import logging
+import traceback
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from enum import Enum
+from typing import Any, Optional
 
-from noveum_trace.types import (
-    LLMRequest,
-    LLMResponse,
-    SpanData,
-    SpanID,
-    SpanKind,
-    SpanStatus,
-    TraceID,
-)
 
-if TYPE_CHECKING:
-    from noveum_trace.core.tracer import NoveumTracer
+class SpanStatus(Enum):
+    """Enumeration of possible span statuses."""
 
-logger = logging.getLogger(__name__)
+    UNSET = "unset"
+    OK = "ok"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class SpanEvent:
+    """Represents an event within a span."""
+
+    name: str
+    timestamp: datetime
+    attributes: dict[str, Any] = field(default_factory=dict)
 
 
 class Span:
     """
     Represents a single operation within a trace.
 
-    A span represents a single operation within a trace. Spans can be nested
-    to form a trace tree. Each span contains operation name, start/end times,
-    and key-value attributes.
+    A span captures the execution of a discrete operation including
+    timing, inputs, outputs, errors, and custom metadata.
     """
 
     def __init__(
         self,
-        name_or_span_data: Union[str, SpanData],
-        tracer: Optional["NoveumTracer"] = None,
-        attributes: Optional[Dict[str, Any]] = None,
-        kind: SpanKind = SpanKind.INTERNAL,
-        parent_span_id: Optional[SpanID] = None,
-        trace_id: Optional[TraceID] = None,
+        name: str,
+        trace_id: str,
+        span_id: Optional[str] = None,
+        parent_span_id: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        attributes: Optional[dict[str, Any]] = None,
     ):
-        """Initialize a new span."""
-        # Handle both string name and SpanData object
-        if isinstance(name_or_span_data, str):
-            # Create SpanData from string name
-            import uuid
-            from datetime import datetime, timezone
+        """
+        Initialize a new span.
 
-            from noveum_trace.types import SpanData, SpanID, TraceID
+        Args:
+            name: Human-readable name for the span
+            trace_id: ID of the parent trace
+            span_id: Unique ID for this span (generated if not provided)
+            parent_span_id: ID of the parent span (if any)
+            start_time: Start time (defaults to current time)
+            attributes: Initial span attributes
+        """
+        self.name = name
+        self.trace_id = trace_id
+        self.span_id = span_id or self._generate_span_id()
+        self.parent_span_id = parent_span_id
+        self.start_time = start_time or datetime.now(timezone.utc)
+        self.end_time: Optional[datetime] = None
+        self.status = SpanStatus.UNSET
+        self.status_message: Optional[str] = None
 
-            self.span_data = SpanData(
-                span_id=SpanID(str(uuid.uuid4())),
-                trace_id=trace_id or TraceID(str(uuid.uuid4())),
-                parent_span_id=parent_span_id,
-                name=name_or_span_data,
-                kind=kind,
-                status=SpanStatus.UNSET,
-                start_time=datetime.now(timezone.utc),
-                end_time=None,
-                duration_ms=None,
-                attributes=attributes or {},
-                events=[],
-                links=[],
-            )
-        else:
-            # Use provided SpanData
-            self.span_data = name_or_span_data
-            if attributes:
-                self.span_data.attributes.update(attributes)
+        # Span data
+        self.attributes: dict[str, Any] = attributes or {}
+        self.events: list[SpanEvent] = []
+        self.links: list[dict[str, Any]] = []
 
-        self._tracer = tracer
-        self._is_recording = True
-        self._ended = False
+        # Performance data
+        self.duration_ms: Optional[float] = None
 
-    @property
-    def span_id(self) -> SpanID:
-        """Get the span ID."""
-        return self.span_data.span_id
+        # Error information
+        self.exception: Optional[Exception] = None
+        self.stack_trace: Optional[str] = None
 
-    @property
-    def trace_id(self) -> TraceID:
-        """Get the trace ID."""
-        return self.span_data.trace_id
+        # Flags
+        self._finished = False
 
-    @property
-    def parent_span_id(self) -> Optional[SpanID]:
-        """Get the parent span ID."""
-        return self.span_data.parent_span_id
+    def __enter__(self) -> "Span":
+        """Context manager entry."""
+        return self
 
-    @property
-    def name(self) -> str:
-        """Get the span name."""
-        return self.span_data.name
-
-    @property
-    def kind(self) -> SpanKind:
-        """Get the span kind."""
-        return self.span_data.kind
-
-    @property
-    def status(self) -> SpanStatus:
-        """Get the span status."""
-        return self.span_data.status
-
-    @property
-    def is_recording(self) -> bool:
-        """Check if the span is recording."""
-        return self._is_recording and not self._ended
-
-    @property
-    def is_ended(self) -> bool:
-        """Check if the span has ended."""
-        return self._ended
-
-    @property
-    def duration_ms(self) -> Optional[float]:
-        """Get the span duration in milliseconds."""
-        return self.span_data.duration_ms
-
-    @property
-    def end_time(self) -> Optional[datetime]:
-        """Get the span end time."""
-        return self.span_data.end_time
-
-    def get_attribute(self, key: str) -> Any:
-        """Get an attribute value by key."""
-        return self.span_data.attributes.get(key)
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Context manager exit."""
+        if exc_type is not None:
+            self.record_exception(exc_val)
+            self.set_status(SpanStatus.ERROR, str(exc_val))
+        self.finish()
 
     def set_attribute(self, key: str, value: Any) -> "Span":
         """
-        Set a single attribute on the span.
+        Set a span attribute.
 
         Args:
             key: Attribute key
@@ -138,15 +106,15 @@ class Span:
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
-        self.span_data.set_attribute(key, value)
+        self.attributes[key] = value
         return self
 
-    def set_attributes(self, attributes: Dict[str, Any]) -> "Span":
+    def set_attributes(self, attributes: dict[str, Any]) -> "Span":
         """
-        Set multiple attributes on the span.
+        Set multiple span attributes.
 
         Args:
             attributes: Dictionary of attributes to set
@@ -154,17 +122,16 @@ class Span:
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
-        for key, value in attributes.items():
-            self.span_data.set_attribute(key, value)
+        self.attributes.update(attributes)
         return self
 
     def add_event(
         self,
         name: str,
-        attributes: Optional[Dict[str, Any]] = None,
+        attributes: Optional[dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> "Span":
         """
@@ -173,250 +140,219 @@ class Span:
         Args:
             name: Event name
             attributes: Event attributes
-            timestamp: Event timestamp (defaults to now)
+            timestamp: Event timestamp (defaults to current time)
 
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
-        self.span_data.add_event(name, attributes)
-        return self
-
-    def record_exception(
-        self,
-        exception: Exception,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> "Span":
-        """
-        Record an exception as a span event.
-
-        Args:
-            exception: Exception to record
-            attributes: Additional attributes
-
-        Returns:
-            Self for method chaining
-        """
-        if not self.is_recording:
-            return self
-
-        event_attributes = {
-            "exception.type": type(exception).__name__,
-            "exception.message": str(exception),
-        }
-
-        if attributes:
-            event_attributes.update(attributes)
-
-        self.add_event("exception", event_attributes)
-        self.set_status(SpanStatus.ERROR, str(exception))
-
-        return self
-
-    def set_status(
-        self, status: Union[SpanStatus, str], description: Optional[str] = None
-    ) -> "Span":
-        """
-        Set the span status.
-
-        Args:
-            status: Span status (enum or string)
-            description: Status description
-
-        Returns:
-            Self for method chaining
-        """
-        if not self.is_recording:
-            return self
-
-        # Convert string to SpanStatus enum if needed
-        if isinstance(status, str):
-            status_mapping = {
-                "ok": SpanStatus.OK,
-                "error": SpanStatus.ERROR,
-                "unset": SpanStatus.UNSET,
-            }
-            status = status_mapping.get(status.lower(), SpanStatus.UNSET)
-
-        self.span_data.set_status(status, description)
-
-        # Also set the description as an attribute for backward compatibility
-        if description:
-            self.span_data.set_attribute("status.description", description)
-
+        event = SpanEvent(
+            name=name,
+            timestamp=timestamp or datetime.now(timezone.utc),
+            attributes=attributes or {},
+        )
+        self.events.append(event)
         return self
 
     def add_link(
-        self,
-        trace_id: TraceID,
-        span_id: SpanID,
-        attributes: Optional[Dict[str, Any]] = None,
+        self, trace_id: str, span_id: str, attributes: Optional[dict[str, Any]] = None
     ) -> "Span":
         """
         Add a link to another span.
 
         Args:
-            trace_id: Target trace ID
-            span_id: Target span ID
+            trace_id: Linked trace ID
+            span_id: Linked span ID
             attributes: Link attributes
 
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
         link = {
-            "trace_id": str(trace_id),
-            "span_id": str(span_id),
+            "trace_id": trace_id,
+            "span_id": span_id,
             "attributes": attributes or {},
         }
-        self.span_data.links.append(link)
-
+        self.links.append(link)
         return self
 
-    def set_llm_request(self, request: LLMRequest) -> "Span":
+    def set_status(self, status: SpanStatus, message: Optional[str] = None) -> "Span":
         """
-        Set LLM request data on the span.
+        Set the span status.
 
         Args:
-            request: LLM request data
+            status: Span status
+            message: Optional status message
 
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
-        self.span_data.llm_request = request
-
-        # Add LLM-specific attributes
-        self.set_attribute("llm.request.model", request.model)
-        self.set_attribute("gen_ai.request.model", request.model)
-        self.set_attribute("llm.request.messages", len(request.messages))
-
-        # Set operation type attributes
-        if request.operation_type:
-            self.set_attribute(
-                "gen_ai.operation.name", request.operation_type.value.split(".")[-1]
-            )
-
-        # Set AI system attributes
-        if request.ai_system:
-            self.set_attribute("gen_ai.system", request.ai_system.value)
-
-        if request.temperature is not None:
-            self.set_attribute("llm.request.temperature", request.temperature)
-        if request.max_tokens is not None:
-            self.set_attribute("llm.request.max_tokens", request.max_tokens)
-
+        self.status = status
+        self.status_message = message
         return self
 
-    def set_llm_response(self, response: LLMResponse) -> "Span":
+    def record_exception(
+        self, exception: Exception, capture_stack_trace: bool = True
+    ) -> "Span":
         """
-        Set LLM response data on the span.
+        Record an exception in the span.
 
         Args:
-            response: LLM response data
+            exception: Exception to record
+            capture_stack_trace: Whether to capture the stack trace
 
         Returns:
             Self for method chaining
         """
-        if not self.is_recording:
+        if self._finished:
             return self
 
-        self.span_data.llm_response = response
+        self.exception = exception
 
-        # Add LLM-specific attributes
-        self.set_attribute("llm.response.model", response.model)
-        self.set_attribute("llm.response.id", response.id)
+        # Add exception attributes
+        self.set_attributes(
+            {
+                "exception.type": type(exception).__name__,
+                "exception.message": str(exception),
+                "exception.escaped": False,
+            }
+        )
 
-        if response.usage:
-            self.set_attribute("llm.usage.prompt_tokens", response.usage.prompt_tokens)
-            self.set_attribute(
-                "llm.usage.completion_tokens", response.usage.completion_tokens
-            )
-            self.set_attribute("llm.usage.total_tokens", response.usage.total_tokens)
+        # Capture stack trace if requested
+        if capture_stack_trace:
+            self.stack_trace = traceback.format_exc()
+            self.set_attribute("exception.stacktrace", self.stack_trace)
+
+        # Add exception event
+        self.add_event(
+            "exception",
+            {
+                "exception.type": type(exception).__name__,
+                "exception.message": str(exception),
+            },
+        )
 
         return self
 
-    def end(self, end_time: Optional[datetime] = None) -> None:
+    def finish(self, end_time: Optional[datetime] = None) -> None:
         """
-        End the span.
+        Finish the span.
 
         Args:
-            end_time: End time (defaults to now)
+            end_time: End time (defaults to current time)
         """
-        if self._ended:
+        if self._finished:
             return
 
-        self._ended = True
-        self.span_data.end_time = end_time or datetime.now(timezone.utc)
+        self.end_time = end_time or datetime.now(timezone.utc)
+        self.duration_ms = (self.end_time - self.start_time).total_seconds() * 1000
 
-        # Calculate duration
-        if self.span_data.start_time and self.span_data.end_time:
-            duration = self.span_data.end_time - self.span_data.start_time
-            self.span_data.duration_ms = duration.total_seconds() * 1000
+        # Set default status if not set
+        if self.status == SpanStatus.UNSET:
+            self.status = SpanStatus.OK
 
-        # Export to tracer
-        if self._tracer:
-            self._tracer.export_span(self.span_data)
+        self._finished = True
 
-    def __enter__(self) -> "Span":
-        """Context manager entry."""
-        from .context import set_current_span
+    def is_finished(self) -> bool:
+        """Check if the span is finished."""
+        return self._finished
 
-        self._previous_span = None
-        try:
-            from .context import get_current_span
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert span to dictionary representation.
 
-            self._previous_span = get_current_span()
-            set_current_span(self)
-        except Exception:
-            pass  # Context management is optional
-        return self
+        Returns:
+            Dictionary representation of the span
+        """
+        data = {
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+            "parent_span_id": self.parent_span_id,
+            "name": self.name,
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "duration_ms": self.duration_ms,
+            "status": self.status.value,
+            "status_message": self.status_message,
+            "attributes": self.attributes,
+            "events": [
+                {
+                    "name": event.name,
+                    "timestamp": event.timestamp.isoformat(),
+                    "attributes": event.attributes,
+                }
+                for event in self.events
+            ],
+            "links": self.links,
+        }
 
-    def __exit__(
-        self,
-        exc_type: Optional[type],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[Any],
-    ) -> None:
-        """Context manager exit."""
-        if (
-            exc_type is not None
-            and exc_val is not None
-            and isinstance(exc_val, Exception)
-        ):
-            self.record_exception(exc_val)
+        # Add exception information if present
+        if self.exception:
+            data["exception"] = {
+                "type": type(self.exception).__name__,
+                "message": str(self.exception),
+                "stack_trace": self.stack_trace,
+            }
 
-        # Restore previous span context
-        if hasattr(self, "_previous_span"):
-            try:
-                from .context import set_current_span
-
-                set_current_span(self._previous_span)
-            except Exception:
-                pass  # Context management is optional
-
-        self.end()
+        return data
 
     @classmethod
-    def create_no_op_span(cls) -> "Span":
-        """Create a no-op span that doesn't record anything."""
-        span_data = SpanData(
-            trace_id=TraceID.generate(), span_id=SpanID.generate(), name="no-op"
+    def from_dict(cls, data: dict[str, Any]) -> "Span":
+        """
+        Create span from dictionary representation.
+
+        Args:
+            data: Dictionary representation
+
+        Returns:
+            Span instance
+        """
+        span = cls(
+            name=data["name"],
+            trace_id=data["trace_id"],
+            span_id=data["span_id"],
+            parent_span_id=data.get("parent_span_id"),
+            start_time=datetime.fromisoformat(data["start_time"]),
+            attributes=data.get("attributes", {}),
         )
-        span = cls(span_data)
-        span._is_recording = False
+
+        if data.get("end_time"):
+            span.end_time = datetime.fromisoformat(data["end_time"])
+            span._finished = True
+
+        span.duration_ms = data.get("duration_ms")
+        span.status = SpanStatus(data.get("status", "unset"))
+        span.status_message = data.get("status_message")
+
+        # Restore events
+        for event_data in data.get("events", []):
+            event = SpanEvent(
+                name=event_data["name"],
+                timestamp=datetime.fromisoformat(event_data["timestamp"]),
+                attributes=event_data.get("attributes", {}),
+            )
+            span.events.append(event)
+
+        # Restore links
+        span.links = data.get("links", [])
+
         return span
 
-    def get_span_data(self) -> SpanData:
-        """Get the span data."""
-        return self.span_data
+    def _generate_span_id(self) -> str:
+        """Generate a unique span ID."""
+        return str(uuid.uuid4())
 
-
-# Export main class
-__all__ = ["Span"]
+    def __repr__(self) -> str:
+        """String representation of the span."""
+        return (
+            f"Span(name='{self.name}', span_id='{self.span_id}', "
+            f"trace_id='{self.trace_id}', status='{self.status.value}')"
+        )

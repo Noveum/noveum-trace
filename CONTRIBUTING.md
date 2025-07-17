@@ -1,158 +1,108 @@
 # Contributing to Noveum Trace SDK
 
-We welcome contributions to the Noveum Trace SDK! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to the Noveum Trace SDK! This document provides guidelines and information for contributors.
 
-## Code of Conduct
+## Development Setup
 
-By participating in this project, you agree to abide by our Code of Conduct. Please be respectful and constructive in all interactions.
+### Prerequisites
 
-## Getting Started
+- Python 3.8 or higher
+- pip for dependency management
+- Git for version control
 
-### Development Environment Setup
+### Setting up the Development Environment
 
-1. **Clone the repository**
+1. **Clone the repository:**
    ```bash
    git clone https://github.com/Noveum/noveum-trace.git
    cd noveum-trace
    ```
 
-2. **Create a virtual environment**
+2. **Create a virtual environment:**
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. **Install development dependencies**
+3. **Install in development mode:**
    ```bash
-   pip install -e .[dev]
+   pip install -e ".[dev]"
    ```
 
-4. **Install pre-commit hooks**
-   ```bash
-   pre-commit install
-   ```
+## Project Structure
 
-5. **Run tests to verify setup**
-   ```bash
-   pytest
-   ```
-
-## Development Workflow
-
-### Making Changes
-
-1. **Create a feature branch**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-2. **Make your changes**
-   - Follow the coding standards outlined below
-   - Add tests for new functionality
-   - Update documentation as needed
-
-3. **Run tests and linting**
-   ```bash
-   # Run tests
-   pytest
-
-   # Run linting
-   black src/ tests/
-   isort src/ tests/
-   flake8 src/ tests/
-   mypy src/
-   ```
-
-4. **Commit your changes**
-   ```bash
-   git add .
-   git commit -m "feat: add new feature description"
-   ```
-
-5. **Push and create a pull request**
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-### Commit Message Format
-
-We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
-
-- `feat:` - New features
-- `fix:` - Bug fixes
-- `docs:` - Documentation changes
-- `style:` - Code style changes (formatting, etc.)
-- `refactor:` - Code refactoring
-- `test:` - Adding or updating tests
-- `chore:` - Maintenance tasks
-
-Examples:
 ```
-feat: add streaming LLM support
-fix: resolve context propagation issue
-docs: update installation instructions
-test: add unit tests for span creation
+noveum_trace/
+├── core/              # Core tracing functionality
+│   ├── client.py      # Main client class
+│   ├── config.py      # Configuration management
+│   ├── context.py     # Context management
+│   ├── span.py        # Span implementation
+│   └── trace.py       # Trace implementation
+├── decorators/        # Decorator-based API
+│   ├── base.py        # Base trace decorator
+│   ├── llm.py         # LLM-specific decorator
+│   ├── agent.py       # Agent-specific decorator
+│   ├── tool.py        # Tool-specific decorator
+│   └── retrieval.py   # Retrieval-specific decorator
+├── transport/         # Transport layer
+│   ├── http_transport.py    # HTTP transport
+│   └── batch_processor.py   # Batch processing
+├── integrations/      # Framework integrations
+│   └── openai.py      # OpenAI integration
+└── utils/             # Utility modules
+    ├── exceptions.py   # Custom exceptions
+    ├── llm_utils.py    # LLM utilities
+    └── pii_redaction.py # PII redaction
 ```
 
-## Coding Standards
+## Development Guidelines
 
-### Python Style Guide
+### Code Style
 
-- Follow [PEP 8](https://pep8.org/) style guidelines
-- Use [Black](https://black.readthedocs.io/) for code formatting
-- Use [isort](https://isort.readthedocs.io/) for import sorting
-- Use [flake8](https://flake8.pycqa.org/) for linting
-- Use [mypy](https://mypy.readthedocs.io/) for type checking
+- Follow PEP 8 style guidelines
+- Use type hints for all function parameters and return values
+- Write comprehensive docstrings for all public functions and classes
+- Maximum line length: 88 characters
 
-### Code Quality
+### Testing
 
-- **Type Hints**: All public functions must have type hints
-- **Docstrings**: All public classes and functions must have docstrings
-- **Error Handling**: Use appropriate exception types from `utils.exceptions`
-- **Logging**: Use structured logging with appropriate levels
-- **Testing**: Maintain >90% test coverage
+- Write unit tests for all new functionality
+- Aim for high test coverage
+- Use pytest for testing framework
+- Place tests in the `tests/` directory
 
-### Architecture Guidelines
+### Documentation
 
-- **Single Responsibility**: Each class/function should have one clear purpose
-- **Dependency Injection**: Use dependency injection for testability
-- **Interface Segregation**: Keep interfaces focused and minimal
-- **Open/Closed Principle**: Design for extension without modification
+- Update docstrings for any changed functionality
+- Add examples to docstrings where helpful
+- Update README.md if adding new features
+- Follow Google-style docstring format
+
+## Adding New Features
+
+### Adding a New Decorator
+
+1. Create a new file in `noveum_trace/decorators/` or extend existing ones
+2. Follow the pattern established by existing decorators
+3. Add comprehensive tests
+4. Update the `__init__.py` file to export the new decorator
+5. Add documentation and examples
+
+### Adding a New Integration
+
+1. Create a new file in `noveum_trace/integrations/`
+2. Implement integration following existing patterns
+3. Add integration tests
+4. Document any special requirements or limitations
+
+### Adding Utility Functions
+
+1. Add functions to appropriate module in `noveum_trace/utils/`
+2. Ensure functions are well-documented and tested
+3. Consider if the function should be part of the public API
 
 ## Testing
-
-### Test Structure
-
-```
-tests/
-├── unit/           # Unit tests
-├── integration/    # Integration tests
-└── conftest.py     # Shared test fixtures
-```
-
-### Writing Tests
-
-- Use `pytest` for all tests
-- Follow the AAA pattern (Arrange, Act, Assert)
-- Use descriptive test names
-- Mock external dependencies
-- Test both success and failure scenarios
-
-Example test:
-```python
-def test_span_creation_with_attributes():
-    # Arrange
-    tracer = NoveumTracer()
-    attributes = {"user.id": "123", "operation": "test"}
-
-    # Act
-    span = tracer.start_span("test_span", attributes=attributes)
-
-    # Assert
-    assert span.name == "test_span"
-    assert span.get_attribute("user.id") == "123"
-    assert span.get_attribute("operation") == "test"
-```
 
 ### Running Tests
 
@@ -161,106 +111,49 @@ def test_span_creation_with_attributes():
 pytest
 
 # Run with coverage
-pytest --cov=noveum_trace --cov-report=html
+pytest --cov=noveum_trace
 
 # Run specific test file
-pytest tests/unit/test_span.py
+pytest tests/test_decorators.py
 
-# Run tests matching pattern
-pytest -k "test_span"
-
-# Run integration tests
-pytest tests/integration/
+# Run with verbose output
+pytest -v
 ```
 
-## Documentation
+### Test Structure
 
-### Documentation Standards
-
-- Use clear, concise language
-- Include code examples for all public APIs
-- Update docstrings when changing function signatures
-- Add type information to all parameters and return values
-
-### Building Documentation
-
-```bash
-# Install documentation dependencies
-pip install .[docs]
-
-# Build documentation
-cd docs/
-make html
-
-# View documentation
-open _build/html/index.html
-```
+- Unit tests: Test individual functions and classes
+- Integration tests: Test interactions between components
+- Mock external dependencies appropriately
 
 ## Pull Request Process
 
-### Before Submitting
+1. **Fork the repository** and create a feature branch
+2. **Make your changes** following the development guidelines
+3. **Write or update tests** for your changes
+4. **Update documentation** as needed
+5. **Run the test suite** and ensure all tests pass
+6. **Submit a pull request** with a clear description
 
-1. Ensure all tests pass
-2. Update documentation if needed
-3. Add changelog entry if applicable
-4. Verify code coverage meets requirements
-5. Run pre-commit hooks
+### Pull Request Checklist
 
-### Pull Request Template
+- [ ] Tests pass locally
+- [ ] Code follows style guidelines
+- [ ] Documentation is updated
+- [ ] No breaking changes (or clearly documented)
 
-When creating a pull request, please include:
+## Code Review Process
 
-- **Description**: Clear description of changes
-- **Type**: Feature, bug fix, documentation, etc.
-- **Testing**: How the changes were tested
-- **Breaking Changes**: Any breaking changes
-- **Related Issues**: Link to related issues
-
-### Review Process
-
-1. **Automated Checks**: All CI checks must pass
-2. **Code Review**: At least one maintainer review required
-3. **Testing**: Verify tests cover new functionality
-4. **Documentation**: Ensure documentation is updated
-
-## Release Process
-
-### Version Numbering
-
-We follow [Semantic Versioning](https://semver.org/):
-- **MAJOR**: Breaking changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes (backward compatible)
-
-### Release Checklist
-
-1. Update version in `src/noveum_trace/__init__.py`
-2. Update `CHANGELOG.md`
-3. Create release tag
-4. Build and publish to PyPI
-5. Update documentation
+- All submissions require review from maintainers
+- Reviews focus on correctness, performance, and maintainability
+- Address feedback promptly and professionally
 
 ## Getting Help
 
-### Communication Channels
+- **Issues**: Report bugs or request features via GitHub Issues
+- **Documentation**: Check the README and examples
+- **Email**: Contact the maintainers at support@noveum.ai
 
-- **GitHub Issues**: Bug reports and feature requests
-- **GitHub Discussions**: General questions and discussions
-- **Discord**: Real-time chat with the community
-- **Email**: team@noveum.ai for private inquiries
+## License
 
-### Issue Templates
-
-When reporting bugs or requesting features, please use the appropriate issue template and provide:
-
-- **Bug Reports**: Steps to reproduce, expected vs actual behavior, environment details
-- **Feature Requests**: Use case, proposed solution, alternatives considered
-
-## Recognition
-
-Contributors will be recognized in:
-- `CONTRIBUTORS.md` file
-- Release notes
-- Project documentation
-
-Thank you for contributing to Noveum Trace SDK!
+By contributing to this project, you agree that your contributions will be licensed under the same license as the project (Apache License 2.0).

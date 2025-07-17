@@ -1,150 +1,389 @@
 """
-Noveum Trace SDK
+Noveum Trace SDK - Cloud-first, flexible tracing for LLM applications.
 
-A high-performance, OpenTelemetry-compliant tracing SDK for LLM applications.
-Provides automatic instrumentation, real-time evaluation, and dataset creation.
+This package provides comprehensive observability for LLM applications and
+multi-agent systems through multiple flexible tracing approaches.
 
-Quick Start:
-    ```python
-    import noveum_trace
+Example:
+    Basic usage with decorators:
 
-    # Simple initialization
-    noveum_trace.init()
+    >>> import noveum_trace
+    >>> noveum_trace.init(project="my-app")
+    >>>
+    >>> @noveum_trace.trace
+    >>> def my_function(data: str) -> str:
+    ...     return process_data(data)
 
-    # Your LLM calls are now automatically traced!
-    import openai
-    client = openai.OpenAI()
-    response = client.chat.completions.create(...)
-    ```
+    LLM tracing with context managers:
 
-For more advanced usage, see the documentation and examples.
+    >>> def process_query(query: str) -> str:
+    ...     # Pre-processing (not traced)
+    ...     cleaned_query = clean_query(query)
+    ...
+    ...     # LLM call (traced)
+    ...     with noveum_trace.trace_llm_call(model="gpt-4") as span:
+    ...         response = openai.chat.completions.create(...)
+    ...         span.set_attribute("llm.tokens", response.usage.total_tokens)
+    ...
+    ...     # Post-processing (not traced)
+    ...     return format_response(response)
+
+    Auto-instrumentation for existing code:
+
+    >>> noveum_trace.auto_instrument("openai")
+    >>>
+    >>> # Now all OpenAI calls are automatically traced
+    >>> response = openai_client.chat.completions.create(...)
 """
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 __author__ = "Noveum Team"
-__email__ = "team@noveum.ai"
+__email__ = "engineering@noveum.ai"
+__license__ = "Apache-2.0"
 
-# Multi-agent support
-from .agents import (
-    Agent,
-    AgentConfig,
-    AgentContext,
-    AgentRegistry,
-    get_agent_registry,
-    get_current_agent,
-    set_current_agent,
+# Type imports
+from typing import Any, Optional
+
+# Agent imports
+from noveum_trace.agents import (
+    AgentGraph,
+    AgentNode,
+    AgentWorkflow,
+    create_agent,
+    create_agent_graph,
+    create_agent_workflow,
+    get_agent,
+    get_agent_graph,
+    get_agent_workflow,
+)
+from noveum_trace.agents import trace_agent_operation as trace_agent_op
+
+# Auto-instrumentation imports
+from noveum_trace.auto_instrument import (
+    auto_instrument,
+    enable_auto_tracing,
+    get_available_instrumentations,
+    get_instrumented_libraries,
+    is_instrumented,
+    uninstrument,
+    uninstrument_all,
 )
 
-# Backward compatibility aliases
-# Simplified decorators (unified approach)
-from .agents.decorators import llm_trace, observe, trace, update_current_span
-from .core.context import TraceContext
-from .core.span import Span
-
-# Core components (for advanced users)
-from .core.tracer import NoveumTracer, TracerConfig
-
-# Simplified API (recommended for most users)
-from .init import (
-    NoveumTrace,
-    configure,
-    disable_auto_instrumentation,
-    enable_auto_instrumentation,
-    flush,
-    get_tracer,
-    init,
-    setup,
-    shutdown,
+# Context manager imports
+from noveum_trace.context_managers import (
+    create_child_span,
 )
-from .instrumentation import anthropic, openai
-
-# Instrumentation
-from .instrumentation.decorators import (
-    trace_function,
-    trace_llm_call,
-    trace_streaming_llm_call,
+from noveum_trace.context_managers import trace_agent as trace_agent_operation
+from noveum_trace.context_managers import (
+    trace_batch_operation,
+    trace_function_calls,
+)
+from noveum_trace.context_managers import trace_llm as trace_llm_call
+from noveum_trace.context_managers import (
+    trace_operation,
+    trace_pipeline_stage,
 )
 
-# Sinks
-from .sinks.base import BaseSink
-from .sinks.console import ConsoleSink, ConsoleSinkConfig
-from .sinks.elasticsearch import ElasticsearchConfig, ElasticsearchSink
-from .sinks.file import FileSink, FileSinkConfig
-from .sinks.noveum import NoveumConfig, NoveumSink
+# Core imports
+from noveum_trace.core.client import NoveumClient
+from noveum_trace.core.config import configure, get_config
+from noveum_trace.core.context import get_current_span, get_current_trace, trace_context
+from noveum_trace.core.span import Span
+from noveum_trace.core.trace import Trace
+from noveum_trace.decorators.agent import trace_agent
 
-# Types
-from .types import (
-    AISystem,
-    LLMRequest,
-    LLMResponse,
-    Message,
-    OperationType,
-    SpanData,
-    SpanKind,
-    SpanStatus,
-    TokenUsage,
+# Decorator imports
+from noveum_trace.decorators.base import trace
+from noveum_trace.decorators.llm import trace_llm
+from noveum_trace.decorators.retrieval import trace_retrieval
+from noveum_trace.decorators.tool import trace_tool
+
+# Proxy object imports
+from noveum_trace.proxies import (
+    TracedAgentProxy,
+    TracedOpenAIClient,
+    create_traced_agent,
+    create_traced_langchain_llm,
+    create_traced_openai_client,
 )
 
-# Exceptions
-from .utils.exceptions import (
+# Streaming imports
+from noveum_trace.streaming import (
+    create_anthropic_streaming_callback,
+    create_openai_streaming_callback,
+    streaming_llm,
+    trace_streaming,
+)
+
+# Thread imports
+from noveum_trace.threads import (
+    ThreadContext,
+    create_thread,
+    delete_thread,
+    get_thread,
+    list_threads,
+    trace_thread_llm,
+)
+
+# Utility imports
+from noveum_trace.utils.exceptions import (
     ConfigurationError,
-    NetworkError,
-    NoveumTracingError,
-    ValidationError,
+    InitializationError,
+    InstrumentationError,
+    NoveumTraceError,
+    TracingError,
+    TransportError,
 )
 
-# Main exports (what users typically need)
+# Global client instance
+_client: Optional[NoveumClient] = None
+
+
+def init(
+    project: Optional[str] = None,
+    api_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    environment: Optional[str] = None,
+    auto_instrument: Optional[list[str]] = None,
+    **kwargs: Any,
+) -> None:
+    """
+    Initialize the Noveum Trace SDK.
+
+    This function sets up the global tracing client and configures
+    automatic instrumentation for specified frameworks.
+
+    Args:
+        project: Project name for organizing traces
+        api_key: Noveum API key (defaults to NOVEUM_API_KEY env var)
+        endpoint: API endpoint (defaults to https://api.noveum.ai)
+        environment: Environment name (dev, staging, prod)
+        auto_instrument: List of frameworks to auto-instrument
+                        (e.g., ["langchain", "openai", "anthropic"])
+        **kwargs: Additional configuration options
+
+    Example:
+        >>> import noveum_trace
+        >>> noveum_trace.init(
+        ...     project="my-llm-app",
+        ...     environment="production",
+        ...     auto_instrument=["langchain", "openai"]
+        ... )
+    """
+    global _client
+
+    # Configure the SDK
+    config = {
+        "project": project,
+        "api_key": api_key,
+        "endpoint": endpoint,
+        "environment": environment,
+        **kwargs,
+    }
+    configure(config)
+
+    # Initialize the client
+    _client = NoveumClient()
+
+    # Setup auto-instrumentation
+    if auto_instrument:
+        enable_auto_tracing(auto_instrument)
+
+
+def shutdown() -> None:
+    """
+    Shutdown the Noveum Trace SDK.
+
+    This function flushes any pending traces and cleanly shuts down
+    the tracing client.
+    """
+    global _client
+    if _client:
+        _client.shutdown()
+        _client = None
+
+
+def flush() -> None:
+    """
+    Flush any pending traces to the Noveum platform.
+
+    This function blocks until all pending traces have been sent
+    or the flush timeout is reached.
+    """
+    global _client
+    if _client:
+        _client.flush()
+
+
+def get_client() -> NoveumClient:
+    """
+    Get the global Noveum client instance.
+
+    Returns:
+        The global NoveumClient instance
+
+    Raises:
+        InitializationError: If the SDK has not been initialized
+    """
+    global _client
+    if _client is None:
+        raise InitializationError(
+            "Noveum Trace SDK not initialized. Call noveum_trace.init() first."
+        )
+    return _client
+
+
+def is_initialized() -> bool:
+    """
+    Check if the Noveum Trace SDK has been initialized.
+
+    Returns:
+        True if initialized, False otherwise
+    """
+    global _client
+    return _client is not None
+
+
+# Plugin system
+def register_plugin(plugin: Any) -> None:
+    """
+    Register a custom plugin with the Noveum Trace SDK.
+
+    Args:
+        plugin: Plugin instance implementing the BasePlugin interface
+    """
+    from noveum_trace.plugins import register_plugin as _register_plugin
+
+    _register_plugin(plugin)
+
+
+def list_plugins() -> list[str]:
+    """
+    List all registered plugins.
+
+    Returns:
+        List of registered plugin names
+    """
+    from noveum_trace.plugins import list_plugins as _list_plugins
+
+    return _list_plugins()
+
+
+# Convenience functions for manual instrumentation
+def start_trace(name: str, **kwargs: Any) -> Trace:
+    """
+    Manually start a new trace.
+
+    Args:
+        name: Trace name
+        **kwargs: Additional trace attributes
+
+    Returns:
+        New Trace instance
+    """
+    client = get_client()
+    return client.start_trace(name, **kwargs)
+
+
+def start_span(name: str, **kwargs: Any) -> Span:
+    """
+    Manually start a new span.
+
+    Args:
+        name: Span name
+        **kwargs: Additional span attributes
+
+    Returns:
+        New Span instance
+    """
+    client = get_client()
+    return client.start_span(name, **kwargs)
+
+
+# Export public API
 __all__ = [
-    "AISystem",
-    # Sorted alphabetically
-    "Agent",
-    "AgentConfig",
-    "AgentContext",
-    "AgentRegistry",
-    "BaseSink",
-    "ConfigurationError",
-    "ConsoleSink",
-    "ConsoleSinkConfig",
-    "ElasticsearchConfig",
-    "ElasticsearchSink",
-    "FileSink",
-    "FileSinkConfig",
-    "LLMRequest",
-    "LLMResponse",
-    "Message",
-    "NetworkError",
-    "NoveumConfig",
-    "NoveumSink",
-    "NoveumTrace",
-    "NoveumTracer",
-    "NoveumTracingError",
-    "OperationType",
-    "Span",
-    "SpanData",
-    "SpanKind",
-    "SpanStatus",
-    "TokenUsage",
-    "TraceContext",
-    "TracerConfig",
-    "ValidationError",
-    "anthropic",
-    "configure",
-    "disable_auto_instrumentation",
-    "enable_auto_instrumentation",
-    "flush",
-    "get_agent_registry",
-    "get_current_agent",
-    "get_tracer",
+    # Core functions
     "init",
-    "llm_trace",
-    "observe",
-    "openai",
-    "set_current_agent",
-    "setup",
     "shutdown",
+    "flush",
+    "configure",
+    "get_config",
+    "get_client",
+    "is_initialized",
+    # Decorators
     "trace",
-    "trace_function",
+    "trace_llm",
+    "trace_agent",
+    "trace_tool",
+    "trace_retrieval",
+    # Context managers
+    "trace_context",
     "trace_llm_call",
-    "trace_streaming_llm_call",
-    "update_current_span",
+    "trace_agent_operation",
+    "trace_operation",
+    "trace_batch_operation",
+    "trace_pipeline_stage",
+    "create_child_span",
+    "trace_function_calls",
+    # Auto-instrumentation
+    "auto_instrument",
+    "uninstrument",
+    "uninstrument_all",
+    "is_instrumented",
+    "get_instrumented_libraries",
+    "enable_auto_tracing",
+    "get_available_instrumentations",
+    # Proxy objects
+    "create_traced_openai_client",
+    "create_traced_agent",
+    "create_traced_langchain_llm",
+    "TracedOpenAIClient",
+    "TracedAgentProxy",
+    # Streaming
+    "trace_streaming",
+    "streaming_llm",
+    "create_openai_streaming_callback",
+    "create_anthropic_streaming_callback",
+    # Threads
+    "create_thread",
+    "get_thread",
+    "delete_thread",
+    "list_threads",
+    "trace_thread_llm",
+    "ThreadContext",
+    # Agents
+    "create_agent",
+    "get_agent",
+    "create_agent_graph",
+    "get_agent_graph",
+    "create_agent_workflow",
+    "get_agent_workflow",
+    "trace_agent_op",
+    "AgentNode",
+    "AgentGraph",
+    "AgentWorkflow",
+    # Context management
+    "get_current_trace",
+    "get_current_span",
+    # Manual instrumentation
+    "start_trace",
+    "start_span",
+    # Core classes
+    "Trace",
+    "Span",
+    "NoveumClient",
+    # Plugin system
+    "register_plugin",
+    "list_plugins",
+    # Exceptions
+    "NoveumTraceError",
+    "ConfigurationError",
+    "TransportError",
+    "InstrumentationError",
+    "TracingError",
+    # Metadata
+    "__version__",
+    "__author__",
+    "__email__",
+    "__license__",
 ]
