@@ -184,6 +184,19 @@ class TestConfig:
         assert config.tracing.sample_rate == 1.0
         assert config.transport.endpoint == "https://api.noveum.ai"
 
+    def test_config_with_endpoint_parameter(self):
+        """Test config creation with endpoint parameter."""
+        custom_endpoint = "http://localhost:8082/api/v1"
+        config = Config.create(
+            api_key="test-config-key",
+            project="config-test-project",
+            endpoint=custom_endpoint,
+        )
+
+        assert config.api_key == "test-config-key"
+        assert config.project == "config-test-project"
+        assert config.transport.endpoint == custom_endpoint
+
     def test_config_validation(self):
         """Test config validation."""
         # Test invalid sample rate
@@ -191,6 +204,80 @@ class TestConfig:
             config = Config()
             config.tracing.sample_rate = 1.5  # Invalid
             config._validate()
+
+    def test_config_from_dict_with_top_level_endpoint(self):
+        """Test creating config from dictionary with top-level endpoint."""
+        config_data = {
+            "project": "test_project",
+            "api_key": "test_key",
+            "environment": "production",
+            "endpoint": "http://localhost:8082/api/v1",
+            "tracing": {
+                "sample_rate": 0.5,
+                "capture_errors": False,
+            },
+        }
+
+        config = Config.from_dict(config_data)
+
+        assert config.project == "test_project"
+        assert config.api_key == "test_key"
+        assert config.environment == "production"
+        assert config.transport.endpoint == "http://localhost:8082/api/v1"
+        assert config.tracing.sample_rate == 0.5
+        assert config.tracing.capture_errors is False
+
+    def test_config_from_dict_with_transport_endpoint(self):
+        """Test creating config from dictionary with transport.endpoint."""
+        config_data = {
+            "project": "test_project",
+            "api_key": "test_key",
+            "environment": "production",
+            "transport": {
+                "endpoint": "http://localhost:8082/api/v1",
+                "timeout": 60,
+            },
+        }
+
+        config = Config.from_dict(config_data)
+
+        assert config.project == "test_project"
+        assert config.api_key == "test_key"
+        assert config.environment == "production"
+        assert config.transport.endpoint == "http://localhost:8082/api/v1"
+        assert config.transport.timeout == 60
+
+    def test_config_from_dict_endpoint_precedence(self):
+        """Test that top-level endpoint takes precedence over transport.endpoint."""
+        config_data = {
+            "project": "test_project",
+            "api_key": "test_key",
+            "endpoint": "http://localhost:8082/api/v1",  # Top-level - should take precedence
+            "transport": {
+                "endpoint": "http://localhost:9000/api/v1",  # Should be overridden
+                "timeout": 60,
+            },
+        }
+
+        config = Config.from_dict(config_data)
+
+        assert (
+            config.transport.endpoint == "http://localhost:8082/api/v1"
+        )  # Top-level endpoint wins
+
+    def test_config_from_dict_only_top_level_endpoint(self):
+        """Test config when only top-level endpoint is provided (no transport section)."""
+        config_data = {
+            "project": "test_project",
+            "api_key": "test_key",
+            "endpoint": "http://localhost:8082/api/v1",
+        }
+
+        config = Config.from_dict(config_data)
+
+        assert config.project == "test_project"
+        assert config.api_key == "test_key"
+        assert config.transport.endpoint == "http://localhost:8082/api/v1"
 
     def test_config_from_dict(self):
         """Test creating config from dictionary."""
