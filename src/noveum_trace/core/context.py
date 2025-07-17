@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from noveum_trace.core.span import Span
+from noveum_trace.core.span import Span, SpanStatus
 from noveum_trace.core.trace import Trace
 
 
@@ -276,7 +276,7 @@ class ContextualSpan:
         """Context manager exit."""
         if exc_type is not None:
             self.span.record_exception(exc_val)
-            self.span.set_status(self.span.status.ERROR, str(exc_val))
+            self.span.set_status(SpanStatus.ERROR, str(exc_val))
 
         self.span.finish()
         set_current_span(self._previous_span)
@@ -313,7 +313,7 @@ class ContextualTrace:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         if exc_type is not None:
-            self.trace.set_status(self.trace.status.ERROR, str(exc_val))
+            self.trace.set_status(SpanStatus.ERROR, str(exc_val))
 
         self.trace.finish()
         set_current_trace(self._previous_trace)

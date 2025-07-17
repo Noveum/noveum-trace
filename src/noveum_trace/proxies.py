@@ -9,6 +9,7 @@ import functools
 from typing import Any, Callable, Optional
 
 from noveum_trace.context_managers import trace_agent, trace_llm
+from noveum_trace.core.span import SpanStatus
 
 
 class TracedOpenAIClient:
@@ -421,7 +422,7 @@ class TracedAgentProxy:
 
                 except Exception as e:
                     span.record_exception(e)
-                    span.set_status("error", str(e))
+                    span.set_status(SpanStatus.ERROR, str(e))
                     raise
 
         return traced_method
@@ -498,7 +499,7 @@ class TracedLangChainLLM:
 
             except Exception as e:
                 span.record_exception(e)
-                span.set_status("error", str(e))
+                span.set_status(SpanStatus.ERROR, str(e))
                 raise
 
     def __getattr__(self, name: str) -> Any:

@@ -74,6 +74,7 @@ class Trace:
 
         # Flags
         self._finished = False
+        self._noop = False
 
     def __enter__(self) -> "Trace":
         """Context manager entry."""

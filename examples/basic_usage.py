@@ -30,8 +30,15 @@ def main():
     """Main example function."""
 
     # Initialize the SDK
+    api_key = os.getenv("NOVEUM_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "NOVEUM_API_KEY environment variable is required. "
+            "Please set it before running this example."
+        )
+
     noveum_trace.init(
-        api_key=os.getenv("NOVEUM_API_KEY"),
+        api_key=api_key,
         project="example-project",
         environment="development",
     )
@@ -64,7 +71,7 @@ def main():
 
 
 @trace(capture_performance=True)
-def process_data(data: str) -> dict[str, str]:
+def process_data(data: str) -> dict[str, Any]:
     """
     Example function with basic tracing.
 

@@ -65,16 +65,18 @@ class StreamingSpanManager:
         self.is_finished = False
 
         # Span management
-        self.span = None
+        self.span: Optional[Any] = None
+        self.span_context: Optional[Any] = None
 
     def __enter__(self) -> "StreamingSpanManager":
         """Start the streaming span."""
-        self.span = trace_llm(
+        self.span_context = trace_llm(
             model=self.model,
             provider=self.provider,
             operation=self.operation,
             **self.span_attributes,
-        ).__enter__()
+        )
+        self.span = self.span_context.__enter__()
 
         return self
 
@@ -89,8 +91,9 @@ class StreamingSpanManager:
             if not self.is_finished:
                 self.finish_streaming()
 
-            # Let the span context manager handle the exception
-            return trace_llm().__exit__(exc_type, exc_val, exc_tb)
+        # Let the span context manager handle the exception
+        if self.span_context:
+            return self.span_context.__exit__(exc_type, exc_val, exc_tb)
 
     def add_token(self, token: str) -> None:
         """
@@ -160,7 +163,7 @@ class StreamingSpanManager:
 
             # Update final span attributes
             if self.span:
-                final_attributes = {
+                final_attributes: dict[str, Any] = {
                     "streaming.tokens_received": self.tokens_received,
                     "streaming.total_characters": self.total_characters,
                     "streaming.duration": total_duration,

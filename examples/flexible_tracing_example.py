@@ -31,13 +31,28 @@ from noveum_trace.auto_instrument import auto_instrument, uninstrument
 # Import the new flexible tracing approaches
 from noveum_trace.context_managers import trace_llm, trace_operation
 
+# Validate required environment variables
+noveum_api_key = os.getenv("NOVEUM_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+
+if not noveum_api_key:
+    raise ValueError(
+        "NOVEUM_API_KEY environment variable is required. "
+        "Please set it before running this example."
+    )
+if not openai_api_key:
+    raise ValueError(
+        "OPENAI_API_KEY environment variable is required. "
+        "Please set it before running this example."
+    )
+
 noveum_trace.init(
-    api_key=os.getenv("NOVEUM_API_KEY"),
+    api_key=noveum_api_key,
     project="flexible-tracing-demo",
     environment="development",
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(api_key=openai_api_key)
 
 # =============================================================================
 # APPROACH 1: CONTEXT MANAGERS

@@ -284,7 +284,11 @@ def example_thread_metadata():
             )
 
         # Get only user and assistant messages (exclude system)
-        user_assistant_messages = thread.get_messages(roles=["user", "assistant"])
+        # Note: role_filter accepts only a single role, so we filter manually
+        all_messages = thread.get_messages()
+        user_assistant_messages = [
+            msg for msg in all_messages if msg["role"] in ["user", "assistant"]
+        ]
         print(f"\nUser and Assistant Messages: {len(user_assistant_messages)}")
 
         # Get the last 2 messages

@@ -170,12 +170,16 @@ def example_agent_graph():
         )
 
         # Add relationships between agents
-        graph.add_edge(
-            source_id="planner", target_id="researcher", edge_type="delegates"
+        graph.add_connection(
+            source_agent_id="planner",
+            target_agent_id="researcher",
+            connection_type="delegates",
         )
 
-        graph.add_edge(
-            source_id="researcher", target_id="analyst", edge_type="provides_data"
+        graph.add_connection(
+            source_agent_id="researcher",
+            target_agent_id="analyst",
+            connection_type="provides_data",
         )
 
         # Activate the planner agent
@@ -394,20 +398,28 @@ def example_complex_agent_system():
         )
 
         # Add relationships
-        graph.add_edge(
-            source_id="orchestrator", target_id="planner", edge_type="manages"
+        graph.add_connection(
+            source_agent_id="orchestrator",
+            target_agent_id="planner",
+            connection_type="manages",
         )
 
-        graph.add_edge(
-            source_id="orchestrator", target_id="researcher", edge_type="manages"
+        graph.add_connection(
+            source_agent_id="orchestrator",
+            target_agent_id="researcher",
+            connection_type="manages",
         )
 
-        graph.add_edge(
-            source_id="orchestrator", target_id="analyst", edge_type="manages"
+        graph.add_connection(
+            source_agent_id="orchestrator",
+            target_agent_id="analyst",
+            connection_type="manages",
         )
 
-        graph.add_edge(
-            source_id="orchestrator", target_id="writer", edge_type="manages"
+        graph.add_connection(
+            source_agent_id="orchestrator",
+            target_agent_id="writer",
+            connection_type="manages",
         )
 
         # Add workflow tasks

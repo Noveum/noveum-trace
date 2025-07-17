@@ -5,24 +5,31 @@ This package provides automatic instrumentation for popular
 LLM frameworks and libraries.
 """
 
+from typing import Callable, Optional
+
 # Import available integrations
+patch_openai: Optional[Callable[[], None]]
+patch_anthropic: Optional[Callable[[], None]]
+patch_langchain: Optional[Callable[[], None]]
+patch_llamaindex: Optional[Callable[[], None]]
+
 try:
     from noveum_trace.integrations.openai import patch_openai
 except ImportError:
     patch_openai = None
 
 try:
-    from noveum_trace.integrations.anthropic import patch_anthropic
+    from noveum_trace.integrations.anthropic import patch_anthropic  # type: ignore
 except ImportError:
     patch_anthropic = None
 
 try:
-    from noveum_trace.integrations.langchain import patch_langchain
+    from noveum_trace.integrations.langchain import patch_langchain  # type: ignore
 except ImportError:
     patch_langchain = None
 
 try:
-    from noveum_trace.integrations.llamaindex import patch_llamaindex
+    from noveum_trace.integrations.llamaindex import patch_llamaindex  # type: ignore
 except ImportError:
     patch_llamaindex = None
 

@@ -41,6 +41,8 @@ __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
 
+import threading
+
 # Type imports
 from typing import Any, Optional
 
@@ -49,12 +51,20 @@ from noveum_trace.agents import (
     AgentGraph,
     AgentNode,
     AgentWorkflow,
+    cleanup_agent,
+    cleanup_agent_graph,
+    cleanup_agent_workflow,
+    cleanup_all_registries,
+    cleanup_by_ttl,
     create_agent,
     create_agent_graph,
     create_agent_workflow,
+    enforce_size_limits,
     get_agent,
     get_agent_graph,
     get_agent_workflow,
+    get_registry_stats,
+    temporary_agent_context,
 )
 from noveum_trace.agents import trace_agent_operation as trace_agent_op
 
@@ -137,6 +147,7 @@ from noveum_trace.utils.exceptions import (
 
 # Global client instance
 _client: Optional[NoveumClient] = None
+_client_lock = threading.Lock()
 
 
 def init(
@@ -172,22 +183,27 @@ def init(
     """
     global _client
 
-    # Configure the SDK
-    config = {
-        "project": project,
-        "api_key": api_key,
-        "endpoint": endpoint,
-        "environment": environment,
-        **kwargs,
-    }
-    configure(config)
+    with _client_lock:
+        # Check if client is already initialized
+        if _client is not None:
+            return
 
-    # Initialize the client
-    _client = NoveumClient()
+        # Configure the SDK
+        config = {
+            "project": project,
+            "api_key": api_key,
+            "endpoint": endpoint,
+            "environment": environment,
+            **kwargs,
+        }
+        configure(config)
 
-    # Setup auto-instrumentation
-    if auto_instrument:
-        enable_auto_tracing(auto_instrument)
+        # Initialize the client
+        _client = NoveumClient()
+
+        # Setup auto-instrumentation
+        if auto_instrument:
+            enable_auto_tracing(auto_instrument)
 
 
 def shutdown() -> None:
@@ -198,9 +214,10 @@ def shutdown() -> None:
     the tracing client.
     """
     global _client
-    if _client:
-        _client.shutdown()
-        _client = None
+    with _client_lock:
+        if _client:
+            _client.shutdown()
+            _client = None
 
 
 def flush() -> None:
@@ -211,8 +228,9 @@ def flush() -> None:
     or the flush timeout is reached.
     """
     global _client
-    if _client:
-        _client.flush()
+    with _client_lock:
+        if _client:
+            _client.flush()
 
 
 def get_client() -> NoveumClient:
@@ -226,11 +244,12 @@ def get_client() -> NoveumClient:
         InitializationError: If the SDK has not been initialized
     """
     global _client
-    if _client is None:
-        raise InitializationError(
-            "Noveum Trace SDK not initialized. Call noveum_trace.init() first."
-        )
-    return _client
+    with _client_lock:
+        if _client is None:
+            raise InitializationError(
+                "Noveum Trace SDK not initialized. Call noveum_trace.init() first."
+            )
+        return _client
 
 
 def is_initialized() -> bool:
@@ -241,7 +260,8 @@ def is_initialized() -> bool:
         True if initialized, False otherwise
     """
     global _client
-    return _client is not None
+    with _client_lock:
+        return _client is not None
 
 
 # Plugin system
@@ -252,9 +272,9 @@ def register_plugin(plugin: Any) -> None:
     Args:
         plugin: Plugin instance implementing the BasePlugin interface
     """
-    from noveum_trace.plugins import register_plugin as _register_plugin
-
-    _register_plugin(plugin)
+    # from noveum_trace.plugins import register_plugin as _register_plugin
+    # _register_plugin(plugin)
+    raise NotImplementedError("Plugin system not yet implemented")
 
 
 def list_plugins() -> list[str]:
@@ -264,9 +284,9 @@ def list_plugins() -> list[str]:
     Returns:
         List of registered plugin names
     """
-    from noveum_trace.plugins import list_plugins as _list_plugins
-
-    return _list_plugins()
+    # from noveum_trace.plugins import list_plugins as _list_plugins
+    # return _list_plugins()
+    raise NotImplementedError("Plugin system not yet implemented")
 
 
 # Convenience functions for manual instrumentation
@@ -362,6 +382,15 @@ __all__ = [
     "AgentNode",
     "AgentGraph",
     "AgentWorkflow",
+    # Agent cleanup
+    "cleanup_agent",
+    "cleanup_agent_graph",
+    "cleanup_agent_workflow",
+    "cleanup_all_registries",
+    "cleanup_by_ttl",
+    "enforce_size_limits",
+    "get_registry_stats",
+    "temporary_agent_context",
     # Context management
     "get_current_trace",
     "get_current_span",

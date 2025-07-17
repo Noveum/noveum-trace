@@ -12,7 +12,6 @@ from types import TracebackType
 from typing import Any, Optional
 
 from noveum_trace.context_managers import trace_llm
-from noveum_trace.core.context import get_current_span
 
 
 class ThreadContext:
@@ -46,28 +45,23 @@ class ThreadContext:
         self.created_at = time.time()
         self.last_updated_at = self.created_at
 
-        self.span = None
+        # Span and trace management
+        self.span: Optional[Any] = None
+        self.span_context: Optional[Any] = None
         self.trace = None
 
     def __enter__(self) -> "ThreadContext":
         """Enter the thread context."""
-        # Create a new span for this thread
-        current_span = get_current_span()
-
-        from noveum_trace.core.client import get_client
-
-        client = get_client()
-        self.span = client.create_span(
-            name=f"thread.{self.name}",
-            span_type="thread",
-            parent_span=current_span,
-            attributes={
-                "thread.id": self.thread_id,
-                "thread.name": self.name,
-                "thread.created_at": self.created_at,
-                "thread.metadata": self.metadata,
-            },
-        ).__enter__()
+        self.span_context = trace_llm(
+            operation=f"thread.{self.name}",
+            model="thread",
+            provider="internal",
+            thread_id=self.thread_id,
+            thread_name=self.name,
+            thread_created_at=self.created_at,
+            **self.metadata,
+        )
+        self.span = self.span_context.__enter__()
 
         return self
 
@@ -94,7 +88,8 @@ class ThreadContext:
                 self.span.record_exception(exc_val)
                 self.span.set_status("error", str(exc_val))
 
-            self.span.__exit__(exc_type, exc_val, exc_tb)
+        if self.span_context:
+            self.span_context.__exit__(exc_type, exc_val, exc_tb)
 
     def add_message(
         self,

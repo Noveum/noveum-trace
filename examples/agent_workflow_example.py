@@ -263,8 +263,15 @@ def main():
     """Main function demonstrating the agent workflow."""
 
     # Initialize Noveum Trace SDK
+    api_key = os.getenv("NOVEUM_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "NOVEUM_API_KEY environment variable is required. "
+            "Please set it before running this example."
+        )
+
     noveum_trace.init(
-        api_key=os.getenv("NOVEUM_API_KEY"),
+        api_key=api_key,
         project="agent_workflow_demo",
         environment="development",
     )

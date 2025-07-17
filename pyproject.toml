@@ -196,6 +196,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*" = ["B011"]
+"src/noveum_trace/auto_instrument.py" = ["B010"]
 
 [tool.mypy]
 python_version = "3.9"
@@ -209,6 +210,8 @@ warn_unused_ignores = true
 disallow_any_unimported = false
 no_implicit_optional = true
 show_error_codes = true
+mypy_path = "src"
+packages = ["noveum_trace"]
 
 [[tool.mypy.overrides]]
 module = [
@@ -216,6 +219,10 @@ module = [
     "anthropic.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "noveum_trace.auto_instrument"
+disable_error_code = ["method-assign"]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

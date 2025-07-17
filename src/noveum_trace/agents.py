@@ -5,11 +5,14 @@ This module provides specialized components for tracing complex agent interactio
 including multi-agent systems, agent workflows, and agent graphs.
 """
 
+import os
+import threading
 import time
 import uuid
 from collections.abc import Generator
+from contextlib import contextmanager
 from types import TracebackType
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from noveum_trace.context_managers import trace_agent, trace_operation
 from noveum_trace.utils.exceptions import NoveumTraceError
@@ -50,7 +53,8 @@ class AgentNode:
         self.created_at = time.time()
         self.last_updated_at = self.created_at
 
-        self.span = None
+        self.span: Optional[Any] = None
+        self.span_context: Optional[Any] = None
         self.is_active = False
 
     def __enter__(self) -> "AgentNode":
@@ -58,7 +62,7 @@ class AgentNode:
         self.is_active = True
 
         # Create a span for the agent
-        self.span = trace_agent(
+        self.span_context = trace_agent(
             agent_type=self.agent_type,
             capabilities=self.capabilities,
             attributes={
@@ -68,7 +72,8 @@ class AgentNode:
                 "agent.created_at": self.created_at,
                 "agent.metadata": self.metadata,
             },
-        ).__enter__()
+        )
+        self.span = self.span_context.__enter__()
 
         return self
 
@@ -91,8 +96,9 @@ class AgentNode:
                 }
             )
 
-            # Let the agent context manager handle the exception
-            result = self.span.__exit__(exc_type, exc_val, exc_tb)
+        # Let the agent context manager handle the exception
+        if self.span_context:
+            result = self.span_context.__exit__(exc_type, exc_val, exc_tb)
             self.is_active = False
             return result
 
@@ -310,7 +316,8 @@ class AgentGraph:
         self.created_at = time.time()
         self.last_updated_at = self.created_at
 
-        self.span = None
+        self.span: Optional[Any] = None
+        self.span_context: Optional[Any] = None
         self.is_active = False
 
     def __enter__(self) -> "AgentGraph":
@@ -318,7 +325,7 @@ class AgentGraph:
         self.is_active = True
 
         # Create a span for the agent graph
-        self.span = trace_operation(
+        self.span_context = trace_operation(
             operation_name=f"agent_graph_{self.name}",
             attributes={
                 "agent_graph.id": self.graph_id,
@@ -326,7 +333,8 @@ class AgentGraph:
                 "agent_graph.created_at": self.created_at,
                 "agent_graph.metadata": self.metadata,
             },
-        ).__enter__()
+        )
+        self.span = self.span_context.__enter__()
 
         return self
 
@@ -341,15 +349,16 @@ class AgentGraph:
             # Update final graph metrics
             self.span.set_attributes(
                 {
-                    "agent_graph.agent_count": len(self.agents),
+                    "agent_graph.node_count": len(self.agents),
                     "agent_graph.connection_count": len(self.connections),
                     "agent_graph.duration": time.time() - self.created_at,
                     "agent_graph.last_updated_at": self.last_updated_at,
                 }
             )
 
-            # Let the operation context manager handle the exception
-            result = self.span.__exit__(exc_type, exc_val, exc_tb)
+        # Let the graph context manager handle the exception
+        if self.span_context:
+            result = self.span_context.__exit__(exc_type, exc_val, exc_tb)
             self.is_active = False
             return result
 
@@ -509,7 +518,8 @@ class AgentWorkflow:
         self.created_at = time.time()
         self.last_updated_at = self.created_at
 
-        self.span = None
+        self.span: Optional[Any] = None
+        self.span_context: Optional[Any] = None
         self.is_active = False
 
     def __enter__(self) -> "AgentWorkflow":
@@ -517,7 +527,7 @@ class AgentWorkflow:
         self.is_active = True
 
         # Create a span for the workflow
-        self.span = trace_operation(
+        self.span_context = trace_operation(
             operation_name=f"agent_workflow_{self.name}",
             attributes={
                 "agent_workflow.id": self.workflow_id,
@@ -525,7 +535,8 @@ class AgentWorkflow:
                 "agent_workflow.created_at": self.created_at,
                 "agent_workflow.metadata": self.metadata,
             },
-        ).__enter__()
+        )
+        self.span = self.span_context.__enter__()
 
         return self
 
@@ -554,8 +565,9 @@ class AgentWorkflow:
                 }
             )
 
-            # Let the operation context manager handle the exception
-            result = self.span.__exit__(exc_type, exc_val, exc_tb)
+        # Let the workflow context manager handle the exception
+        if self.span_context:
+            result = self.span_context.__exit__(exc_type, exc_val, exc_tb)
             self.is_active = False
             return result
 
@@ -969,3 +981,291 @@ def trace_agent_operation(
     # Create operation span with agent context
     with trace_operation(operation_name=f"agent_{operation}", **kwargs) as span:
         yield span
+
+
+# =============================================================================
+# REGISTRY CLEANUP MECHANISMS
+# =============================================================================
+
+# Registry size limits (can be configured via environment variables)
+MAX_AGENTS = int(os.getenv("NOVEUM_MAX_AGENTS", "1000"))
+MAX_AGENT_GRAPHS = int(os.getenv("NOVEUM_MAX_AGENT_GRAPHS", "100"))
+MAX_AGENT_WORKFLOWS = int(os.getenv("NOVEUM_MAX_AGENT_WORKFLOWS", "100"))
+
+# TTL tracking for automatic cleanup
+_agent_timestamps: dict[str, float] = {}
+_graph_timestamps: dict[str, float] = {}
+_workflow_timestamps: dict[str, float] = {}
+
+# Cleanup lock for thread safety
+_cleanup_lock = threading.Lock()
+
+
+def cleanup_agent(agent_id: str) -> bool:
+    """
+    Remove a specific agent from the global registry.
+
+    Args:
+        agent_id: Agent identifier to remove
+
+    Returns:
+        True if agent was removed, False if not found
+    """
+    with _cleanup_lock:
+        removed = agent_id in _agents
+        if removed:
+            del _agents[agent_id]
+            _agent_timestamps.pop(agent_id, None)
+        return removed
+
+
+def cleanup_agent_graph(graph_id: str) -> bool:
+    """
+    Remove a specific agent graph from the global registry.
+
+    Args:
+        graph_id: Graph identifier to remove
+
+    Returns:
+        True if graph was removed, False if not found
+    """
+    with _cleanup_lock:
+        removed = graph_id in _agent_graphs
+        if removed:
+            del _agent_graphs[graph_id]
+            _graph_timestamps.pop(graph_id, None)
+        return removed
+
+
+def cleanup_agent_workflow(workflow_id: str) -> bool:
+    """
+    Remove a specific agent workflow from the global registry.
+
+    Args:
+        workflow_id: Workflow identifier to remove
+
+    Returns:
+        True if workflow was removed, False if not found
+    """
+    with _cleanup_lock:
+        removed = workflow_id in _agent_workflows
+        if removed:
+            del _agent_workflows[workflow_id]
+            _workflow_timestamps.pop(workflow_id, None)
+        return removed
+
+
+def cleanup_all_registries() -> dict[str, int]:
+    """
+    Clear all global registries.
+
+    Returns:
+        Dictionary with counts of cleared items
+    """
+    with _cleanup_lock:
+        counts = {
+            "agents": len(_agents),
+            "graphs": len(_agent_graphs),
+            "workflows": len(_agent_workflows),
+        }
+
+        _agents.clear()
+        _agent_graphs.clear()
+        _agent_workflows.clear()
+        _agent_timestamps.clear()
+        _graph_timestamps.clear()
+        _workflow_timestamps.clear()
+
+        return counts
+
+
+def cleanup_by_ttl(ttl_seconds: float = 3600) -> dict[str, int]:
+    """
+    Clean up entries older than the specified TTL.
+
+    Args:
+        ttl_seconds: Time-to-live in seconds (default: 1 hour)
+
+    Returns:
+        Dictionary with counts of cleaned items
+    """
+    import time
+
+    current_time = time.time()
+    cutoff_time = current_time - ttl_seconds
+
+    with _cleanup_lock:
+        # Clean up expired agents
+        expired_agents = [
+            agent_id
+            for agent_id, timestamp in _agent_timestamps.items()
+            if timestamp < cutoff_time
+        ]
+        for agent_id in expired_agents:
+            _agents.pop(agent_id, None)
+            _agent_timestamps.pop(agent_id, None)
+
+        # Clean up expired graphs
+        expired_graphs = [
+            graph_id
+            for graph_id, timestamp in _graph_timestamps.items()
+            if timestamp < cutoff_time
+        ]
+        for graph_id in expired_graphs:
+            _agent_graphs.pop(graph_id, None)
+            _graph_timestamps.pop(graph_id, None)
+
+        # Clean up expired workflows
+        expired_workflows = [
+            workflow_id
+            for workflow_id, timestamp in _workflow_timestamps.items()
+            if timestamp < cutoff_time
+        ]
+        for workflow_id in expired_workflows:
+            _agent_workflows.pop(workflow_id, None)
+            _workflow_timestamps.pop(workflow_id, None)
+
+        return {
+            "agents": len(expired_agents),
+            "graphs": len(expired_graphs),
+            "workflows": len(expired_workflows),
+        }
+
+
+def enforce_size_limits() -> dict[str, int]:
+    """
+    Enforce size limits on registries by removing oldest entries.
+
+    Returns:
+        Dictionary with counts of evicted items
+    """
+    with _cleanup_lock:
+        evicted_counts = {"agents": 0, "graphs": 0, "workflows": 0}
+
+        # Enforce agent limit
+        if len(_agents) > MAX_AGENTS:
+            # Sort by timestamp and remove oldest
+            sorted_agents = sorted(_agent_timestamps.items(), key=lambda x: x[1])
+            num_to_remove = len(_agents) - MAX_AGENTS
+            for agent_id, _ in sorted_agents[:num_to_remove]:
+                _agents.pop(agent_id, None)
+                _agent_timestamps.pop(agent_id, None)
+                evicted_counts["agents"] += 1
+
+        # Enforce graph limit
+        if len(_agent_graphs) > MAX_AGENT_GRAPHS:
+            sorted_graphs = sorted(_graph_timestamps.items(), key=lambda x: x[1])
+            num_to_remove = len(_agent_graphs) - MAX_AGENT_GRAPHS
+            for graph_id, _ in sorted_graphs[:num_to_remove]:
+                _agent_graphs.pop(graph_id, None)
+                _graph_timestamps.pop(graph_id, None)
+                evicted_counts["graphs"] += 1
+
+        # Enforce workflow limit
+        if len(_agent_workflows) > MAX_AGENT_WORKFLOWS:
+            sorted_workflows = sorted(_workflow_timestamps.items(), key=lambda x: x[1])
+            num_to_remove = len(_agent_workflows) - MAX_AGENT_WORKFLOWS
+            for workflow_id, _ in sorted_workflows[:num_to_remove]:
+                _agent_workflows.pop(workflow_id, None)
+                _workflow_timestamps.pop(workflow_id, None)
+                evicted_counts["workflows"] += 1
+
+        return evicted_counts
+
+
+def get_registry_stats() -> dict[str, Any]:
+    """
+    Get statistics about the current state of registries.
+
+    Returns:
+        Dictionary with registry statistics
+    """
+    with _cleanup_lock:
+        return {
+            "agents": {
+                "count": len(_agents),
+                "max_limit": MAX_AGENTS,
+                "utilization": len(_agents) / MAX_AGENTS * 100,
+            },
+            "graphs": {
+                "count": len(_agent_graphs),
+                "max_limit": MAX_AGENT_GRAPHS,
+                "utilization": len(_agent_graphs) / MAX_AGENT_GRAPHS * 100,
+            },
+            "workflows": {
+                "count": len(_agent_workflows),
+                "max_limit": MAX_AGENT_WORKFLOWS,
+                "utilization": len(_agent_workflows) / MAX_AGENT_WORKFLOWS * 100,
+            },
+        }
+
+
+@contextmanager
+def temporary_agent_context() -> Generator[None, None, None]:
+    """
+    Context manager that automatically cleans up agents created within it.
+
+    Example:
+        with temporary_agent_context():
+            agent = create_agent("temp_agent")
+            # Agent will be automatically cleaned up when exiting context
+    """
+    agents_before = set(_agents.keys())
+    graphs_before = set(_agent_graphs.keys())
+    workflows_before = set(_agent_workflows.keys())
+
+    try:
+        yield
+    finally:
+        # Clean up any agents, graphs, or workflows created in this context
+        with _cleanup_lock:
+            agents_to_remove = set(_agents.keys()) - agents_before
+            graphs_to_remove = set(_agent_graphs.keys()) - graphs_before
+            workflows_to_remove = set(_agent_workflows.keys()) - workflows_before
+
+            for agent_id in agents_to_remove:
+                _agents.pop(agent_id, None)
+                _agent_timestamps.pop(agent_id, None)
+
+            for graph_id in graphs_to_remove:
+                _agent_graphs.pop(graph_id, None)
+                _graph_timestamps.pop(graph_id, None)
+
+            for workflow_id in workflows_to_remove:
+                _agent_workflows.pop(workflow_id, None)
+                _workflow_timestamps.pop(workflow_id, None)
+
+
+# Update the create functions to track timestamps and enforce limits
+def _update_agent_create(
+    original_create_func: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Wrapper to add timestamp tracking and size enforcement to create functions."""
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        result = original_create_func(*args, **kwargs)
+
+        # Track timestamp for TTL cleanup
+        import time
+
+        current_time = time.time()
+
+        if hasattr(result, "agent_id"):
+            _agent_timestamps[result.agent_id] = current_time
+        elif hasattr(result, "graph_id"):
+            _graph_timestamps[result.graph_id] = current_time
+        elif hasattr(result, "workflow_id"):
+            _workflow_timestamps[result.workflow_id] = current_time
+
+        # Enforce size limits
+        enforce_size_limits()
+
+        return result
+
+    return wrapper
+
+
+# Apply wrappers to existing create functions
+create_agent = _update_agent_create(create_agent)
+create_agent_graph = _update_agent_create(create_agent_graph)
+create_agent_workflow = _update_agent_create(create_agent_workflow)

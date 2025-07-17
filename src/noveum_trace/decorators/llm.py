@@ -103,7 +103,7 @@ def trace_llm(
                 )
 
             # Create span attributes
-            attributes = {
+            attributes: dict[str, Any] = {
                 "function.name": func_name,
                 "function.module": func.__module__,
                 "function.qualname": func.__qualname__,

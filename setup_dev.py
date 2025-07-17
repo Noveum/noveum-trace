@@ -55,13 +55,11 @@ def check_file_structure():
         "src/noveum_trace/transport",
         "src/noveum_trace/utils",
         "src/noveum_trace/integrations",
-        "src/noveum_trace/agents",
-        "src/noveum_trace/instrumentation",
-        "src/noveum_trace/sinks",
+        "src/noveum_trace/plugins",
         "tests",
         "tests/unit",
-        "tests/integration",
         "tests/e2e",
+        "tests/performance",
         "examples",
     ]
 
@@ -148,13 +146,11 @@ def print_summary():
     print("│       ├── transport/      # HTTP transport layer")
     print("│       ├── utils/          # Utility functions")
     print("│       ├── integrations/   # Framework integrations")
-    print("│       ├── agents/         # Agent management")
-    print("│       ├── instrumentation/ # Auto-instrumentation")
-    print("│       └── sinks/          # Data output sinks")
+    print("│       └── plugins/        # Plugin system")
     print("├── tests/                  # Test suite")
     print("│   ├── unit/              # Unit tests")
-    print("│   ├── integration/       # Integration tests")
-    print("│   └── e2e/               # End-to-end tests")
+    print("│   ├── e2e/               # End-to-end tests")
+    print("│   └── performance/       # Performance tests")
     print("├── examples/               # Usage examples")
     print("└── docs/                   # Documentation")
 

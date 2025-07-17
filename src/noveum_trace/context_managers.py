@@ -7,10 +7,10 @@ within functions without requiring decorators on the entire function.
 
 import functools
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from noveum_trace.core.context import get_current_trace
-from noveum_trace.core.span import Span
+from noveum_trace.core.span import Span, SpanStatus
 
 
 class TraceContextManager:
@@ -28,10 +28,10 @@ class TraceContextManager:
         self.tags = tags or {}
         self.auto_finish = auto_finish
         self.span: Optional[Span] = None
-        self.client = None
-        self.auto_trace = None
+        self.client: Optional[Any] = None
+        self.auto_trace: Optional[Any] = None
 
-    def __enter__(self) -> Span:
+    def __enter__(self) -> Union[Span, "NoOpSpan"]:
         """Enter the context and start a span."""
         from noveum_trace import get_client, is_initialized
 
@@ -56,7 +56,7 @@ class TraceContextManager:
         # Add tags if provided
         if self.tags:
             for key, value in self.tags.items():
-                self.span.add_tag(key, value)
+                self.span.set_attribute(f"tag.{key}", value)
 
         return self.span
 
@@ -66,9 +66,9 @@ class TraceContextManager:
             if exc_type is not None:
                 # Record exception if one occurred
                 self.span.record_exception(exc_val)
-                self.span.set_status("error", str(exc_val))
+                self.span.set_status(SpanStatus.ERROR, str(exc_val))
             else:
-                self.span.set_status("ok")
+                self.span.set_status(SpanStatus.OK)
 
             self.client.finish_span(self.span)
 
@@ -174,16 +174,13 @@ class NoOpSpan:
     def set_attributes(self, attributes: dict[str, Any]) -> None:
         pass
 
-    def add_tag(self, key: str, value: str) -> None:
-        pass
-
     def add_event(self, name: str, attributes: Optional[dict[str, Any]] = None) -> None:
         pass
 
     def record_exception(self, exception: Exception) -> None:
         pass
 
-    def set_status(self, status: str, message: Optional[str] = None) -> None:
+    def set_status(self, status: Any, message: Optional[str] = None) -> None:
         pass
 
 
@@ -318,7 +315,7 @@ def trace_batch_operation(
     }
 
     with trace_operation(f"batch.{operation_name}", batch_attributes) as span:
-        span.batch_results = []
+        span.set_attribute("batch.results", [])
         yield span
 
 
@@ -391,10 +388,10 @@ def create_child_span(
             yield child_span
         except Exception as e:
             child_span.record_exception(e)
-            child_span.set_status("error", str(e))
+            child_span.set_status(SpanStatus.ERROR, str(e))
             raise
         else:
-            child_span.set_status("ok")
+            child_span.set_status(SpanStatus.OK)
         finally:
             client.finish_span(child_span)
 

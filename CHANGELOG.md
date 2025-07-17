@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Updated build system to use setuptools instead of hatchling
-- Migrated to Apache-2.0 license
+- Migrated to Apache 2.0 license
 - Enhanced project configuration with comprehensive tooling
 
 ### Fixed

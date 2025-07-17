@@ -135,7 +135,7 @@ def trace_tool(
 
             # Start the span
             span = client.start_span(
-                name=f"tool:{tool_name}:{func_name}",
+                name=f"tool:{actual_tool_name}:{func_name}",
                 attributes=attributes,
             )
 
@@ -163,7 +163,7 @@ def trace_tool(
                         {
                             "tool.error.type": type(e).__name__,
                             "tool.error.message": str(e),
-                            "tool.name": tool_name,
+                            "tool.name": actual_tool_name,
                         }
                     )
                 raise

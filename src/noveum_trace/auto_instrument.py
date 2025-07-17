@@ -11,7 +11,8 @@ import warnings
 from typing import Any, Optional
 
 from noveum_trace.context_managers import trace_llm
-from noveum_trace.utils.exceptions import InstrumentationError, NoveumTraceError
+from noveum_trace.core.span import SpanStatus
+from noveum_trace.utils.exceptions import NoveumTraceError
 
 
 class InstrumentationRegistry:
@@ -94,11 +95,11 @@ class BaseInstrumentation:
 
     def instrument(self) -> dict[str, Any]:
         """Instrument the library. Returns original methods for restoration."""
-        raise InstrumentationError("This method must be implemented by subclasses")
+        raise NotImplementedError("This method must be implemented by subclasses")
 
     def uninstrument(self) -> None:
         """Remove instrumentation and restore original methods."""
-        raise InstrumentationError("This method must be implemented by subclasses")
+        raise NotImplementedError("This method must be implemented by subclasses")
 
     def _is_library_available(self, library_name: str) -> bool:
         """Check if a library is available for instrumentation."""
@@ -183,15 +184,18 @@ class OpenAIInstrumentation(BaseInstrumentation):
 
                         # Calculate cost if configured
                         if self.config.get("calculate_cost", False):
-                            cost = self._calculate_openai_cost(model, response.usage)
-                            span.set_attribute("llm.cost", cost)
+                            if hasattr(response, "usage") and response.usage:
+                                cost = self._calculate_openai_cost(
+                                    model, response.usage
+                                )
+                                span.set_attribute("llm.cost", cost)
 
-                        span.set_status("ok")
+                        span.set_status(SpanStatus.OK)
                         return response
 
                     except Exception as e:
                         span.record_exception(e)
-                        span.set_status("error", str(e))
+                        span.set_status(SpanStatus.ERROR, str(e))
                         raise
 
             # Replace the original method
@@ -255,12 +259,12 @@ class OpenAIInstrumentation(BaseInstrumentation):
                                     }
                                 )
 
-                        span.set_status("ok")
+                        span.set_status(SpanStatus.OK)
                         return response
 
                     except Exception as e:
                         span.record_exception(e)
-                        span.set_status("error", str(e))
+                        span.set_status(SpanStatus.ERROR, str(e))
                         raise
 
             openai_module.embeddings.create = traced_embeddings_create
@@ -311,12 +315,12 @@ class OpenAIInstrumentation(BaseInstrumentation):
                                     }
                                 )
 
-                        span.set_status("ok")
+                        span.set_status(SpanStatus.OK)
                         return response
 
                     except Exception as e:
                         span.record_exception(e)
-                        span.set_status("error", str(e))
+                        span.set_status(SpanStatus.ERROR, str(e))
                         raise
 
             openai_module.images.generate = traced_images_generate
@@ -403,12 +407,12 @@ class AnthropicInstrumentation(BaseInstrumentation):
                                     "llm.response", str(response.content)[:2000]
                                 )
 
-                        span.set_status("ok")
+                        span.set_status(SpanStatus.OK)
                         return response
 
                     except Exception as e:
                         span.record_exception(e)
-                        span.set_status("error", str(e))
+                        span.set_status(SpanStatus.ERROR, str(e))
                         raise
 
             anthropic_module.messages.create = traced_messages_create
@@ -422,7 +426,8 @@ class AnthropicInstrumentation(BaseInstrumentation):
 
         for method_path, original_method in self.original_methods.items():
             if method_path == "messages.create":
-                anthropic.messages.create = original_method
+                if hasattr(anthropic, "messages"):
+                    anthropic.messages.create = original_method
 
 
 class LangChainInstrumentation(BaseInstrumentation):
