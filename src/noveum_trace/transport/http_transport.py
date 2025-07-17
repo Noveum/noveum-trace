@@ -14,6 +14,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from noveum_trace import __version__
 from noveum_trace.core.config import get_config
 from noveum_trace.core.trace import Trace
 from noveum_trace.transport.batch_processor import BatchProcessor
@@ -40,6 +41,10 @@ class HttpTransport:
         logger.info(
             f"HTTP transport initialized for endpoint: {self.config.transport.endpoint}"
         )
+
+    def _get_sdk_version(self) -> str:
+        """Get the SDK version."""
+        return __version__
 
     def export_trace(self, trace: Trace) -> None:
         """
@@ -106,7 +111,7 @@ class HttpTransport:
         session.headers.update(
             {
                 "Content-Type": "application/json",
-                "User-Agent": "noveum-trace-sdk/0.1.0",
+                "User-Agent": f"noveum-trace-sdk/{self._get_sdk_version()}",
             }
         )
 
@@ -143,7 +148,7 @@ class HttpTransport:
         # Add SDK metadata
         trace_data["sdk"] = {
             "name": "noveum-trace-python",
-            "version": "0.1.0",
+            "version": self._get_sdk_version(),
         }
 
         # Add project information

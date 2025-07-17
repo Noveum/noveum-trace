@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
+from noveum_trace import __version__
 from noveum_trace.core.config import get_config
 from noveum_trace.core.context import (
     ContextualSpan,
@@ -88,6 +89,10 @@ class NoveumClient:
 
         logger.info("Noveum Trace client initialized")
 
+    def _get_sdk_version(self) -> str:
+        """Get the SDK version."""
+        return __version__
+
     def start_trace(
         self,
         name: str,
@@ -140,7 +145,7 @@ class NoveumClient:
             {
                 "noveum.project": self.config.project,
                 "noveum.environment": self.config.environment,
-                "noveum.sdk.version": "0.1.0",
+                "noveum.sdk.version": self._get_sdk_version(),
                 "noveum.sampling.decision": sampling_decision.value,
             }
         )

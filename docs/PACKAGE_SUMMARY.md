@@ -3,7 +3,7 @@
 ## 📦 Package Overview
 
 **Package Name:** `noveum-trace`
-**Version:** 0.1.0
+**Version:** 0.2.0
 **License:** Apache-2.0
 **Python Support:** 3.8+
 

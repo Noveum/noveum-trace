@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noveum-trace"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cloud-first, decorator-based tracing SDK for LLM applications and multi-agent systems"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -81,6 +81,7 @@ dev = [
     # Development utilities
     "pre-commit>=3.0.0",
     "tox>=4.0.0",
+    "commitizen>=3.0.0",
 ]
 
 # Testing dependencies (subset of dev)
@@ -227,3 +228,25 @@ disable_error_code = ["method-assign"]
 [tool.bandit]
 exclude_dirs = ["tests"]
 skips = ["B101", "B601"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.2.0"
+version_files = [
+    "pyproject.toml:version",
+    "src/noveum_trace/__init__.py:__version__"
+]
+changelog_file = "CHANGELOG.md"
+changelog_format = "### $(title)"
+style = [
+    ["qmark", "fg:#ff9d00 bold"],
+    ["question", "bold"],
+    ["answer", "fg:#ff9d00 bold"],
+    ["pointer", "fg:#ff9d00 bold"],
+    ["highlighted", "fg:#ff9d00 bold"],
+    ["selected", "fg:#cc5454"],
+    ["separator", "fg:#cc5454"],
+    ["instruction", ""],
+    ["text", ""],
+    ["disabled", "fg:#858585 italic"]
+]
