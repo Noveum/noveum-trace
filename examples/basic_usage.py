@@ -1,126 +1,243 @@
+#!/usr/bin/env python3
 """
-Basic usage example for the Noveum Trace SDK.
+Basic usage example for Noveum Trace SDK.
+
+This example demonstrates the core functionality of the SDK
+including initialization, decorators, and basic tracing.
 """
 
+import os
 import time
+from typing import Any
 
-from noveum_trace import NoveumTracer, TracerConfig
-from noveum_trace.core.tracer import set_current_tracer
-from noveum_trace.instrumentation.decorators import trace_function
-from noveum_trace.sinks.base import BaseSink, SinkConfig
+# Load environment variables (install python-dotenv if needed)
+try:
+    from dotenv import load_dotenv
 
+    load_dotenv()
+except ImportError:
+    print(
+        "python-dotenv not installed. Environment variables will be read from system only."
+    )
+    pass
 
-class ConsoleSink(BaseSink):
-    """Simple console sink for demonstration."""
-
-    def __init__(self):
-        config = SinkConfig(name="console-sink")
-        super().__init__(config)
-
-    def _initialize(self) -> None:
-        print("Console sink initialized")
-
-    def _send_batch(self, spans) -> None:
-        print(f"Console sink received {len(spans)} spans:")
-        for span in spans:
-            print(f"  - {span.name} ({span.span_id})")
-
-    def _health_check(self) -> bool:
-        return True
+# Import Noveum Trace SDK
+import noveum_trace
+from noveum_trace import trace, trace_agent, trace_llm, trace_tool
 
 
 def main():
-    """Run basic usage example."""
-    print("Noveum Trace SDK - Basic Usage Example")
-    print("=" * 50)
+    """Main example function."""
 
-    # Create console sink
-    console_sink = ConsoleSink()
+    # Initialize the SDK
+    api_key = os.getenv("NOVEUM_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "NOVEUM_API_KEY environment variable is required. "
+            "Please set it before running this example."
+        )
 
-    # Configure tracer
-    config = TracerConfig(
-        service_name="basic-example",
-        service_version="1.0.0",
+    noveum_trace.init(
+        api_key=api_key,
+        project="example-project",
         environment="development",
-        sinks=[console_sink],
-        batch_size=1,  # Process immediately for demo
-        batch_timeout_ms=100,
     )
 
-    # Create tracer
-    tracer = NoveumTracer(config)
+    print("Noveum Trace SDK initialized!")
 
-    # Set as global tracer for decorators
-    set_current_tracer(tracer)
+    # Example 1: Basic function tracing
+    result1 = process_data("Hello, World!")
+    print(f"Result 1: {result1}")
 
-    try:
-        # Example 1: Manual span creation
-        print("\n1. Manual span creation:")
-        with tracer.start_span("user_request") as span:
-            span.set_attribute("user.id", "user123")
-            span.set_attribute("request.type", "api_call")
+    # Example 2: LLM call tracing
+    result2 = call_llm("What is the capital of France?")
+    print(f"Result 2: {result2}")
 
-            # Simulate some work
-            time.sleep(0.1)
+    # Example 3: Agent operation tracing
+    result3 = research_agent("AI trends 2024")
+    print(f"Result 3: {result3}")
 
-            span.add_event("processing_started", {"step": "validation"})
+    # Example 4: Tool usage tracing
+    result4 = search_web("Python best practices")
+    print(f"Result 4: {result4}")
 
-            # Nested span
-            with tracer.start_span("database_query") as db_span:
-                db_span.set_attribute("db.operation", "SELECT")
-                db_span.set_attribute("db.table", "users")
-                time.sleep(0.05)
+    # Example 5: Multi-agent workflow
+    workflow_result = run_multi_agent_workflow("Analyze market trends")
+    print(f"Workflow result: {workflow_result}")
 
-            span.add_event("processing_completed", {"result": "success"})
+    # Flush any pending traces
+    noveum_trace.flush()
+    print("All traces sent!")
 
-        # Example 2: Using decorators
-        print("\n2. Using decorators:")
 
-        @trace_function(name="process_data", capture_args=True)
-        def process_data(data_type, count):
-            time.sleep(0.05)
-            return f"Processed {count} items of type {data_type}"
+@trace(capture_performance=True)
+def process_data(data: str) -> dict[str, Any]:
+    """
+    Example function with basic tracing.
 
-        def mock_llm_call(prompt):
-            # Simulate LLM call
-            time.sleep(0.1)
-            return {
-                "choices": [{"message": {"content": f"Response to: {prompt}"}}],
-                "usage": {"total_tokens": 50},
-            }
+    Args:
+        data: Input data to process
 
-        # Call decorated functions
-        result = process_data("documents", 10)
-        print(f"Process result: {result}")
+    Returns:
+        Processed data dictionary
+    """
+    # Simulate some processing
+    time.sleep(0.1)
 
-        llm_result = mock_llm_call("Hello, how are you?")
-        print(f"LLM result: {llm_result['choices'][0]['message']['content']}")
+    return {
+        "original": data,
+        "processed": data.upper(),
+        "length": len(data),
+    }
 
-        # Example 3: Error handling
-        print("\n3. Error handling:")
 
-        with tracer.start_span("error_example") as span:
-            try:
-                # Simulate an error
-                raise ValueError("This is a test error")
-            except ValueError as e:
-                span.record_exception(e)
-                print(f"Recorded exception: {e}")
+@trace_llm(capture_tokens=True, estimate_costs=True)
+def call_llm(prompt: str) -> str:
+    """
+    Example LLM call with automatic tracing.
 
-        # Give time for background processing
-        print("\n4. Waiting for span processing...")
-        time.sleep(0.5)
+    Args:
+        prompt: Input prompt for the LLM
 
-        # Flush remaining spans
-        print("\n5. Flushing spans...")
-        tracer.flush(timeout_ms=2000)
+    Returns:
+        LLM response
+    """
+    # Simulate LLM call
+    time.sleep(0.5)
 
-        print("\nExample completed successfully!")
+    # In a real implementation, this would call an actual LLM
+    return f"Mock LLM response to: {prompt}"
 
-    finally:
-        # Always shutdown the tracer
-        print("\nShutting down tracer...")
-        tracer.shutdown(timeout_ms=5000)
+
+@trace_agent(
+    agent_id="researcher",
+    role="information_gatherer",
+    capabilities=["web_search", "document_analysis"],
+)
+def research_agent(query: str) -> dict[str, Any]:
+    """
+    Example agent operation with tracing.
+
+    Args:
+        query: Research query
+
+    Returns:
+        Research results
+    """
+    # Simulate research process
+    time.sleep(0.3)
+
+    # Use a tool within the agent
+    search_results = search_web(f"research: {query}")
+
+    return {
+        "query": query,
+        "findings": f"Research findings for: {query}",
+        "sources": ["source1.com", "source2.com"],
+        "confidence": 0.85,
+        "search_results": search_results,
+    }
+
+
+@trace_tool(tool_name="web_search", tool_type="api")
+def search_web(query: str) -> list[dict[str, str]]:
+    """
+    Example tool usage with tracing.
+
+    Args:
+        query: Search query
+
+    Returns:
+        Search results
+    """
+    # Simulate web search
+    time.sleep(0.2)
+
+    return [
+        {"title": f"Result 1 for {query}", "url": "https://example1.com"},
+        {"title": f"Result 2 for {query}", "url": "https://example2.com"},
+        {"title": f"Result 3 for {query}", "url": "https://example3.com"},
+    ]
+
+
+@trace(name="multi_agent_workflow")
+def run_multi_agent_workflow(task: str) -> dict[str, Any]:
+    """
+    Example multi-agent workflow with tracing.
+
+    Args:
+        task: The task to be processed by agents
+
+    Returns:
+        Combined results from all agents
+    """
+    # Research phase
+    research_data = research_agent(task)
+
+    # Analysis phase
+    analysis_result = analysis_agent(research_data)
+
+    # Synthesis phase
+    final_report = report_agent(analysis_result)
+
+    return {
+        "task": task,
+        "research": research_data,
+        "analysis": analysis_result,
+        "final_report": final_report,
+        "workflow_status": "completed",
+    }
+
+
+@trace_agent(
+    agent_id="analyst",
+    role="data_analyzer",
+    capabilities=["statistical_analysis", "trend_detection"],
+)
+def analysis_agent(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Analysis agent that processes research data.
+
+    Args:
+        data: Research data to analyze
+
+    Returns:
+        Analysis results
+    """
+    time.sleep(0.4)
+
+    return {
+        "trends": ["trend1", "trend2", "trend3"],
+        "insights": f"Key insights from {data['query']}",
+        "confidence": 0.92,
+        "methodology": "statistical_analysis",
+    }
+
+
+@trace_agent(
+    agent_id="reporter",
+    role="report_generator",
+    capabilities=["document_generation", "visualization"],
+)
+def report_agent(analysis: dict[str, Any]) -> dict[str, Any]:
+    """
+    Report agent that creates final reports.
+
+    Args:
+        analysis: Analysis results
+
+    Returns:
+        Final report
+    """
+    time.sleep(0.3)
+
+    return {
+        "report_type": "market_analysis",
+        "summary": "Executive summary of findings",
+        "recommendations": ["rec1", "rec2", "rec3"],
+        "charts": ["chart1.png", "chart2.png"],
+        "confidence": analysis["confidence"],
+    }
 
 
 if __name__ == "__main__":

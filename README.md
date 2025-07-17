@@ -1,393 +1,261 @@
 # Noveum Trace SDK
 
-**Production-ready Python SDK for tracing LLM applications, multi-agent systems, and tool calls with OpenTelemetry compliance.**
-
-[![CI](https://github.com/Noveum/noveum-trace/actions/workflows/ci.yml/badge.svg)](https://github.com/Noveum/noveum-trace/actions/workflows/ci.yml)
-[![Release](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml/badge.svg)](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml)
-[![codecov](https://codecov.io/gh/Noveum/noveum-trace/branch/main/graph/badge.svg)](https://codecov.io/gh/Noveum/noveum-trace)
 [![PyPI version](https://badge.fury.io/py/noveum-trace.svg)](https://badge.fury.io/py/noveum-trace)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python Support](https://img.shields.io/pypi/pyversions/noveum-trace.svg)](https://pypi.org/project/noveum-trace/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## 🚀 Quick Start
+**Simple, decorator-based tracing SDK for LLM applications and multi-agent systems.**
 
-```python
-import noveum_trace
-
-# Initialize with your project ID
-noveum_trace.init(project_id="my-ai-project")
-
-# Use the simple @trace decorator
-@noveum_trace.trace
-def process_data(data):
-    return f"Processed: {data}"
-
-@noveum_trace.trace(type="llm", model="gpt-4")
-def call_llm(prompt):
-    # Your LLM call here
-    return "AI response"
-
-@noveum_trace.trace(type="component", agent="data-processor")
-def agent_task(task):
-    return f"Agent completed: {task}"
-
-# Your functions are now automatically traced!
-result = process_data("user input")
-```
+Noveum Trace provides an easy way to add observability to your LLM applications. With simple decorators, you can trace function calls, LLM interactions, agent workflows, and multi-agent coordination patterns.
 
 ## ✨ Key Features
 
-### 🎯 **Simplified Decorator Approach**
-- **Single `@trace` decorator** with parameters instead of multiple decorators
-- **Backward compatibility** with `@observe` and `@llm_trace` aliases
-- **Parameter-based specialization** for different operation types
+- **🎯 Decorator-First API** - Add tracing with a single `@trace` decorator
+- **🤖 Multi-Agent Support** - Built for multi-agent systems and workflows
+- **☁️ Cloud Integration** - Send traces to Noveum platform or custom endpoints
+- **🔌 Framework Agnostic** - Works with any Python LLM framework
+- **🚀 Zero Configuration** - Works out of the box with sensible defaults
+- **📊 Comprehensive Tracing** - Capture function calls, LLM interactions, and agent workflows
 
-### 🤖 **Multi-Agent Support**
-- **Agent registry and management** with hierarchical relationships
-- **Cross-agent correlation** and trace propagation
-- **Agent-aware context management** for complex workflows
-- **Thread-safe operations** for concurrent agent execution
+## 🚀 Quick Start
 
-### 🔍 **LLM & Tool Call Tracing**
-- **Auto-instrumentation** for OpenAI and Anthropic SDKs
-- **Comprehensive LLM metrics** (tokens, latency, model info)
-- **Tool call tracking** with arguments and results
-- **OpenTelemetry semantic conventions** compliance
-
-### 🏗️ **Project-Based Organization**
-- **Required project ID** for proper trace organization
-- **Custom headers support** (projectId, orgId, additional headers)
-- **Environment-aware** (development, staging, production)
-- **Proper trace ID generation** with UUID-based identifiers
-
-## 📦 Installation
+### Installation
 
 ```bash
 pip install noveum-trace
 ```
 
-## 🔧 Configuration
-
-### Basic Initialization
+### Basic Usage
 
 ```python
 import noveum_trace
 
-# Minimal setup (project_id is required)
-tracer = noveum_trace.init(project_id="my-project")
-
-# Full configuration
-tracer = noveum_trace.init(
-    project_id="my-project",
-    project_name="My AI Application",
-    org_id="org-123",
-    user_id="user-456",
-    session_id="session-789",
-    environment="production",
-    api_key="your-noveum-api-key",  # For Noveum.ai platform
-    file_logging=True,
-    log_directory="./traces",
-    auto_instrument=True,
-    capture_content=True,
-    custom_headers={"X-Custom-Header": "value"}
+# Initialize the SDK
+noveum_trace.init(
+    api_key="your-api-key",
+    project="my-llm-app"
 )
+
+# Trace any function
+@noveum_trace.trace
+def process_document(document_id: str) -> dict:
+    # Your function logic here
+    return {"status": "processed", "id": document_id}
+
+# Trace LLM calls with automatic metadata capture
+@noveum_trace.trace_llm
+def call_openai(prompt: str) -> str:
+    import openai
+    client = openai.OpenAI()
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
+
+# Trace agent workflows
+@noveum_trace.trace_agent(agent_id="researcher")
+def research_task(query: str) -> dict:
+    # Agent logic here
+    return {"findings": "...", "confidence": 0.95}
 ```
+
+### Multi-Agent Example
+
+```python
+import noveum_trace
+
+noveum_trace.init(
+    api_key="your-api-key",
+    project="multi-agent-system"
+)
+
+@noveum_trace.trace_agent(agent_id="orchestrator")
+def orchestrate_workflow(task: str) -> dict:
+    # Coordinate multiple agents
+    research_result = research_agent(task)
+    analysis_result = analysis_agent(research_result)
+    return synthesis_agent(research_result, analysis_result)
+
+@noveum_trace.trace_agent(agent_id="researcher")
+def research_agent(task: str) -> dict:
+    # Research implementation
+    return {"data": "...", "sources": [...]}
+
+@noveum_trace.trace_agent(agent_id="analyst")
+def analysis_agent(data: dict) -> dict:
+    # Analysis implementation
+    return {"insights": "...", "metrics": {...}}
+```
+
+## 🏗️ Architecture
+
+```
+noveum_trace/
+├── core/           # Core tracing primitives (Trace, Span, Context)
+├── decorators/     # Decorator-based API (@trace, @trace_llm, etc.)
+├── transport/      # HTTP transport and batch processing
+├── integrations/   # Framework integrations (OpenAI, etc.)
+├── utils/          # Utilities (exceptions, serialization, etc.)
+└── examples/       # Usage examples
+```
+
+## 🔧 Configuration
 
 ### Environment Variables
 
 ```bash
-export NOVEUM_PROJECT_ID="my-project"
 export NOVEUM_API_KEY="your-api-key"
-export NOVEUM_ORG_ID="org-123"
-export NOVEUM_USER_ID="user-456"
-export NOVEUM_SESSION_ID="session-789"
-export NOVEUM_ENVIRONMENT="production"
+export NOVEUM_PROJECT="your-project-name"
 ```
 
-## 🎨 Usage Examples
+### Programmatic Configuration
 
-### Simple Function Tracing
+```python
+import noveum_trace
+from noveum_trace.core.config import Config
+
+# Basic configuration
+noveum_trace.init(
+    api_key="your-api-key",
+    project="my-project",
+    endpoint="https://api.noveum.ai"
+)
+
+# Advanced configuration
+config = Config(
+    api_key="your-api-key",
+    project="my-project",
+    endpoint="https://api.noveum.ai"
+)
+config.transport.batch_size = 10
+config.transport.batch_timeout = 5.0
+
+noveum_trace.configure(config)
+```
+
+## 🎯 Available Decorators
+
+### @trace - General Purpose Tracing
 
 ```python
 @noveum_trace.trace
-def data_processing(data):
-    # Your processing logic
-    return processed_data
-
-@noveum_trace.trace(name="custom-operation")
-def custom_function():
-    return "result"
+def my_function(arg1: str, arg2: int) -> dict:
+    return {"result": f"{arg1}_{arg2}"}
 ```
 
-### LLM Tracing
+### @trace_llm - LLM Call Tracing
 
 ```python
-@noveum_trace.trace(type="llm", model="gpt-4", operation="chat")
-def chat_completion(messages):
-    response = openai.chat.completions.create(
-        model="gpt-4",
-        messages=messages
-    )
-    return response
-
-@noveum_trace.trace(type="llm", model="claude-3", operation="completion")
-def text_completion(prompt):
-    response = anthropic.messages.create(
-        model="claude-3-haiku-20240307",
-        messages=[{"role": "user", "content": prompt}]
-    )
+@noveum_trace.trace_llm
+def call_llm(prompt: str) -> str:
+    # LLM call implementation
     return response
 ```
 
-### Multi-Agent Workflows
+### @trace_agent - Agent Workflow Tracing
 
 ```python
-from noveum_trace import Agent, AgentConfig, AgentContext, trace
-
-# Define agents
-coordinator = Agent(AgentConfig(
-    name="coordinator",
-    agent_type="orchestrator",
-    id="coord-001"
-))
-
-worker = Agent(AgentConfig(
-    name="data-worker",
-    agent_type="processor",
-    id="worker-001"
-))
-
-# Use agent context
-with AgentContext(coordinator):
-    @trace
-    def plan_task(task):
-        # Coordinator planning
-        return task_plan
-
-    plan = plan_task("analyze data")
-
-    with AgentContext(worker):
-        @trace
-        def execute_task(plan):
-            # Worker execution
-            return results
-
-        results = execute_task(plan)
-```
-
-### Tool Call Tracing
-
-```python
-@noveum_trace.trace(type="tool", tool_name="web_search")
-def search_web(query):
-    # Tool implementation
-    return search_results
-
-@noveum_trace.trace(type="tool", tool_name="calculator")
-def calculate(expression):
-    # Calculator implementation
+@noveum_trace.trace_agent(agent_id="my_agent")
+def agent_function(task: str) -> dict:
+    # Agent implementation
     return result
 ```
 
-### Dynamic Span Updates
+### @trace_tool - Tool Usage Tracing
 
 ```python
-from noveum_trace import trace, update_current_span
-
-@trace
-def long_running_task():
-    update_current_span(
-        metadata={"step": "initialization"},
-        progress=10
-    )
-
-    # Do some work
-    initialize()
-
-    update_current_span(
-        metadata={"step": "processing"},
-        progress=50
-    )
-
-    # More work
-    process_data()
-
-    update_current_span(
-        metadata={"step": "completion"},
-        progress=100
-    )
-
-    return "completed"
+@noveum_trace.trace_tool
+def search_web(query: str) -> list:
+    # Tool implementation
+    return results
 ```
 
-## 🔌 Auto-Instrumentation
-
-The SDK automatically instruments popular LLM libraries:
+### @trace_retrieval - Retrieval Operation Tracing
 
 ```python
-# Auto-instrumentation is enabled by default
-noveum_trace.init(project_id="my-project", auto_instrument=True)
+@noveum_trace.trace_retrieval
+def retrieve_documents(query: str) -> list:
+    # Retrieval implementation
+    return documents
+```
 
-# Now all OpenAI and Anthropic calls are automatically traced
+## 🔌 Framework Integrations
+
+### OpenAI Integration
+
+```python
+import noveum_trace
 import openai
-response = openai.chat.completions.create(...)  # Automatically traced!
 
-import anthropic
-response = anthropic.messages.create(...)  # Automatically traced!
-```
+# Initialize tracing
+noveum_trace.init(api_key="your-key", project="openai-app")
 
-## 📊 Trace Data Structure
-
-Each trace contains:
-
-```json
-{
-  "trace_id": "uuid-v4",
-  "span_id": "uuid-v4",
-  "parent_span_id": "uuid-v4",
-  "name": "operation-name",
-  "kind": "internal|client|server",
-  "status": "ok|error",
-  "start_time": "2024-01-01T00:00:00Z",
-  "end_time": "2024-01-01T00:00:01Z",
-  "duration_ms": 1000,
-  "project_id": "my-project",
-  "project_name": "My AI Application",
-  "org_id": "org-123",
-  "user_id": "user-456",
-  "session_id": "session-789",
-  "environment": "production",
-  "attributes": {
-    "llm.model": "gpt-4",
-    "llm.operation": "chat",
-    "gen_ai.system": "openai",
-    "gen_ai.usage.input_tokens": 100,
-    "gen_ai.usage.output_tokens": 50
-  },
-  "llm_request": {
-    "model": "gpt-4",
-    "messages": [...],
-    "temperature": 0.7
-  },
-  "llm_response": {
-    "id": "response-id",
-    "model": "gpt-4",
-    "choices": [...],
-    "usage": {
-      "prompt_tokens": 100,
-      "completion_tokens": 50,
-      "total_tokens": 150
-    }
-  },
-  "agent": {
-    "name": "data-processor",
-    "type": "worker",
-    "id": "agent-123"
-  },
-  "tool_calls": [
-    {
-      "id": "call-123",
-      "name": "web_search",
-      "arguments": {"query": "AI news"},
-      "result": "search results",
-      "duration_ms": 500
-    }
-  ]
-}
-```
-
-## 🏆 Competitive Advantages
-
-| Feature | Noveum Trace | DeepEval | Phoenix | Braintrust |
-|---------|--------------|----------|---------|------------|
-| Multi-agent support | ✅ | ❌ | ⚠️ | ⚠️ |
-| Simplified decorators | ✅ | ✅ | ✅ | ✅ |
-| Auto agent resolution | ✅ | ❌ | ❌ | ❌ |
-| OpenTelemetry compliant | ✅ | ❌ | ✅ | ❌ |
-| Project-based organization | ✅ | ❌ | ❌ | ❌ |
-| Custom headers | ✅ | ❌ | ❌ | ❌ |
-| Trace ID management | ✅ | ⚠️ | ✅ | ⚠️ |
-| Tool call tracing | ✅ | ❌ | ⚠️ | ⚠️ |
-
-## 📁 Project Structure
-
-```
-noveum-trace/
-├── src/noveum_trace/
-│   ├── __init__.py              # Main exports
-│   ├── init.py                  # Simplified initialization
-│   ├── types.py                 # Type definitions
-│   ├── core/
-│   │   ├── tracer.py           # Main tracer implementation
-│   │   ├── span.py             # Span implementation
-│   │   └── context.py          # Context management
-│   ├── agents/
-│   │   ├── agent.py            # Agent classes
-│   │   ├── registry.py         # Agent registry
-│   │   ├── context.py          # Agent context
-│   │   └── decorators.py       # Simplified decorators
-│   ├── sinks/
-│   │   ├── base.py             # Base sink interface
-│   │   ├── file.py             # File sink
-│   │   ├── console.py          # Console sink
-│   │   ├── noveum.py           # Noveum.ai sink
-│   │   └── elasticsearch.py    # Elasticsearch sink
-│   ├── instrumentation/
-│   │   ├── openai.py           # OpenAI auto-instrumentation
-│   │   └── anthropic.py        # Anthropic auto-instrumentation
-│   └── utils/
-│       └── exceptions.py       # Custom exceptions
-├── examples/                    # Usage examples
-├── tests/                      # Test suite
-├── docs/                       # Documentation
-└── README.md                   # This file
+@noveum_trace.trace_llm
+def chat_with_openai(message: str) -> str:
+    client = openai.OpenAI()
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": message}]
+    )
+    return response.choices[0].message.content
 ```
 
 ## 🧪 Testing
 
-```bash
-# Run all tests
-python -m pytest tests/
+Run the test suite:
 
-# Run specific test categories
-python -m pytest tests/unit/
-python -m pytest tests/integration/
+```bash
+# Install development dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest
 
 # Run with coverage
-python -m pytest tests/ --cov=noveum_trace
+pytest --cov=noveum_trace --cov-report=html
 ```
-
-## 📚 Documentation
-
-- [Getting Started Guide](docs/getting-started/)
-- [Configuration Guide](docs/guides/configuration.md)
-- [Multi-Agent Tracing](docs/guides/multi-agent-tracing.md)
-- [LLM Tracing Guide](docs/guides/llm-tracing.md)
-- [API Reference](docs/api/)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/Noveum/noveum-trace.git
+cd noveum-trace
+
+# Install in development mode
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run examples
+python examples/basic_usage.py
+python examples/agent_workflow_example.py
+```
+
+## 📖 Examples
+
+Check out the [examples](examples/) directory for complete working examples:
+
+- [Basic Usage](examples/basic_usage.py) - Simple function tracing
+- [Agent Workflow](examples/agent_workflow_example.py) - Multi-agent coordination
+- [Langchain Integration](examples/langchain_integration_example.py) - Framework integration patterns
 
 ## 📄 License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## 🙋‍♀️ Support
 
-- **Documentation**: [docs/](docs/)
-- **Issues**: [GitHub Issues](https://github.com/noveum/noveum-trace/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/noveum/noveum-trace/discussions)
-
-## 🚀 Roadmap
-
-- [ ] **JavaScript/TypeScript SDK** - Cross-platform support
-- [ ] **Real-time evaluation** - Integration with NovaEval
-- [ ] **Advanced analytics** - Performance insights and recommendations
-- [ ] **Custom metrics** - User-defined metrics and alerts
-- [ ] **Distributed tracing** - Cross-service trace correlation
-- [ ] **Visual trace explorer** - Interactive trace visualization
+- [GitHub Issues](https://github.com/Noveum/noveum-trace/issues)
+- [Documentation](https://github.com/Noveum/noveum-trace/tree/main/docs)
+- [Examples](https://github.com/Noveum/noveum-trace/tree/main/examples)
 
 ---
 
-**Built with ❤️ by the Noveum team**
+**Built by the Noveum Team**

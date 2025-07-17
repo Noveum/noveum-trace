@@ -1,51 +1,22 @@
 """
-Utility modules for the Noveum Trace SDK.
+Utility modules for Noveum Trace SDK.
+
+This package contains utility functions and classes that support
+the core tracing functionality.
 """
 
-from .exceptions import (
-    AuthenticationError,
-    AuthorizationError,
+from noveum_trace.utils.exceptions import (
     ConfigurationError,
-    ContextError,
-    ElasticsearchError,
     InstrumentationError,
-    NetworkError,
-    NoveumAPIError,
-    NoveumTracingError,
-    RateLimitError,
-    ResourceError,
-    SamplingError,
-    SerializationError,
-    SinkError,
-    SpanError,
-    TimeoutError,
-    ValidationError,
-    configuration_error,
-    network_error,
-    sink_error,
-    validation_error,
+    NoveumTraceError,
+    TracingError,
+    TransportError,
 )
 
 __all__ = [
-    "AuthenticationError",
-    "AuthorizationError",
+    "NoveumTraceError",
     "ConfigurationError",
-    "ContextError",
-    "ElasticsearchError",
+    "TransportError",
+    "TracingError",
     "InstrumentationError",
-    "NetworkError",
-    "NoveumAPIError",
-    "NoveumTracingError",
-    "RateLimitError",
-    "ResourceError",
-    "SamplingError",
-    "SerializationError",
-    "SinkError",
-    "SpanError",
-    "TimeoutError",
-    "ValidationError",
-    "configuration_error",
-    "network_error",
-    "sink_error",
-    "validation_error",
 ]
