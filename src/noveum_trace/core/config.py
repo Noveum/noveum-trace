@@ -90,9 +90,46 @@ class Config:
     debug: bool = False
     log_level: str = "INFO"
 
+    # Private field to store endpoint override
+    _endpoint_override: Optional[str] = field(default=None, init=False, repr=False)
+
     def __post_init__(self) -> None:
-        """Validate configuration after initialization."""
+        """Initialize configuration after dataclass initialization."""
         self._validate()
+
+    @classmethod
+    def create(
+        cls,
+        project: Optional[str] = None,
+        api_key: Optional[str] = None,
+        environment: str = "development",
+        endpoint: Optional[str] = None,
+        tracing: Optional[TracingConfig] = None,
+        transport: Optional[TransportConfig] = None,
+        security: Optional[SecurityConfig] = None,
+        integrations: Optional[IntegrationConfig] = None,
+        debug: bool = False,
+        log_level: str = "INFO",
+    ) -> "Config":
+        """Create a Config instance with optional endpoint override."""
+        # Create the config instance
+        config = cls(
+            project=project,
+            api_key=api_key,
+            environment=environment,
+            tracing=tracing or TracingConfig(),
+            transport=transport or TransportConfig(),
+            security=security or SecurityConfig(),
+            integrations=integrations or IntegrationConfig(),
+            debug=debug,
+            log_level=log_level,
+        )
+
+        # Handle endpoint override after initialization
+        if endpoint is not None:
+            config.transport.endpoint = endpoint
+
+        return config
 
     def _validate(self) -> None:
         """Validate configuration values."""
@@ -164,65 +201,127 @@ class Config:
         config.debug = data.get("debug", False)
         config.log_level = data.get("log_level", "INFO")
 
+        # Handle top-level endpoint parameter
+        top_level_endpoint = data.get("endpoint")
+
         # Tracing configuration
         if "tracing" in data:
             tracing_data = data["tracing"]
-            config.tracing = TracingConfig(
-                enabled=tracing_data.get("enabled", True),
-                sample_rate=tracing_data.get("sample_rate", 1.0),
-                max_spans_per_trace=tracing_data.get("max_spans_per_trace", 1000),
-                capture_errors=tracing_data.get("capture_errors", True),
-                capture_stack_traces=tracing_data.get("capture_stack_traces", False),
-                capture_performance=tracing_data.get("capture_performance", False),
-            )
+            if isinstance(tracing_data, dict):
+                config.tracing = TracingConfig(
+                    enabled=tracing_data.get("enabled", True),
+                    sample_rate=tracing_data.get("sample_rate", 1.0),
+                    max_spans_per_trace=tracing_data.get("max_spans_per_trace", 1000),
+                    capture_errors=tracing_data.get("capture_errors", True),
+                    capture_stack_traces=tracing_data.get(
+                        "capture_stack_traces", False
+                    ),
+                    capture_performance=tracing_data.get("capture_performance", False),
+                )
+            else:
+                # If tracing is not a dict, log a warning and use default
+                config.tracing = TracingConfig()
 
         # Transport configuration
         if "transport" in data:
             transport_data = data["transport"]
-            config.transport = TransportConfig(
-                endpoint=transport_data.get("endpoint", DEFAULT_ENDPOINT),
-                timeout=transport_data.get("timeout", DEFAULT_TIMEOUT),
-                retry_attempts=transport_data.get(
-                    "retry_attempts", DEFAULT_RETRY_ATTEMPTS
-                ),
-                retry_backoff=transport_data.get("retry_backoff", 1.0),
-                batch_size=transport_data.get("batch_size", DEFAULT_BATCH_SIZE),
-                batch_timeout=transport_data.get(
-                    "batch_timeout", DEFAULT_BATCH_TIMEOUT
-                ),
-                max_queue_size=transport_data.get(
-                    "max_queue_size", DEFAULT_MAX_QUEUE_SIZE
-                ),
-                compression=transport_data.get("compression", True),
-            )
+            if isinstance(transport_data, dict):
+                # Top-level endpoint takes precedence over transport.endpoint for consistency
+                endpoint = (
+                    top_level_endpoint
+                    or transport_data.get("endpoint")
+                    or DEFAULT_ENDPOINT
+                )
+                config.transport = TransportConfig(
+                    endpoint=endpoint,
+                    timeout=transport_data.get("timeout", DEFAULT_TIMEOUT),
+                    retry_attempts=transport_data.get(
+                        "retry_attempts", DEFAULT_RETRY_ATTEMPTS
+                    ),
+                    retry_backoff=transport_data.get("retry_backoff", 1.0),
+                    batch_size=transport_data.get("batch_size", DEFAULT_BATCH_SIZE),
+                    batch_timeout=transport_data.get(
+                        "batch_timeout", DEFAULT_BATCH_TIMEOUT
+                    ),
+                    max_queue_size=transport_data.get(
+                        "max_queue_size", DEFAULT_MAX_QUEUE_SIZE
+                    ),
+                    compression=transport_data.get("compression", True),
+                )
+            else:
+                # If transport is not a dict, use default with top-level endpoint if available
+                endpoint = top_level_endpoint or DEFAULT_ENDPOINT
+                config.transport = TransportConfig(endpoint=endpoint)
+        else:
+            # No transport config provided, use top-level endpoint if available
+            endpoint = top_level_endpoint or DEFAULT_ENDPOINT
+            config.transport = TransportConfig(endpoint=endpoint)
 
         # Security configuration
         if "security" in data:
             security_data = data["security"]
-            config.security = SecurityConfig(
-                redact_pii=security_data.get("redact_pii", False),
-                custom_redaction_patterns=security_data.get(
-                    "custom_redaction_patterns", []
-                ),
-                encrypt_data=security_data.get("encrypt_data", True),
-                data_residency=security_data.get("data_residency"),
-            )
+            if isinstance(security_data, dict):
+                config.security = SecurityConfig(
+                    redact_pii=security_data.get("redact_pii", False),
+                    custom_redaction_patterns=security_data.get(
+                        "custom_redaction_patterns", []
+                    ),
+                    encrypt_data=security_data.get("encrypt_data", True),
+                    data_residency=security_data.get("data_residency"),
+                )
+            else:
+                # If security is not a dict, use default
+                config.security = SecurityConfig()
 
         # Integration configuration
         if "integrations" in data:
             integrations_data = data["integrations"]
-            config.integrations = IntegrationConfig(
-                langchain=integrations_data.get("langchain", {"enabled": False}),
-                llamaindex=integrations_data.get("llamaindex", {"enabled": False}),
-                openai=integrations_data.get("openai", {"enabled": False}),
-                anthropic=integrations_data.get("anthropic", {"enabled": False}),
-            )
+            if isinstance(integrations_data, dict):
+                config.integrations = IntegrationConfig(
+                    langchain=integrations_data.get("langchain", {"enabled": False}),
+                    llamaindex=integrations_data.get("llamaindex", {"enabled": False}),
+                    openai=integrations_data.get("openai", {"enabled": False}),
+                    anthropic=integrations_data.get("anthropic", {"enabled": False}),
+                )
+            else:
+                # If integrations is not a dict, use default
+                config.integrations = IntegrationConfig()
 
         return config
 
 
 # Global configuration instance
 _config: Optional[Config] = None
+
+
+def _deep_merge_dicts(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """
+    Deep merge two dictionaries, with update values taking precedence.
+    None values in update are ignored (don't override existing values).
+
+    Args:
+        base: The base dictionary to merge into
+        update: The dictionary whose values should take precedence
+
+    Returns:
+        A new dictionary with merged values
+    """
+    merged = base.copy()
+
+    for key, value in update.items():
+        if value is None:
+            # Skip None values - they should not override existing values
+            continue
+        elif (
+            key in merged and isinstance(merged[key], dict) and isinstance(value, dict)
+        ):
+            # Recursively merge nested dictionaries
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            # For non-dict values or new keys, use the update value
+            merged[key] = value
+
+    return merged
 
 
 def configure(
@@ -237,13 +336,30 @@ def configure(
     """
     global _config
 
-    if config_data is None:
-        # Load from environment and default config files
+    if config_data is None or (isinstance(config_data, dict) and not config_data):
+        # Load from environment and default config files when None or empty dict
         _config = _load_from_environment()
     elif isinstance(config_data, Config):
         _config = config_data
     elif isinstance(config_data, dict):
-        _config = Config.from_dict(config_data)
+        # Merge provided config with environment config
+        # Explicit parameters take precedence over environment variables
+        env_config = _load_from_environment()
+        merged_data = env_config.to_dict()
+
+        # Deep merge the config data with environment config
+        # This preserves nested settings while allowing overrides
+        merged_data = _deep_merge_dicts(merged_data, config_data)
+
+        # Handle top-level endpoint parameter - it should override transport.endpoint
+        # regardless of merge order for consistent behavior
+        if "endpoint" in config_data and config_data["endpoint"] is not None:
+            # Top-level endpoint overrides transport.endpoint
+            if "transport" not in merged_data:
+                merged_data["transport"] = {}
+            merged_data["transport"]["endpoint"] = config_data["endpoint"]
+
+        _config = Config.from_dict(merged_data)
     elif isinstance(config_data, (str, Path)):
         _config = _load_from_file(config_data)
     else:
@@ -285,9 +401,8 @@ def _load_from_environment() -> Config:
         config_data["environment"] = os.getenv("NOVEUM_ENVIRONMENT")
 
     if os.getenv("NOVEUM_ENDPOINT"):
-        if "transport" not in config_data:
-            config_data["transport"] = {}
-        config_data["transport"]["endpoint"] = os.getenv("NOVEUM_ENDPOINT")
+        # Set as top-level endpoint for consistency with programmatic API
+        config_data["endpoint"] = os.getenv("NOVEUM_ENDPOINT")
 
     debug_env = os.getenv("NOVEUM_DEBUG")
     if debug_env:

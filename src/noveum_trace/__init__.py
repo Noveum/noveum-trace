@@ -188,14 +188,18 @@ def init(
         if _client is not None:
             return
 
-        # Configure the SDK
-        config = {
-            "project": project,
-            "api_key": api_key,
-            "endpoint": endpoint,
-            "environment": environment,
-            **kwargs,
-        }
+        # Configure the SDK - only include non-None values
+        config = {}
+        if project is not None:
+            config["project"] = project
+        if api_key is not None:
+            config["api_key"] = api_key
+        if endpoint is not None:
+            config["endpoint"] = endpoint
+        if environment is not None:
+            config["environment"] = environment
+        config.update(kwargs)
+
         configure(config)
 
         # Initialize the client
