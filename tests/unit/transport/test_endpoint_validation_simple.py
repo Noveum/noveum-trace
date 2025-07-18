@@ -250,9 +250,11 @@ class TestTransportValidation:
         assert tool_output is not None
 
         # Should be valid JSON strings
-
-        input_data = json.loads(tool_input)
-        output_data = json.loads(tool_output)
+        try:
+            input_data = json.loads(tool_input)
+            output_data = json.loads(tool_output)
+        except json.JSONDecodeError as e:
+            pytest.fail(f"Tool attributes contain invalid JSON: {e}")
 
         assert input_data["query"] == "Python testing best practices"
         assert len(output_data["results"]) == 2

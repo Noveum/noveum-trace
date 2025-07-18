@@ -28,6 +28,11 @@ class TraceContext:
     span: Optional[Span] = None
     attributes: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Initialize attributes if None."""
+        if self.attributes is None:
+            self.attributes = {}
+
 
 # Context variables for trace propagation
 _trace_context: contextvars.ContextVar[Optional[TraceContext]] = contextvars.ContextVar(
@@ -92,6 +97,16 @@ def set_current_span(span: Optional[Span]) -> None:
     """
     context = get_current_context()
     context.span = span
+    _trace_context.set(context)
+
+
+def set_current_context(context: TraceContext) -> None:
+    """
+    Set the current trace context.
+
+    Args:
+        context: TraceContext instance to set as current
+    """
     _trace_context.set(context)
 
 

@@ -16,15 +16,15 @@ class TestConfigMerging:
 
     def setup_method(self):
         """Reset configuration before each test."""
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def teardown_method(self):
         """Clean up after each test."""
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def test_deep_merge_preserves_nested_settings(self):
         """Test that deep merge preserves nested settings from environment."""

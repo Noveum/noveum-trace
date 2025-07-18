@@ -12,6 +12,7 @@ These are integration tests that verify the full decorator functionality includi
 - Local trace interception (no external API calls)
 """
 
+import asyncio
 import threading
 import time
 from typing import Any, Optional
@@ -525,8 +526,6 @@ class TestDecoratorsIntegration:
             return f"Completed after {delay}s"
 
         # Execute async function
-        import asyncio
-
         result = asyncio.run(async_function(0.1))
         assert result == "Completed after 0.1s"
 

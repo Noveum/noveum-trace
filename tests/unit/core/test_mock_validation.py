@@ -8,6 +8,7 @@ These tests verify that:
 4. The SDK behaves correctly under mocked conditions
 """
 
+import json
 import time
 
 import pytest
@@ -179,9 +180,6 @@ class TestMockValidation:
             assert (
                 actual_value == expected_value
             ), f"Tool attribute {key}: expected {expected_value}, got {actual_value}"
-
-        # Validate JSON strings are valid
-        import json
 
         tool_input = json.loads(span.attributes["tool.input"])
         tool_output = json.loads(span.attributes["tool.output"])
@@ -385,8 +383,6 @@ class TestMockValidation:
             ), f"Data type test failed for {key}: expected {expected_value}, got {actual_value}"
 
         # Test JSON serialization compatibility
-        import json
-
         try:
             # Filter out None values for JSON test
             serializable_attrs = {
@@ -412,6 +408,7 @@ class TestDecoratorIntegration:
 
     def test_trace_decorator_basic(self, client_with_mocked_transport):
         """Test that @trace decorator works with mocked transport"""
+        client = client_with_mocked_transport
 
         @noveum_trace.trace
         def test_function():
@@ -426,8 +423,32 @@ class TestDecoratorIntegration:
         # Give time for any async operations
         time.sleep(0.1)
 
+        # Verify trace was created and exported
+        assert client.transport.export_trace.called, "Trace should have been exported"
+
+        # Get the exported trace from the mock call
+        export_call_args = client.transport.export_trace.call_args
+        assert (
+            export_call_args is not None
+        ), "export_trace should have been called with arguments"
+
+        exported_trace = export_call_args[0][0]
+        assert hasattr(exported_trace, "name"), "Exported object should be a trace"
+        assert hasattr(exported_trace, "spans"), "Trace should have spans"
+        assert len(exported_trace.spans) > 0, "Trace should contain at least one span"
+
+        # Verify the span was created for the decorated function
+        span = exported_trace.spans[-1]  # Get the last span
+        assert (
+            span.name == "test_function"
+        ), f"Expected span name 'test_function', got '{span.name}'"
+        assert (
+            span.status != SpanStatus.ERROR
+        ), "Span should not have error status for successful function"
+
     def test_trace_decorator_with_parameters(self, client_with_mocked_transport):
         """Test that @trace decorator handles function parameters"""
+        client = client_with_mocked_transport
 
         @noveum_trace.trace
         def parameterized_function(x, y, z="default"):
@@ -441,8 +462,32 @@ class TestDecoratorIntegration:
 
         time.sleep(0.1)
 
+        # Verify trace was created and exported
+        assert client.transport.export_trace.called, "Trace should have been exported"
+
+        # Get the exported trace from the mock call
+        export_call_args = client.transport.export_trace.call_args
+        assert (
+            export_call_args is not None
+        ), "export_trace should have been called with arguments"
+
+        exported_trace = export_call_args[0][0]
+        assert hasattr(exported_trace, "name"), "Exported object should be a trace"
+        assert hasattr(exported_trace, "spans"), "Trace should have spans"
+        assert len(exported_trace.spans) > 0, "Trace should contain at least one span"
+
+        # Verify the span was created for the decorated function
+        span = exported_trace.spans[-1]  # Get the last span
+        assert (
+            span.name == "parameterized_function"
+        ), f"Expected span name 'parameterized_function', got '{span.name}'"
+        assert (
+            span.status != SpanStatus.ERROR
+        ), "Span should not have error status for successful function"
+
     def test_trace_decorator_with_exception(self, client_with_mocked_transport):
         """Test that @trace decorator handles exceptions"""
+        client = client_with_mocked_transport
 
         @noveum_trace.trace
         def failing_function():
@@ -453,6 +498,42 @@ class TestDecoratorIntegration:
             failing_function()
 
         time.sleep(0.1)
+
+        # Verify trace was created and exported with error information
+        assert client.transport.export_trace.called, "Trace should have been exported"
+
+        # Get the exported trace from the mock call
+        export_call_args = client.transport.export_trace.call_args
+        assert (
+            export_call_args is not None
+        ), "export_trace should have been called with arguments"
+
+        exported_trace = export_call_args[0][0]
+        assert hasattr(
+            exported_trace, "spans"
+        ), "Exported object should be a trace with spans"
+        assert len(exported_trace.spans) > 0, "Trace should contain at least one span"
+
+        # Find the span created by the decorator (should be the last or only span)
+        error_span = exported_trace.spans[-1]  # Get the last span
+
+        # Verify the span has error status and exception details
+        assert (
+            error_span.status == SpanStatus.ERROR
+        ), f"Expected ERROR status, got {error_span.status}"
+        assert error_span.exception is not None, "Exception should be recorded in span"
+        assert isinstance(
+            error_span.exception, ValueError
+        ), "Exception type should be preserved"
+
+        # Verify exception attributes are set
+        attrs = error_span.attributes
+        assert "exception.type" in attrs, "Exception type should be in span attributes"
+        assert (
+            "exception.message" in attrs
+        ), "Exception message should be in span attributes"
+        assert attrs["exception.type"] == "ValueError"
+        assert "Test exception from decorator" in attrs["exception.message"]
 
 
 if __name__ == "__main__":

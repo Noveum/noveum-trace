@@ -24,16 +24,16 @@ class TestEndpointConfiguration:
     def setup_method(self):
         """Clear config state before each test."""
         # Clear global config state
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def teardown_method(self):
         """Clear config state after each test."""
         # Clear global config state
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def test_config_accepts_endpoint_parameter(self):
         """Test that Config.create accepts endpoint parameter."""

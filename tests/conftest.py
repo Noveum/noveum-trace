@@ -58,6 +58,13 @@ def cleanup_all_clients():
     _test_clients.clear()
 
 
+def reset_noveum_config():
+    """Reset global configuration state for tests."""
+    import noveum_trace.core.config as config_module
+
+    config_module._config = None
+
+
 # Add marker support
 
 

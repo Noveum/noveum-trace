@@ -17,6 +17,7 @@ from noveum_trace.core.config import Config, configure
 from noveum_trace.core.span import Span
 from noveum_trace.core.trace import Trace
 from noveum_trace.utils.exceptions import NoveumTraceError
+from tests.conftest import reset_noveum_config
 
 
 class TestSamplingDecision:
@@ -58,15 +59,11 @@ class TestNoveumClientInitialization:
     def setup_method(self):
         """Setup for each test method."""
         # Reset any global state
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_client_initialization(self, mock_transport):
@@ -118,16 +115,12 @@ class TestNoveumClientTraceManagement:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_start_trace_basic(self, mock_transport):
@@ -290,16 +283,12 @@ class TestNoveumClientSpanManagement:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_start_span_basic(self, mock_transport):
@@ -395,16 +384,12 @@ class TestNoveumClientContextualOperations:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_create_contextual_trace(self, mock_transport):
@@ -438,16 +423,12 @@ class TestNoveumClientFlushAndShutdown:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     def test_flush_active_traces(self):
         """Test flushing with active traces."""
@@ -519,16 +500,12 @@ class TestNoveumClientThreadSafety:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_concurrent_trace_creation(self, mock_transport):
@@ -617,16 +594,12 @@ class TestNoveumClientErrorHandling:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_create_noop_trace(self, mock_transport):
@@ -660,16 +633,12 @@ class TestNoveumClientIntegration:
 
     def setup_method(self):
         """Setup for each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
         configure({"api_key": "test-key", "project": "test-project"})
 
     def teardown_method(self):
         """Cleanup after each test method."""
-        import noveum_trace.core.config as config_module
-
-        config_module._config = None
+        reset_noveum_config()
 
     @patch("noveum_trace.transport.http_transport.HttpTransport")
     def test_complete_trace_lifecycle(self, mock_transport):

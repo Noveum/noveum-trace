@@ -51,7 +51,7 @@ This document describes the GitHub Actions workflows and their test execution st
 
 ## Test Directory Structure
 
-```
+```text
 tests/
 ├── unit/                    # Fast, isolated tests
 │   ├── core/               # Core SDK components

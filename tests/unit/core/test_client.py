@@ -248,69 +248,74 @@ class TestNoveumClientFlushAndShutdown:
 
     def test_flush_active_traces(self):
         """Test flushing with active traces."""
-        client = NoveumClient()
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
 
-        # Create some active traces
-        trace1 = client.start_trace("trace1")
-        trace2 = client.start_trace("trace2")
+            # Create some active traces
+            trace1 = client.start_trace("trace1")
+            trace2 = client.start_trace("trace2")
 
-        # Mock the export to avoid actual HTTP calls
-        with patch.object(client, "_export_trace"):
-            client.flush()
+            # Mock the export to avoid actual HTTP calls
+            with patch.object(client, "_export_trace"):
+                client.flush()
 
-            # Should finish all active traces
-            assert trace1.is_finished()
-            assert trace2.is_finished()
-            assert len(client._active_traces) == 0
+                # Should finish all active traces
+                assert trace1.is_finished()
+                assert trace2.is_finished()
+                assert len(client._active_traces) == 0
 
-            # Transport flush should be called
-            client.transport.flush.assert_called_once_with(None)
+                # Transport flush should be called
+                client.transport.flush.assert_called_once_with(None)
 
     def test_flush_when_shutdown(self):
         """Test flush when client is already shutdown."""
-        client = NoveumClient()
-        client._shutdown = True
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
+            client._shutdown = True
 
-        # Should return early without doing anything
-        client.flush()
+            # Should return early without doing anything
+            client.flush()
 
-        # No transport calls should be made
-        assert not client.transport.flush.called
+            # No transport calls should be made
+            client.transport.flush.assert_not_called()
 
     def test_shutdown(self):
         """Test complete shutdown process."""
-        client = NoveumClient()
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
 
-        # Create some active traces
-        trace1 = client.start_trace("trace1")
+            # Create some active traces
+            trace1 = client.start_trace("trace1")
 
-        with patch.object(client, "_export_trace"):
-            client.shutdown()
+            with patch.object(client, "_export_trace"):
+                client.shutdown()
 
-            assert client._shutdown is True
-            assert trace1.is_finished()
-            assert trace1.trace_id not in client._active_traces
+                assert client._shutdown is True
+                assert trace1.is_finished()
+                assert trace1.trace_id not in client._active_traces
 
     def test_shutdown_idempotent(self):
         """Test shutdown is idempotent."""
-        client = NoveumClient()
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
 
-        with patch.object(client, "_export_trace"):
-            client.shutdown()
-            client.shutdown()  # Second call should be safe
+            with patch.object(client, "_export_trace"):
+                client.shutdown()
+                client.shutdown()  # Second call should be safe
 
-            assert client._shutdown is True
+                assert client._shutdown is True
 
     def test_is_shutdown(self):
         """Test is_shutdown status check."""
-        client = NoveumClient()
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
 
-        assert not client.is_shutdown()
+            assert not client.is_shutdown()
 
-        with patch.object(client, "_export_trace"):
-            client.shutdown()
+            with patch.object(client, "_export_trace"):
+                client.shutdown()
 
-        assert client.is_shutdown()
+            assert client.is_shutdown()
 
 
 class TestNoveumClientContextual:
@@ -443,17 +448,18 @@ class TestNoveumClientIntegration:
 
     def test_error_handling_in_export(self):
         """Test error handling during trace export."""
-        client = NoveumClient()
-        trace = client.start_trace("test_trace")
+        with patch("noveum_trace.core.client.HttpTransport"):
+            client = NoveumClient()
+            trace = client.start_trace("test_trace")
 
-        # Mock transport to raise exception
-        client.transport.export_trace.side_effect = Exception("Export failed")
+            # Mock transport to raise exception
+            client.transport.export_trace.side_effect = Exception("Export failed")
 
-        # Should not raise exception, should log error
-        with patch("noveum_trace.core.client.logger") as mock_logger:
-            client._export_trace(trace)
-            # Error should be logged by the implementation
-            mock_logger.error.assert_called_once()
+            # Should not raise exception, should log error
+            with patch("noveum_trace.core.client.logger") as mock_logger:
+                client._export_trace(trace)
+                # Error should be logged by the implementation
+                mock_logger.error.assert_called_once()
 
     def test_multiple_client_instances(self):
         """Test multiple client instances work independently."""

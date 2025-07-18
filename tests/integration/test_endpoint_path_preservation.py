@@ -5,6 +5,7 @@ This module tests that custom endpoint paths (like /beta, /api, etc.)
 are preserved when constructing API URLs, instead of being stripped away.
 """
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,20 +15,66 @@ from noveum_trace.core.config import Config, configure, get_config
 from noveum_trace.transport.http_transport import HttpTransport
 
 
+@contextmanager
+def clean_noveum_state():
+    """Context manager that ensures clean noveum state before and after test execution."""
+
+    def reset_state():
+        """Reset both client and config state."""
+        try:
+            import noveum_trace
+            import noveum_trace.core.config as config_module
+
+            # Reset client
+            noveum_trace._client = None
+            # Reset config
+            config_module._config = None
+        except (AttributeError, ImportError):
+            # Gracefully handle cases where modules might not be available
+            pass
+
+    # Reset before test
+    reset_state()
+    try:
+        yield
+    finally:
+        # Ensure cleanup happens even if test fails
+        reset_state()
+
+
+@pytest.fixture
+def clean_config():
+    """Fixture that provides clean configuration state for each test."""
+    with clean_noveum_state():
+        yield
+
+
 class TestEndpointPathPreservation:
     """Test that endpoint paths are preserved correctly."""
 
+    @staticmethod
+    def _reset_configuration():
+        """Reset global configuration state."""
+        import noveum_trace
+        import noveum_trace.core.config as config_module
+
+        # Reset client
+        noveum_trace._client = None
+        # Reset config
+        config_module._config = None
+
     def setup_method(self):
         """Reset configuration before each test."""
-        noveum_trace._client = None
-        if hasattr(noveum_trace.core, "config"):
-            noveum_trace.core.config._config = None
+        self._reset_configuration()
 
     def teardown_method(self):
         """Clean up after each test."""
-        noveum_trace._client = None
-        if hasattr(noveum_trace.core, "config"):
-            noveum_trace.core.config._config = None
+        self._reset_configuration()
+
+    # Alternative approach: Use the clean_config fixture instead of setup/teardown
+    # def test_method_name(self, clean_config):
+    #     """Test method using the fixture for automatic cleanup."""
+    #     pass
 
     def test_default_endpoint_includes_api_path(self):
         """Test that default endpoint includes /api path."""

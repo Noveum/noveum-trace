@@ -5,6 +5,7 @@ This module tests that our mocking infrastructure correctly captures HTTP reques
 and that the trace data being sent is valid and properly structured.
 """
 
+import concurrent.futures
 import json
 import threading
 import time
@@ -788,8 +789,6 @@ class TestEndpointIntegration:
     def test_concurrent_traces_capture(self, capturing_client, endpoint_capture):
         """Test capturing concurrent traces from multiple threads"""
         endpoint_capture.clear()
-
-        import concurrent.futures
 
         def start_trace(trace_id):
             """Create a trace in a separate thread"""
