@@ -178,6 +178,7 @@ src_paths = ["src", "tests"]
 [tool.ruff]
 target-version = "py39"
 line-length = 88
+extend-exclude = ["examples/notebooks/**"]
 
 [tool.ruff.lint]
 select = [

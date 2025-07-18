@@ -222,7 +222,7 @@ def _serialize_value(value: Any, max_length: int = 1000) -> str:
     try:
         # Handle common types
         if value is None:
-            return "None"
+            return ""
         elif isinstance(value, (str, int, float, bool)):
             result = str(value)
         elif isinstance(value, (list, tuple)):

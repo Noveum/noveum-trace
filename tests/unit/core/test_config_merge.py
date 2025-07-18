@@ -187,7 +187,7 @@ class TestConfigMerging:
 
             # None values should not override
             assert config.api_key == "env-key"
-            assert config.transport.endpoint == "https://api.noveum.ai"  # Default
+            assert config.transport.endpoint == "https://api.noveum.ai/api"  # Default
 
             # Non-None values should override
             assert config.project == "override-project"
@@ -214,7 +214,7 @@ class TestConfigMerging:
             config = get_config()
 
             # Empty transport dict should not clear defaults
-            assert config.transport.endpoint == "https://api.noveum.ai"
+            assert config.transport.endpoint == "https://api.noveum.ai/api"
             assert config.transport.timeout == 30
 
             # Non-empty nested dict should apply overrides

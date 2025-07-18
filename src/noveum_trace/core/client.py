@@ -11,10 +11,16 @@ import random
 import threading
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+
+# Import for type hints
+from typing import TYPE_CHECKING, Any, Optional
 
 from noveum_trace import __version__
 from noveum_trace.core.config import get_config
+
+if TYPE_CHECKING:
+    from noveum_trace.core.config import Config
+
 from noveum_trace.core.context import (
     ContextualSpan,
     ContextualTrace,
@@ -74,10 +80,41 @@ class NoveumClient:
     managing context, and exporting data to the Noveum platform.
     """
 
-    def __init__(self) -> None:
-        """Initialize the Noveum client."""
-        self.config = get_config()
-        self.transport = HttpTransport()
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        project: Optional[str] = None,
+        config: Optional["Config"] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the Noveum client.
+
+        Args:
+            api_key: API key for authentication
+            project: Project name
+            config: Optional configuration instance
+            **kwargs: Additional configuration options
+        """
+
+        if config is not None:
+            self.config = config
+        elif any([api_key, project, kwargs]):
+            # Create config from provided parameters
+            config_dict = {}
+            if api_key is not None:
+                config_dict["api_key"] = api_key
+            if project is not None:
+                config_dict["project"] = project
+            config_dict.update(kwargs)
+
+            from noveum_trace.core.config import configure
+
+            configure(config_dict)
+            self.config = get_config()
+        else:
+            self.config = get_config()
+
+        self.transport = HttpTransport(self.config)
 
         # State management
         self._active_traces: dict[str, Trace] = {}
@@ -382,10 +419,11 @@ class NoveumClient:
 
         logger.info("Shutting down Noveum Trace client")
 
-        self._shutdown = True
-
-        # Flush all pending data
+        # Flush all pending data BEFORE setting shutdown flag
         self.flush(timeout=30.0)
+
+        # Now set shutdown flag
+        self._shutdown = True
 
         # Shutdown transport
         self.transport.shutdown()

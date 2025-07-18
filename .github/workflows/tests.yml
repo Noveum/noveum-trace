@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  # Run unit tests on all pushes and PRs - fast feedback
+  unit-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,9 +27,43 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
-    - name: Run tests with coverage
+    - name: Run unit tests with coverage
       run: |
-        python -m pytest tests/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
+        python -m pytest tests/unit/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: Noveum/noveum-trace
+
+    - name: Upload test results to Codecov
+      if: ${{ !cancelled() }}
+      uses: codecov/test-results-action@v1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Run integration tests only on main branch pushes
+  integration-test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [unit-test]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Run integration tests with coverage
+      run: |
+        python -m pytest tests/integration/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

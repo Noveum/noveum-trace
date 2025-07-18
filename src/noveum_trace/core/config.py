@@ -16,7 +16,7 @@ import yaml
 from noveum_trace.utils.exceptions import ConfigurationError
 
 # Configuration constants
-DEFAULT_ENDPOINT = "https://api.noveum.ai"
+DEFAULT_ENDPOINT = "https://api.noveum.ai/api"
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_BATCH_SIZE = 100
@@ -96,6 +96,16 @@ class Config:
     def __post_init__(self) -> None:
         """Initialize configuration after dataclass initialization."""
         self._validate()
+
+    @property
+    def endpoint(self) -> str:
+        """Get the current endpoint from transport configuration."""
+        return self.transport.endpoint
+
+    @endpoint.setter
+    def endpoint(self, value: str) -> None:
+        """Set the endpoint in transport configuration."""
+        self.transport.endpoint = value
 
     @classmethod
     def create(

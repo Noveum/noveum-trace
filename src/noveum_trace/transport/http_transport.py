@@ -7,7 +7,9 @@ including request formatting, authentication, and error handling.
 
 import logging
 import time
-from typing import Any, Optional
+
+# Import for type hints
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -16,6 +18,10 @@ from urllib3.util.retry import Retry
 
 from noveum_trace import __version__
 from noveum_trace.core.config import get_config
+
+if TYPE_CHECKING:
+    from noveum_trace.core.config import Config
+
 from noveum_trace.core.trace import Trace
 from noveum_trace.transport.batch_processor import BatchProcessor
 from noveum_trace.utils.exceptions import TransportError
@@ -31,9 +37,13 @@ class HttpTransport:
     request formatting, batching, retries, and error handling.
     """
 
-    def __init__(self) -> None:
-        """Initialize the HTTP transport."""
-        self.config = get_config()
+    def __init__(self, config: Optional["Config"] = None) -> None:
+        """Initialize the HTTP transport.
+
+        Args:
+            config: Optional configuration instance. If not provided, uses global config.
+        """
+        self.config = config if config is not None else get_config()
         self.session = self._create_session()
         self.batch_processor = BatchProcessor(self._send_batch)
         self._shutdown = False
@@ -45,6 +55,20 @@ class HttpTransport:
     def _get_sdk_version(self) -> str:
         """Get the SDK version."""
         return __version__
+
+    def _build_api_url(self, path: str) -> str:
+        """
+        Build API URL preserving the full endpoint path.
+
+        Args:
+            path: API path (e.g., "/v1/traces")
+
+        Returns:
+            Complete URL with preserved endpoint path
+        """
+        endpoint = self.config.transport.endpoint.rstrip("/")
+        path = path.lstrip("/")
+        return f"{endpoint}/{path}"
 
     def export_trace(self, trace: Trace) -> None:
         """
@@ -175,7 +199,7 @@ class HttpTransport:
         """
         try:
             # Send request
-            url = urljoin(self.config.transport.endpoint, "/v1/trace")
+            url = self._build_api_url("/v1/trace")
             response = self.session.post(
                 url,
                 json=trace_data,
@@ -225,7 +249,7 @@ class HttpTransport:
 
         try:
             # Send request
-            url = urljoin(self.config.transport.endpoint, "/v1/traces")
+            url = self._build_api_url("/v1/traces")
             response = self.session.post(
                 url,
                 json=payload,
