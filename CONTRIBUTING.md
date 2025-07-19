@@ -126,6 +126,74 @@ pytest -v
 - Integration tests: Test interactions between components
 - Mock external dependencies appropriately
 
+## Release Process
+
+### Prerequisites for Releases
+
+- Ensure you have maintainer access to the repository
+- Install commitizen: `pip install commitizen`
+- Make sure all changes are merged to main branch
+- Ensure all tests pass
+
+### Creating a New Release
+
+1. **Switch to main branch and pull latest changes:**
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
+
+2. **Run the test suite to ensure everything works:**
+   ```bash
+   pytest
+   ```
+
+3. **Use commitizen to bump version and generate changelog:**
+   ```bash
+   # Automatically determine version bump (patch/minor/major)
+   cz bump
+
+   # Or specify version type explicitly
+   cz bump --increment PATCH   # for bug fixes
+   cz bump --increment MINOR   # for new features
+   cz bump --increment MAJOR   # for breaking changes
+   ```
+
+4. **Push the release with tags:**
+   ```bash
+   git push origin main --follow-tags
+   ```
+
+5. **Create a GitHub release (optional):**
+   - Go to GitHub releases page
+   - Click "Create a new release"
+   - Select the newly created tag
+   - Use the generated changelog as release notes
+
+### Making Conventional Commits
+
+When making commits, use commitizen for conventional commit messages:
+
+```bash
+# Interactive commit message creation
+cz commit
+
+# Or use conventional commit format manually:
+git commit -m "feat: add new tracing decorator"
+git commit -m "fix: resolve span context issue"
+git commit -m "docs: update API documentation"
+```
+
+### Commit Types
+
+- `feat`: New features
+- `fix`: Bug fixes
+- `docs`: Documentation changes
+- `style`: Code style changes (formatting, etc.)
+- `refactor`: Code refactoring
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks
+
 ## Pull Request Process
 
 1. **Fork the repository** and create a feature branch
