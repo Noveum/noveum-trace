@@ -182,7 +182,7 @@ class TestConfig:
         assert config.environment == "development"
         assert config.tracing.enabled is True
         assert config.tracing.sample_rate == 1.0
-        assert config.transport.endpoint == "https://api.noveum.ai"
+        assert config.transport.endpoint == "https://api.noveum.ai/api"
 
     def test_config_with_endpoint_parameter(self):
         """Test config creation with endpoint parameter."""

@@ -16,15 +16,15 @@ class TestConfigMerging:
 
     def setup_method(self):
         """Reset configuration before each test."""
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def teardown_method(self):
         """Clean up after each test."""
-        import noveum_trace.core.config as config_module
+        from tests.conftest import reset_noveum_config
 
-        config_module._config = None
+        reset_noveum_config()
 
     def test_deep_merge_preserves_nested_settings(self):
         """Test that deep merge preserves nested settings from environment."""
@@ -187,7 +187,7 @@ class TestConfigMerging:
 
             # None values should not override
             assert config.api_key == "env-key"
-            assert config.transport.endpoint == "https://api.noveum.ai"  # Default
+            assert config.transport.endpoint == "https://api.noveum.ai/api"  # Default
 
             # Non-None values should override
             assert config.project == "override-project"
@@ -214,7 +214,7 @@ class TestConfigMerging:
             config = get_config()
 
             # Empty transport dict should not clear defaults
-            assert config.transport.endpoint == "https://api.noveum.ai"
+            assert config.transport.endpoint == "https://api.noveum.ai/api"
             assert config.transport.timeout == 30
 
             # Non-empty nested dict should apply overrides

@@ -1,9 +1,15 @@
 """
-Test OpenAI integration with mocked Noveum API backend.
+Integration tests for OpenAI integration with mocked Noveum API backend.
 
 This test verifies that the SDK correctly captures OpenAI API calls
 and sends trace data to the Noveum backend with enhanced error handling
 and model validation.
+
+These are integration tests that verify:
+- OpenAI API call interception and tracing
+- Trace data submission to Noveum backend
+- Error handling in OpenAI integration
+- Model validation and metadata capture
 """
 
 from typing import Any
@@ -68,6 +74,8 @@ def mock_openai_response():
     return mock_response
 
 
+@pytest.mark.integration
+@pytest.mark.openai
 class TestOpenAIIntegration:
     """Test OpenAI integration with Noveum Trace SDK."""
 
@@ -86,6 +94,8 @@ class TestOpenAIIntegration:
         # Reset SDK state
         noveum_trace._client = None
 
+    @pytest.mark.disable_transport_mocking
+    @pytest.mark.integration
     def test_openai_chat_completion_tracing(
         self, mock_noveum_api, mock_openai_response
     ):
@@ -188,6 +198,8 @@ class TestOpenAIIntegration:
                         has_llm_attrs
                     ), f"LLM span missing LLM attributes: {attributes}"
 
+    @pytest.mark.disable_transport_mocking
+    @pytest.mark.integration
     def test_openai_error_handling_integration(self, mock_noveum_api):
         """Test that OpenAI errors are properly handled and traced."""
 
@@ -260,6 +272,8 @@ class TestOpenAIIntegration:
                 # We should have captured some error information
                 # (exact structure may vary based on implementation)
 
+    @pytest.mark.disable_transport_mocking
+    @pytest.mark.integration
     def test_openai_model_validation_integration(
         self, mock_noveum_api, mock_openai_response
     ):
@@ -307,6 +321,8 @@ class TestOpenAIIntegration:
                 spans = trace_data["spans"]
                 assert len(spans) > 0
 
+    @pytest.mark.disable_transport_mocking
+    @pytest.mark.integration
     def test_cost_estimation_integration(self, mock_noveum_api, mock_openai_response):
         """Test that cost estimation works in integration."""
 
@@ -349,6 +365,7 @@ class TestOpenAIIntegration:
                 spans = trace_data["spans"]
                 assert len(spans) > 0
 
+    @pytest.mark.integration
     def test_proxy_service_detection_integration(self, mock_noveum_api):
         """Test proxy service detection in integration scenario."""
 
@@ -378,6 +395,7 @@ class TestOpenAIIntegration:
             assert "suggestions" in result
             assert len(result["suggestions"]) > 0
 
+    @pytest.mark.integration
     def test_auto_instrumentation_with_enhanced_features(
         self, mock_noveum_api, mock_openai_response
     ):
@@ -386,6 +404,7 @@ class TestOpenAIIntegration:
         # Skip auto-instrumentation test for now as it requires proper environment setup
         pytest.skip("Auto-instrumentation requires proper environment setup")
 
+    @pytest.mark.integration
     def test_model_registry_functionality(self):
         """Test that the enhanced model registry works correctly."""
         from noveum_trace.utils.llm_utils import estimate_cost, get_model_info
