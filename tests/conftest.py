@@ -314,8 +314,21 @@ def client_with_mocked_transport():
     with patch("noveum_trace.core.client.HttpTransport", return_value=transport):
         client = NoveumClient(api_key="test-key", project="test-project")
         client.transport = transport  # Ensure it's set
+
+        # Set as global client for decorator tests
+        import noveum_trace
+
+        with noveum_trace._client_lock:
+            old_client = noveum_trace._client
+            noveum_trace._client = client
+
         track_client(client)
-        yield client
+        try:
+            yield client
+        finally:
+            # Restore old client
+            with noveum_trace._client_lock:
+                noveum_trace._client = old_client
 
 
 @pytest.fixture
