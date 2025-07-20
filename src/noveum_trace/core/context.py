@@ -293,7 +293,17 @@ class ContextualSpan:
             self.span.record_exception(exc_val)
             self.span.set_status(SpanStatus.ERROR, str(exc_val))
 
-        self.span.finish()
+        # Import here to avoid circular imports
+        from noveum_trace import get_client, is_initialized
+
+        # Use client to finish span for consistency
+        if is_initialized():
+            client = get_client()
+            client.finish_span(self.span)
+        else:
+            # Fallback to direct span finish if client not available
+            self.span.finish()
+
         set_current_span(self._previous_span)
 
     async def __aenter__(self) -> Span:
@@ -308,7 +318,17 @@ class ContextualSpan:
             self.span.record_exception(exc_val)
             self.span.set_status(SpanStatus.ERROR, str(exc_val))
 
-        self.span.finish()
+        # Import here to avoid circular imports
+        from noveum_trace import get_client, is_initialized
+
+        # Use client to finish span for consistency
+        if is_initialized():
+            client = get_client()
+            client.finish_span(self.span)
+        else:
+            # Fallback to direct span finish if client not available
+            self.span.finish()
+
         set_current_span(self._previous_span)
 
     def __getattr__(self, name: str) -> Any:
@@ -345,7 +365,17 @@ class ContextualTrace:
         if exc_type is not None:
             self.trace.set_status(SpanStatus.ERROR, str(exc_val))
 
-        self.trace.finish()
+        # Import here to avoid circular imports
+        from noveum_trace import get_client, is_initialized
+
+        # Use client to finish trace (which exports it)
+        if is_initialized():
+            client = get_client()
+            client.finish_trace(self.trace)
+        else:
+            # Fallback to direct trace finish if client not available
+            self.trace.finish()
+
         set_current_trace(self._previous_trace)
 
     async def __aenter__(self) -> Trace:
@@ -359,7 +389,17 @@ class ContextualTrace:
         if exc_type is not None:
             self.trace.set_status(SpanStatus.ERROR, str(exc_val))
 
-        self.trace.finish()
+        # Import here to avoid circular imports
+        from noveum_trace import get_client, is_initialized
+
+        # Use client to finish trace (which exports it)
+        if is_initialized():
+            client = get_client()
+            client.finish_trace(self.trace)
+        else:
+            # Fallback to direct trace finish if client not available
+            self.trace.finish()
+
         set_current_trace(self._previous_trace)
 
     def __getattr__(self, name: str) -> Any:

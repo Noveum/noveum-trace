@@ -410,14 +410,22 @@ class NoveumClient:
         # Flush transport
         self.transport.flush(timeout)
 
-        logger.info("Flushed all pending traces")
+        try:
+            logger.info("Flushed all pending traces")
+        except (ValueError, OSError, RuntimeError, Exception):
+            # Logger may be closed during shutdown
+            pass
 
     def shutdown(self) -> None:
         """Shutdown the client and flush all pending data."""
         if self._shutdown:
             return
 
-        logger.info("Shutting down Noveum Trace client")
+        try:
+            logger.info("Shutting down Noveum Trace client")
+        except (ValueError, OSError, RuntimeError, Exception):
+            # Logger may be closed during shutdown
+            pass
 
         # Flush all pending data BEFORE setting shutdown flag
         self.flush(timeout=30.0)
@@ -428,7 +436,11 @@ class NoveumClient:
         # Shutdown transport
         self.transport.shutdown()
 
-        logger.info("Noveum Trace client shutdown complete")
+        try:
+            logger.info("Noveum Trace client shutdown complete")
+        except (ValueError, OSError, RuntimeError):
+            # Logger may be closed during shutdown
+            pass
 
     def is_shutdown(self) -> bool:
         """Check if the client has been shutdown."""

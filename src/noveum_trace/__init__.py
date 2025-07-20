@@ -97,7 +97,12 @@ from noveum_trace.context_managers import (
 # Core imports
 from noveum_trace.core.client import NoveumClient
 from noveum_trace.core.config import configure, get_config
-from noveum_trace.core.context import get_current_span, get_current_trace, trace_context
+from noveum_trace.core.context import (
+    ContextualTrace,
+    get_current_span,
+    get_current_trace,
+    trace_context,
+)
 from noveum_trace.core.span import Span
 from noveum_trace.core.trace import Trace
 from noveum_trace.decorators.agent import trace_agent
@@ -171,14 +176,22 @@ def init(
         environment: Environment name (dev, staging, prod)
         auto_instrument: List of frameworks to auto-instrument
                         (e.g., ["langchain", "openai", "anthropic"])
-        **kwargs: Additional configuration options
+        **kwargs: Additional configuration options including:
+                 - transport_config: Transport layer configuration
+                 - tracing_config: Tracing behavior configuration
+                 - security_config: Security settings configuration
+                 - integrations_config: Integration settings
 
     Example:
         >>> import noveum_trace
         >>> noveum_trace.init(
         ...     project="my-llm-app",
         ...     environment="production",
-        ...     auto_instrument=["langchain", "openai"]
+        ...     auto_instrument=["langchain", "openai"],
+        ...     transport_config={
+        ...         "batch_size": 10,
+        ...         "batch_timeout": 1.0
+        ...     }
         ... )
     """
     global _client
@@ -198,7 +211,23 @@ def init(
             config["endpoint"] = endpoint
         if environment is not None:
             config["environment"] = environment
-        config.update(kwargs)
+
+        # Handle special config parameter mappings
+        config_mappings = {
+            "transport_config": "transport",
+            "tracing_config": "tracing",
+            "security_config": "security",
+            "integrations_config": "integrations",
+        }
+
+        # Process kwargs and map config parameters to correct keys
+        for key, value in kwargs.items():
+            if key in config_mappings:
+                # Map transport_config -> transport, etc.
+                config[config_mappings[key]] = value
+            else:
+                # Pass through other kwargs as-is
+                config[key] = value
 
         configure(config)
 
@@ -294,7 +323,7 @@ def list_plugins() -> list[str]:
 
 
 # Convenience functions for manual instrumentation
-def start_trace(name: str, **kwargs: Any) -> Trace:
+def start_trace(name: str, **kwargs: Any) -> "ContextualTrace":
     """
     Manually start a new trace.
 
@@ -303,10 +332,10 @@ def start_trace(name: str, **kwargs: Any) -> Trace:
         **kwargs: Additional trace attributes
 
     Returns:
-        New Trace instance
+        New ContextualTrace instance that can be used as a context manager
     """
     client = get_client()
-    return client.start_trace(name, **kwargs)
+    return client.create_contextual_trace(name, **kwargs)
 
 
 def start_span(name: str, **kwargs: Any) -> Span:
