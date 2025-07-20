@@ -86,7 +86,7 @@ class TestEndpointPathPreservation:
         noveum_trace.init(api_key="test-key", project="test-project", endpoint=ENDPOINT)
 
         config = get_config()
-        assert config.transport.endpoint == "https://api.noveum.ai/api"
+        assert config.transport.endpoint == ENDPOINT
 
     @pytest.mark.parametrize(
         "custom_endpoint,expected_trace_url,expected_traces_url",
@@ -347,10 +347,11 @@ class TestEndpointPathPreservation:
     def test_real_world_beta_endpoint_scenario(self):
         """Test a real-world scenario with a beta endpoint."""
         # Initialize noveum_trace with beta endpoint
+        beta_endpoint = ENDPOINT + "/beta"
         noveum_trace.init(
             api_key="test-key",
             project="test-project",
-            endpoint=ENDPOINT + "/beta",
+            endpoint=beta_endpoint,
         )
 
         # Create a client and verify URL construction
@@ -358,8 +359,8 @@ class TestEndpointPathPreservation:
 
         # Test that the URL construction is correct for this endpoint
         expected_url = client.transport._build_api_url("/v1/traces")
-        assert expected_url == "https://api.noveum.ai/api/beta/v1/traces"
+        assert expected_url == beta_endpoint + "/v1/traces"
 
         # Test single trace URL as well
         expected_trace_url = client.transport._build_api_url("/v1/trace")
-        assert expected_trace_url == "https://api.noveum.ai/api/beta/v1/trace"
+        assert expected_trace_url == beta_endpoint + "/v1/trace"

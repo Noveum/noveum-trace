@@ -293,12 +293,11 @@ class ContextualSpan:
             self.span.record_exception(exc_val)
             self.span.set_status(SpanStatus.ERROR, str(exc_val))
 
-        # Import here to avoid circular imports
-        from noveum_trace import get_client, is_initialized
+        # Use client to finish span for consistency and proper export
+        from noveum_trace.core import get_global_client
 
-        # Use client to finish span for consistency
-        if is_initialized():
-            client = get_client()
+        client = get_global_client()
+        if client:
             client.finish_span(self.span)
         else:
             # Fallback to direct span finish if client not available
@@ -318,12 +317,11 @@ class ContextualSpan:
             self.span.record_exception(exc_val)
             self.span.set_status(SpanStatus.ERROR, str(exc_val))
 
-        # Import here to avoid circular imports
-        from noveum_trace import get_client, is_initialized
+        # Use client to finish span for consistency and proper export
+        from noveum_trace.core import get_global_client
 
-        # Use client to finish span for consistency
-        if is_initialized():
-            client = get_client()
+        client = get_global_client()
+        if client:
             client.finish_span(self.span)
         else:
             # Fallback to direct span finish if client not available
@@ -365,12 +363,11 @@ class ContextualTrace:
         if exc_type is not None:
             self.trace.set_status(SpanStatus.ERROR, str(exc_val))
 
-        # Import here to avoid circular imports
-        from noveum_trace import get_client, is_initialized
+        # Use client to finish trace for proper export and context management
+        from noveum_trace.core import get_global_client
 
-        # Use client to finish trace (which exports it)
-        if is_initialized():
-            client = get_client()
+        client = get_global_client()
+        if client:
             client.finish_trace(self.trace)
         else:
             # Fallback to direct trace finish if client not available
@@ -389,12 +386,11 @@ class ContextualTrace:
         if exc_type is not None:
             self.trace.set_status(SpanStatus.ERROR, str(exc_val))
 
-        # Import here to avoid circular imports
-        from noveum_trace import get_client, is_initialized
+        # Use client to finish trace for proper export and context management
+        from noveum_trace.core import get_global_client
 
-        # Use client to finish trace (which exports it)
-        if is_initialized():
-            client = get_client()
+        client = get_global_client()
+        if client:
             client.finish_trace(self.trace)
         else:
             # Fallback to direct trace finish if client not available

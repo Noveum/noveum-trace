@@ -29,7 +29,7 @@ except ImportError:
 import noveum_trace
 
 # Test endpoints - configurable via environment
-ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
+# ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 ENDPOINT = "https://api.noveum.ai/api"
 API_KEY = os.environ.get("NOVEUM_API_KEY", "test-api-key")
 
@@ -178,9 +178,6 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
                 continue
             pytest.fail(f"API request failed: {e}")
 
-    print(
-        f"❌ Trace {trace_id} not found within {timeout} seconds after {retry_count} retries"
-    )
     pytest.fail(
         f"❌ Trace {trace_id} not found within {timeout} seconds after {retry_count} retries"
     )

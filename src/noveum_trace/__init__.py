@@ -234,6 +234,11 @@ def init(
         # Initialize the client
         _client = NoveumClient()
 
+        # Register with core module to avoid circular imports
+        from noveum_trace.core import _register_client
+
+        _register_client(_client)
+
         # Setup auto-instrumentation
         if auto_instrument:
             enable_auto_tracing(auto_instrument)
@@ -251,6 +256,11 @@ def shutdown() -> None:
         if _client:
             _client.shutdown()
             _client = None
+
+            # Unregister from core module
+            from noveum_trace.core import _unregister_client
+
+            _unregister_client()
 
 
 def flush() -> None:
