@@ -136,6 +136,7 @@ class NoveumClient:
         attributes: Optional[dict[str, Any]] = None,
         start_time: Optional[datetime] = None,
         set_as_current: bool = True,
+        **kwargs: Any,
     ) -> Trace:
         """
         Start a new trace.
@@ -145,6 +146,7 @@ class NoveumClient:
             attributes: Initial trace attributes
             start_time: Start time (defaults to current time)
             set_as_current: Whether to set as current trace
+            **kwargs: Additional keyword arguments added to trace attributes
 
         Returns:
             New Trace instance
@@ -159,10 +161,14 @@ class NoveumClient:
             logger.debug("Tracing is disabled, returning no-op trace")
             return self._create_noop_trace(name)
 
+        # Merge kwargs into attributes
+        merged_attributes = attributes.copy() if attributes else {}
+        merged_attributes.update(kwargs)
+
         # Check sampling decision
         sampling_decision = should_sample(
             name=name,
-            attributes=attributes,
+            attributes=merged_attributes,
             sample_rate=self.config.tracing.sample_rate,
         )
 
@@ -173,7 +179,7 @@ class NoveumClient:
         # Create the trace
         trace = Trace(
             name=name,
-            attributes=attributes,
+            attributes=merged_attributes,
             start_time=start_time,
         )
 
@@ -320,6 +326,7 @@ class NoveumClient:
         name: str,
         attributes: Optional[dict[str, Any]] = None,
         start_time: Optional[datetime] = None,
+        **kwargs: Any,
     ) -> ContextualTrace:
         """
         Create a contextual trace that manages context automatically.
@@ -328,6 +335,7 @@ class NoveumClient:
             name: Trace name
             attributes: Initial trace attributes
             start_time: Start time (defaults to current time)
+            **kwargs: Additional keyword arguments passed to start_trace
 
         Returns:
             ContextualTrace instance
@@ -337,6 +345,7 @@ class NoveumClient:
             attributes=attributes,
             start_time=start_time,
             set_as_current=False,
+            **kwargs,
         )
         return ContextualTrace(trace)
 

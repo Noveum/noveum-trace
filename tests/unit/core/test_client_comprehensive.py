@@ -780,6 +780,57 @@ class TestNoveumClientContextualOperations:
                 )
                 mock_contextual.assert_called_once_with(mock_span)
 
+    def test_start_trace_with_kwargs(self):
+        """Test that start_trace properly handles kwargs and merges them with attributes."""
+        client = NoveumClient()
+
+        # Test with only kwargs
+        trace1 = client.start_trace(
+            "test-trace-kwargs", extra_param="kwarg_value", numeric_param=123
+        )
+
+        assert "extra_param" in trace1.attributes
+        assert trace1.attributes["extra_param"] == "kwarg_value"
+        assert trace1.attributes["numeric_param"] == 123
+
+        # Test with both explicit attributes and kwargs
+        trace2 = client.start_trace(
+            "test-trace-mixed",
+            attributes={"explicit_attr": "explicit_value"},
+            kwarg_attr="kwarg_value",
+            another_kwarg=456,
+        )
+
+        # Should have both explicit and kwarg attributes
+        assert "explicit_attr" in trace2.attributes
+        assert trace2.attributes["explicit_attr"] == "explicit_value"
+        assert "kwarg_attr" in trace2.attributes
+        assert trace2.attributes["kwarg_attr"] == "kwarg_value"
+        assert trace2.attributes["another_kwarg"] == 456
+
+        # Test that kwargs override explicit attributes with same key
+        trace3 = client.start_trace(
+            "test-trace-override",
+            attributes={"shared_key": "explicit_value"},
+            shared_key="kwarg_value",
+        )
+
+        # Kwargs should override explicit attributes
+        assert trace3.attributes["shared_key"] == "kwarg_value"
+
+    def test_create_contextual_trace_with_kwargs(self):
+        """Test that create_contextual_trace properly handles kwargs."""
+        client = NoveumClient()
+
+        contextual_trace = client.create_contextual_trace(
+            "test-contextual-trace", extra_param="kwarg_value", numeric_param=789
+        )
+
+        # The underlying trace should have the kwargs as attributes
+        assert "extra_param" in contextual_trace.trace.attributes
+        assert contextual_trace.trace.attributes["extra_param"] == "kwarg_value"
+        assert contextual_trace.trace.attributes["numeric_param"] == 789
+
 
 class TestNoveumClientTraceManagement:
     """Test trace management operations."""
