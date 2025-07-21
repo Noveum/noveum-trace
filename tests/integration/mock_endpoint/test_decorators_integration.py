@@ -13,6 +13,7 @@ These are integration tests that verify the full decorator functionality includi
 """
 
 import asyncio
+import os
 import threading
 import time
 from typing import Any, Optional
@@ -29,6 +30,9 @@ from noveum_trace.decorators import (
     trace_retrieval,
     trace_tool,
 )
+
+# Configurable endpoint for integration tests
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 
 
 class LocalTraceCapture:
@@ -149,7 +153,7 @@ class TestDecoratorsIntegration:
         noveum_trace.init(
             api_key="test-api-key",
             project="decorator-integration-test",
-            endpoint="https://api.noveum.ai",
+            endpoint=ENDPOINT,
         )
 
     def teardown_method(self):

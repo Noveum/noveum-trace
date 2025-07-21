@@ -160,6 +160,24 @@ class Config:
                 f"Invalid timeout: {self.transport.timeout}. Must be greater than 0."
             )
 
+        # Validate endpoint URL format
+        endpoint = self.transport.endpoint
+        if endpoint:
+            # Check if it's a valid URL with proper scheme
+            if not endpoint.startswith(("http://", "https://")):
+                raise ConfigurationError(
+                    f"Invalid endpoint URL: {endpoint}. "
+                    "Must start with 'http://' or 'https://'"
+                )
+
+            # Basic URL validation - check for invalid characters or patterns
+            import re
+
+            # Simple regex to validate basic URL structure
+            url_pattern = r"^https?://[a-zA-Z0-9\-._~:/?#[\]@!$&\'()*+,;=%]+$"
+            if not re.match(url_pattern, endpoint):
+                raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
+
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -236,14 +254,8 @@ class Config:
         if "transport" in data:
             transport_data = data["transport"]
             if isinstance(transport_data, dict):
-                # Top-level endpoint takes precedence over transport.endpoint for consistency
-                endpoint = (
-                    top_level_endpoint
-                    or transport_data.get("endpoint")
-                    or DEFAULT_ENDPOINT
-                )
                 config.transport = TransportConfig(
-                    endpoint=endpoint,
+                    endpoint=transport_data.get("endpoint", DEFAULT_ENDPOINT),
                     timeout=transport_data.get("timeout", DEFAULT_TIMEOUT),
                     retry_attempts=transport_data.get(
                         "retry_attempts", DEFAULT_RETRY_ATTEMPTS
@@ -256,16 +268,15 @@ class Config:
                     max_queue_size=transport_data.get(
                         "max_queue_size", DEFAULT_MAX_QUEUE_SIZE
                     ),
-                    compression=transport_data.get("compression", True),
+                    compression=transport_data.get("compression", False),
                 )
             else:
-                # If transport is not a dict, use default with top-level endpoint if available
-                endpoint = top_level_endpoint or DEFAULT_ENDPOINT
-                config.transport = TransportConfig(endpoint=endpoint)
-        else:
-            # No transport config provided, use top-level endpoint if available
-            endpoint = top_level_endpoint or DEFAULT_ENDPOINT
-            config.transport = TransportConfig(endpoint=endpoint)
+                # If transport is not a dict, use default
+                config.transport = TransportConfig()
+
+        # Handle top-level endpoint override
+        if top_level_endpoint is not None:
+            config.transport.endpoint = top_level_endpoint
 
         # Security configuration
         if "security" in data:
@@ -296,6 +307,9 @@ class Config:
             else:
                 # If integrations is not a dict, use default
                 config.integrations = IntegrationConfig()
+
+        # Validate the final configuration
+        config._validate()
 
         return config
 

@@ -106,25 +106,136 @@ noveum_trace/
 
 ### Running Tests
 
+#### Unit Tests
+
 ```bash
-# Run all tests
-pytest
+# Run all unit tests
+pytest tests/unit/
 
 # Run with coverage
-pytest --cov=noveum_trace
+pytest --cov=noveum_trace tests/unit/
 
 # Run specific test file
-pytest tests/test_decorators.py
+pytest tests/unit/core/test_client.py
 
 # Run with verbose output
-pytest -v
+pytest -v tests/unit/
+```
+
+#### Integration Tests
+
+Integration tests verify end-to-end functionality with configurable endpoints and real-world scenarios.
+
+```bash
+# Run all integration tests
+pytest tests/integration/
+
+# Run integration tests with specific markers
+pytest -m integration tests/integration/
+pytest -m llm tests/integration/
+pytest -m agent tests/integration/
+pytest -m opentelemetry tests/integration/
+
+# Run specific integration test files
+pytest tests/integration/test_base_configuration.py
+pytest tests/integration/test_real_llm_scenarios.py
+pytest tests/integration/test_decorator_integrations.py
+pytest tests/integration/test_opentelemetry_integration.py
+
+# Run with verbose output to see detailed test execution
+pytest -v -s tests/integration/
+```
+
+#### Configuring Endpoints for Integration Tests
+
+Integration tests support configurable endpoints for different environments:
+
+**Environment Variables:**
+```bash
+# For localhost development (default)
+export NOVEUM_TEST_ENDPOINT="http://localhost:3000"
+
+# For production testing
+export NOVEUM_TEST_ENDPOINT="https://api.noveum.ai"
+
+# For custom endpoint testing
+export NOVEUM_TEST_ENDPOINT="https://your-custom-endpoint.com"
+
+# Optional: Set API keys for real LLM provider testing
+export OPENAI_API_KEY="your-openai-key"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+```
+
+**Running Tests with Specific Endpoints:**
+
+```bash
+# Test with localhost endpoint (development)
+NOVEUM_TEST_ENDPOINT="http://localhost:3000" pytest tests/integration/test_base_configuration.py
+
+# Test with production endpoint
+NOVEUM_TEST_ENDPOINT="https://api.noveum.ai" pytest tests/integration/test_base_configuration.py
+
+# Test real LLM scenarios with actual API keys
+OPENAI_API_KEY="sk-..." ANTHROPIC_API_KEY="sk-ant-..." pytest tests/integration/test_real_llm_scenarios.py
+
+# Test all integration scenarios with custom endpoint
+NOVEUM_TEST_ENDPOINT="https://staging.noveum.ai" pytest tests/integration/
+```
+
+**Test Categories:**
+
+- **Base Configuration** (`test_base_configuration.py`): Endpoint switching, health checks, configuration persistence
+- **Decorator Integration** (`test_decorator_integrations.py`): All decorators (@trace, @trace_llm, @trace_agent, @trace_tool)
+- **Real LLM Scenarios** (`test_real_llm_scenarios.py`): Multi-turn conversations, function calling, multi-agent workflows
+- **OpenTelemetry Integration** (`test_opentelemetry_integration.py`): Auto-instrumentation, framework integration, dual export
+
+**Setting Up Local Test Server:**
+
+For comprehensive integration testing, you can set up a local mock server:
+
+```bash
+# Simple HTTP server for endpoint testing
+python -m http.server 3000
 ```
 
 ### Test Structure
 
-- Unit tests: Test individual functions and classes
-- Integration tests: Test interactions between components
-- Mock external dependencies appropriately
+- **Unit tests** (`tests/unit/`): Test individual functions and classes
+- **Integration tests** (`tests/integration/`): Test end-to-end workflows with configurable endpoints
+- **Performance tests** (`tests/performance/`): Test performance and load scenarios
+- **E2E tests** (`tests/e2e/`): Test complete user workflows
+
+### Writing Integration Tests
+
+When adding new integration tests:
+
+1. **Use configurable endpoints**:
+   ```python
+   def test_my_feature(clean_noveum_client):
+       endpoint = os.environ.get('NOVEUM_TEST_ENDPOINT', 'http://localhost:3000')
+       noveum_trace.init(
+           project="test-project",
+           api_key="test-key",
+           endpoint=endpoint
+       )
+   ```
+
+2. **Test real scenarios**:
+   ```python
+   @pytest.mark.integration
+   @pytest.mark.llm
+   def test_realistic_conversation():
+       # Test actual conversation patterns
+       # Use real message structures
+       # Include error handling and edge cases
+   ```
+
+3. **Mock external services appropriately**:
+   ```python
+   # Mock LLM providers but preserve request/response structure
+   # Mock databases but test actual query patterns
+   # Mock HTTP calls but validate endpoint usage
+   ```
 
 ## Release Process
 

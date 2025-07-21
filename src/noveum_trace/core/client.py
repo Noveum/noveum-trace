@@ -136,6 +136,7 @@ class NoveumClient:
         attributes: Optional[dict[str, Any]] = None,
         start_time: Optional[datetime] = None,
         set_as_current: bool = True,
+        **kwargs: Any,
     ) -> Trace:
         """
         Start a new trace.
@@ -145,6 +146,7 @@ class NoveumClient:
             attributes: Initial trace attributes
             start_time: Start time (defaults to current time)
             set_as_current: Whether to set as current trace
+            **kwargs: Additional keyword arguments added to trace attributes
 
         Returns:
             New Trace instance
@@ -159,10 +161,14 @@ class NoveumClient:
             logger.debug("Tracing is disabled, returning no-op trace")
             return self._create_noop_trace(name)
 
+        # Merge kwargs into attributes
+        merged_attributes = attributes.copy() if attributes else {}
+        merged_attributes.update(kwargs)
+
         # Check sampling decision
         sampling_decision = should_sample(
             name=name,
-            attributes=attributes,
+            attributes=merged_attributes,
             sample_rate=self.config.tracing.sample_rate,
         )
 
@@ -173,7 +179,7 @@ class NoveumClient:
         # Create the trace
         trace = Trace(
             name=name,
-            attributes=attributes,
+            attributes=merged_attributes,
             start_time=start_time,
         )
 
@@ -320,6 +326,7 @@ class NoveumClient:
         name: str,
         attributes: Optional[dict[str, Any]] = None,
         start_time: Optional[datetime] = None,
+        **kwargs: Any,
     ) -> ContextualTrace:
         """
         Create a contextual trace that manages context automatically.
@@ -328,6 +335,7 @@ class NoveumClient:
             name: Trace name
             attributes: Initial trace attributes
             start_time: Start time (defaults to current time)
+            **kwargs: Additional keyword arguments passed to start_trace
 
         Returns:
             ContextualTrace instance
@@ -337,6 +345,7 @@ class NoveumClient:
             attributes=attributes,
             start_time=start_time,
             set_as_current=False,
+            **kwargs,
         )
         return ContextualTrace(trace)
 
@@ -410,14 +419,22 @@ class NoveumClient:
         # Flush transport
         self.transport.flush(timeout)
 
-        logger.info("Flushed all pending traces")
+        try:
+            logger.info("Flushed all pending traces")
+        except (ValueError, OSError, RuntimeError, Exception):
+            # Logger may be closed during shutdown
+            pass
 
     def shutdown(self) -> None:
         """Shutdown the client and flush all pending data."""
         if self._shutdown:
             return
 
-        logger.info("Shutting down Noveum Trace client")
+        try:
+            logger.info("Shutting down Noveum Trace client")
+        except (ValueError, OSError, RuntimeError, Exception):
+            # Logger may be closed during shutdown
+            pass
 
         # Flush all pending data BEFORE setting shutdown flag
         self.flush(timeout=30.0)
@@ -428,7 +445,11 @@ class NoveumClient:
         # Shutdown transport
         self.transport.shutdown()
 
-        logger.info("Noveum Trace client shutdown complete")
+        try:
+            logger.info("Noveum Trace client shutdown complete")
+        except (ValueError, OSError, RuntimeError):
+            # Logger may be closed during shutdown
+            pass
 
     def is_shutdown(self) -> bool:
         """Check if the client has been shutdown."""

@@ -8,7 +8,7 @@ system, including all context operations, contextual managers, and edge cases.
 import asyncio
 import contextvars
 import threading
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -362,6 +362,9 @@ class TestContextualSpan:
         set_current_span(original_span)
 
         new_span = Mock(spec=Span)
+        new_span.span_id = "test-span-id"
+        new_span.parent_span_id = None
+        new_span.is_finished.return_value = False
         contextual_span = ContextualSpan(new_span)
 
         with pytest.raises(ValueError):
@@ -379,6 +382,9 @@ class TestContextualSpan:
     def test_contextual_span_finishes_span(self):
         """Test ContextualSpan finishes span on exit."""
         span = Mock(spec=Span)
+        span.span_id = "test-span-id"
+        span.parent_span_id = None
+        span.is_finished.return_value = False
         contextual_span = ContextualSpan(span)
 
         with contextual_span:
@@ -428,6 +434,9 @@ class TestContextualSpan:
         set_current_span(original_span)
 
         new_span = Mock(spec=Span)
+        new_span.span_id = "test-span-id"
+        new_span.parent_span_id = None
+        new_span.is_finished.return_value = False
         contextual_span = ContextualSpan(new_span)
 
         with pytest.raises(ValueError):
@@ -475,6 +484,8 @@ class TestContextualTrace:
         set_current_trace(original_trace)
 
         new_trace = Mock(spec=Trace)
+        new_trace.trace_id = "test-trace-id"
+        new_trace.is_finished.return_value = False
         contextual_trace = ContextualTrace(new_trace)
 
         with pytest.raises(ValueError):
@@ -491,6 +502,8 @@ class TestContextualTrace:
     def test_contextual_trace_finishes_trace(self):
         """Test ContextualTrace finishes trace on exit."""
         trace = Mock(spec=Trace)
+        trace.trace_id = "test-trace-id"
+        trace.is_finished.return_value = False
         contextual_trace = ContextualTrace(trace)
 
         with contextual_trace:
@@ -540,6 +553,8 @@ class TestContextualTrace:
         set_current_trace(original_trace)
 
         new_trace = Mock(spec=Trace)
+        new_trace.trace_id = "test-trace-id"
+        new_trace.is_finished.return_value = False
         contextual_trace = ContextualTrace(new_trace)
 
         with pytest.raises(ValueError):
@@ -941,12 +956,20 @@ class TestContextIntegration:
         set_current_span(original_span)
 
         new_trace = Mock(spec=Trace)
-        new_span = Mock(spec=Span)
+        new_trace.trace_id = "test-trace-id"
+        new_trace.is_finished.return_value = False
 
-        with pytest.raises(ValueError):
-            with ContextualTrace(new_trace):
-                with ContextualSpan(new_span):
-                    raise ValueError("Test exception")
+        new_span = Mock(spec=Span)
+        new_span.span_id = "test-span-id"
+        new_span.parent_span_id = None
+        new_span.is_finished.return_value = False
+
+        # Mock get_global_client to return None to avoid client interference
+        with patch("noveum_trace.core.get_global_client", return_value=None):
+            with pytest.raises(ValueError):
+                with ContextualTrace(new_trace):
+                    with ContextualSpan(new_span):
+                        raise ValueError("Test exception")
 
         # Should restore original context
         assert get_current_trace() == original_trace

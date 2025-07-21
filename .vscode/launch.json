@@ -4,20 +4,126 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
-            "name": "Python Debugger: Current File",
-            "type": "debugpy",
+            "name": "Run Integration Tests",
+            "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "module": "pytest",
+            "args": [
+                "tests/integration/test_decorator_integrations.py",
+                "-v",
+                "--tb=short",
+                "-m", "integration"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}/src"
-            }
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-integration-key",
+                "NOVEUM_PROJECT": "integration-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "justMyCode": false,
+            "subProcess": true
         },
         {
-            "name": "Python Debugger: pytest",
-            "type": "debugpy",
+            "name": "Run Mock Endpoint Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/mock_endpoint/",
+                "-v",
+                "--tb=short",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-integration-key",
+                "NOVEUM_PROJECT": "integration-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "justMyCode": false,
+            "subProcess": true
+        },
+        {
+            "name": "Run End-to-End Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/end_to_end/",
+                "-v",
+                "--tb=short",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-key",
+                "NOVEUM_PROJECT": "end-to-end-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false,
+            "subProcess": true
+        },
+        {
+            "name": "Debug End-to-End Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/end_to_end/",
+                "-v",
+                "--tb=long",
+                "-s",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-key",
+                "NOVEUM_PROJECT": "end-to-end-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
+            "name": "Debug Integration Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/mock_endpoint/test_base_configuration.py",
+                "-v",
+                "--tb=long",
+                "-s",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-integration-key",
+                "NOVEUM_PROJECT": "integration-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
+            "name": "Run All Tests",
+            "type": "python",
             "request": "launch",
             "module": "pytest",
             "args": [
@@ -29,29 +135,125 @@
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
-            }
+            },
+            "justMyCode": false,
+            "subProcess": true
         },
         {
-            "name": "Python Debugger: Example Script",
-            "type": "debugpy",
+            "name": "Run Single Test File",
+            "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/basic_usage.py",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-v",
+                "--tb=short"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
-            }
+            },
+            "justMyCode": false,
+            "subProcess": true
         },
         {
-            "name": "Python Debugger: Agent Example",
-            "type": "debugpy",
+            "name": "Run Test with Coverage",
+            "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/agent_example.py",
+            "module": "pytest",
+            "args": [
+                "tests/",
+                "--cov=src/noveum_trace",
+                "--cov-report=html",
+                "--cov-report=term",
+                "-v"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
-            }
+            },
+            "justMyCode": false,
+            "subProcess": true
+        },
+        {
+            "name": "Debug Current Test",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}::${input:testName}",
+                "-v",
+                "--tb=long",
+                "-s"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
+            "name": "Test OpenAI Chat Completion",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/end_to_end/test_real_llm_scenarios.py::TestRealLLMConversations::test_openai_chat_completion",
+                "-v",
+                "--tb=long",
+                "-s",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-key",
+                "NOVEUM_PROJECT": "end-to-end-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        },
+        {
+            "name": "Test Simple Chat Completion",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/integration/end_to_end/test_real_llm_scenarios.py::TestRealLLMBasicScenarios::test_simple_chat_completion",
+                "-v",
+                "--tb=long",
+                "-s",
+                "-m", "integration"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "NOVEUM_API_KEY": "test-key",
+                "NOVEUM_PROJECT": "end-to-end-test-project",
+                "NOVEUM_ENVIRONMENT": "test"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "justMyCode": false,
+            "subProcess": true,
+            "stopOnEntry": false
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testName",
+            "description": "Test function name",
+            "default": "",
+            "type": "promptString"
         }
     ]
 }

@@ -293,6 +293,7 @@ class TestContextualSpan:
         """Test basic ContextualSpan context manager."""
         span = Mock(spec=Span)
         span.span_id = "test-span"
+        span.parent_span_id = None
         span.is_finished.return_value = False
 
         contextual_span = ContextualSpan(span)
@@ -315,6 +316,7 @@ class TestContextualSpan:
 
         new_span = Mock(spec=Span)
         new_span.span_id = "new-span"
+        new_span.parent_span_id = None
         new_span.is_finished.return_value = False
 
         # Set existing context
@@ -332,6 +334,7 @@ class TestContextualSpan:
         """Test ContextualSpan handles exceptions correctly."""
         span = Mock(spec=Span)
         span.span_id = "test-span"
+        span.parent_span_id = None
         span.is_finished.return_value = False
 
         contextual_span = ContextualSpan(span)
@@ -359,6 +362,8 @@ class TestContextualSpan:
         span = Mock(spec=Span)
         span.name = span_name
         span.attributes = span_attributes
+        span.span_id = f"test-span-{span_name}"
+        span.parent_span_id = None
         span.is_finished.return_value = False
 
         contextual_span = ContextualSpan(span)
@@ -692,6 +697,7 @@ class TestAsyncContextManagement:
 
         trace = Mock(spec=Trace)
         trace.name = "async_contextual_trace"
+        trace.trace_id = "test-trace-id"
         trace.is_finished.return_value = False
 
         async def async_operation():
@@ -713,6 +719,8 @@ class TestAsyncContextManagement:
 
         span = Mock(spec=Span)
         span.name = "async_contextual_span"
+        span.span_id = "test-span-id"
+        span.parent_span_id = None
         span.is_finished.return_value = False
 
         async def async_operation():

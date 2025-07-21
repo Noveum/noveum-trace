@@ -7,6 +7,7 @@ This module tests the critical endpoint configuration features including:
 - Transport layer using correct endpoints
 """
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,6 +16,9 @@ from noveum_trace import configure
 from noveum_trace.core.client import NoveumClient
 from noveum_trace.core.config import Config
 from noveum_trace.transport.http_transport import HttpTransport
+
+# Configurable endpoint for integration tests
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 
 
 @pytest.mark.disable_transport_mocking

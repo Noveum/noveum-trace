@@ -111,6 +111,10 @@ def trace_llm(
                 "llm.operation_type": "completion",
             }
 
+            # Add provider if explicitly specified in decorator
+            if provider:
+                attributes["llm.provider"] = provider
+
             # Add metadata
             if metadata:
                 for key, value in metadata.items():
@@ -130,6 +134,10 @@ def trace_llm(
                 # Detect LLM provider and extract metadata
                 llm_metadata = _extract_llm_call_metadata(bound_args.arguments)
                 attributes.update(llm_metadata)
+
+                # Ensure the explicit provider parameter takes precedence over auto-detection
+                if provider:
+                    attributes["llm.provider"] = provider
 
                 # Capture prompts if enabled
                 if capture_prompts:

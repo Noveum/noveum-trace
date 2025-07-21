@@ -12,12 +12,16 @@ These are integration tests that verify:
 - Model validation and metadata capture
 """
 
+import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import noveum_trace
+
+# Configurable endpoint for integration tests
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 
 
 class MockNoveumAPI:

@@ -37,6 +37,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "comprehensive: marks tests as comprehensive integration tests"
     )
+    config.addinivalue_line("markers", "slow: marks tests as slow (real API calls)")
 
 
 @pytest.fixture(scope="session")
@@ -68,10 +69,34 @@ def integration_test_env():
 @pytest.fixture(scope="function")
 def clean_noveum_client():
     """Ensure clean Noveum client state for each test."""
-    import noveum_trace
+    import os
 
-    # Clear any existing client
+    import noveum_trace
+    from noveum_trace.core import config
+
+    # Store original environment
+    env_keys = [
+        "NOVEUM_PROJECT",
+        "NOVEUM_API_KEY",
+        "NOVEUM_ENDPOINT",
+        "NOVEUM_ENVIRONMENT",
+    ]
+    original_env = {}
+    for key in env_keys:
+        if key in os.environ:
+            original_env[key] = os.environ[key]
+            del os.environ[key]
+
+    # Ensure any existing client is shutdown first
+    if hasattr(noveum_trace, "_client") and noveum_trace._client:
+        try:
+            noveum_trace._client.shutdown()
+        except Exception:
+            pass
+
+    # Clear client and configuration
     noveum_trace._client = None
+    config._config = None
 
     yield
 
@@ -83,6 +108,16 @@ def clean_noveum_client():
             pass
         finally:
             noveum_trace._client = None
+
+    # Clear global configuration
+    config._config = None
+
+    # Restore original environment
+    for key in env_keys:
+        if key in os.environ:
+            del os.environ[key]
+    for key, value in original_env.items():
+        os.environ[key] = value
 
 
 @pytest.fixture(scope="function")

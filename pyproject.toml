@@ -116,6 +116,15 @@ Changelog = "https://github.com/Noveum/noveum-trace/blob/main/CHANGELOG.md"
 minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests",
+    "llm: marks tests as LLM-related",
+    "agent: marks tests as agent-related",
+    "opentelemetry: marks tests as OpenTelemetry-related",
+    "async_support: marks tests for async support",
+    "comprehensive: marks comprehensive workflow tests",
+    "disable_transport_mocking: marks tests that disable transport mocking",
+]
 
 [tool.coverage.run]
 source = ["src/noveum_trace"]

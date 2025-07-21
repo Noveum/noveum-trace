@@ -5,6 +5,7 @@ This module tests that custom endpoint paths (like /beta, /api, etc.)
 are preserved when constructing API URLs, instead of being stripped away.
 """
 
+import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,9 @@ import pytest
 import noveum_trace
 from noveum_trace.core.config import Config, configure, get_config
 from noveum_trace.transport.http_transport import HttpTransport
+
+# Configurable endpoint for integration tests
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 
 
 @contextmanager
@@ -79,10 +83,10 @@ class TestEndpointPathPreservation:
     def test_default_endpoint_includes_api_path(self):
         """Test that default endpoint includes /api path."""
         # Initialize with just API key
-        noveum_trace.init(api_key="test-key", project="test-project")
+        noveum_trace.init(api_key="test-key", project="test-project", endpoint=ENDPOINT)
 
         config = get_config()
-        assert config.transport.endpoint == "https://api.noveum.ai/api"
+        assert config.transport.endpoint == ENDPOINT
 
     @pytest.mark.parametrize(
         "custom_endpoint,expected_trace_url,expected_traces_url",
@@ -343,10 +347,11 @@ class TestEndpointPathPreservation:
     def test_real_world_beta_endpoint_scenario(self):
         """Test a real-world scenario with a beta endpoint."""
         # Initialize noveum_trace with beta endpoint
+        beta_endpoint = ENDPOINT + "/beta"
         noveum_trace.init(
             api_key="test-key",
             project="test-project",
-            endpoint="https://beta.noveum.ai/beta",
+            endpoint=beta_endpoint,
         )
 
         # Create a client and verify URL construction
@@ -354,8 +359,8 @@ class TestEndpointPathPreservation:
 
         # Test that the URL construction is correct for this endpoint
         expected_url = client.transport._build_api_url("/v1/traces")
-        assert expected_url == "https://beta.noveum.ai/beta/v1/traces"
+        assert expected_url == beta_endpoint + "/v1/traces"
 
         # Test single trace URL as well
         expected_trace_url = client.transport._build_api_url("/v1/trace")
-        assert expected_trace_url == "https://beta.noveum.ai/beta/v1/trace"
+        assert expected_trace_url == beta_endpoint + "/v1/trace"

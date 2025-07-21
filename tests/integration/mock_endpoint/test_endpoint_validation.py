@@ -7,6 +7,7 @@ and that the trace data being sent is valid and properly structured.
 
 import concurrent.futures
 import json
+import os
 import threading
 import time
 from datetime import datetime
@@ -17,9 +18,12 @@ import pytest
 
 import noveum_trace
 from noveum_trace.core.client import NoveumClient
-from noveum_trace.core.config import Config
+from noveum_trace.core.config import Config, TransportConfig
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.transport.http_transport import HttpTransport
+
+# Configurable endpoint for integration tests
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 
 
 class EndpointCapture:
@@ -101,6 +105,14 @@ def endpoint_capture():
         payload = json if json is not None else data
         return capture.capture_request(url, "POST", headers, payload)
 
+    # Create a mock session with post method
+    mock_session = Mock()
+    mock_session.post = mock_session_post
+    mock_session.headers = {}
+
+    def mock_create_session():
+        return mock_session
+
     # Patch HTTP methods to capture requests
     with (
         patch("requests.post", side_effect=mock_requests_post),
@@ -108,6 +120,10 @@ def endpoint_capture():
         patch(
             "noveum_trace.transport.http_transport.requests.Session.post",
             side_effect=mock_session_post,
+        ),
+        patch(
+            "noveum_trace.transport.http_transport.HttpTransport._create_session",
+            side_effect=mock_create_session,
         ),
     ):
         yield capture
@@ -117,8 +133,17 @@ def endpoint_capture():
 def capturing_client(endpoint_capture):
     """Provide a client that captures all HTTP requests"""
     # Create a real client that will use the mocked HTTP layer
+    transport_config = TransportConfig(
+        batch_size=1,  # Send immediately
+        batch_timeout=0.1,  # Very short timeout for tests
+        timeout=5,  # Reasonable timeout for test environment
+    )
+
     config = Config.create(
-        api_key="test-api-key", project="test-project", endpoint="https://api.noveum.ai"
+        api_key="test-api-key",
+        project="test-project",
+        endpoint="https://api.noveum.ai",
+        transport=transport_config,
     )
 
     client = NoveumClient(config=config)
@@ -135,13 +160,13 @@ def capturing_client(endpoint_capture):
 class TestEndpointValidation:
     """Test suite for validating HTTP endpoint behavior and trace data"""
 
-    def _wait_for_trace_capture(self, endpoint_capture, max_wait=5.0):
+    def _wait_for_trace_capture(self, endpoint_capture, max_wait=2.0):
         """Wait for trace to be captured"""
         start_time = time.time()
         while time.time() - start_time < max_wait:
             if endpoint_capture.requests:
                 break
-            time.sleep(0.1)
+            time.sleep(0.1)  # Poll every 100ms
 
     def test_basic_trace_capture(self, capturing_client, endpoint_capture):
         """Test that basic traces are captured correctly"""
@@ -183,11 +208,15 @@ class TestEndpointValidation:
         """Test that decorator-based traces are captured correctly"""
         endpoint_capture.clear()
 
-        # Initialize noveum_trace with the same config as capturing_client
+        # Initialize noveum_trace with immediate batch export configuration
         noveum_trace.init(
             api_key="test-api-key",
             project="test-project",
             endpoint="https://api.noveum.ai",
+            transport_config={
+                "batch_size": 1,  # Send immediately
+                "batch_timeout": 0.01,  # Very short timeout
+            },
         )
 
         # Use a decorator-based trace
@@ -208,6 +237,7 @@ class TestEndpointValidation:
 
         # Validate trace was captured
         latest_trace = endpoint_capture.get_latest_trace()
+
         assert latest_trace is not None, "Decorator trace not captured"
 
         self._validate_trace_structure(latest_trace)
@@ -721,13 +751,13 @@ class TestEndpointValidation:
 class TestEndpointIntegration:
     """Integration tests for endpoint behavior with real scenarios"""
 
-    def _wait_for_trace_capture(self, endpoint_capture, max_wait=5.0):
+    def _wait_for_trace_capture(self, endpoint_capture, max_wait=1.0):
         """Wait for trace to be captured"""
         start_time = time.time()
         while time.time() - start_time < max_wait:
             if endpoint_capture.requests:
                 break
-            time.sleep(0.1)
+            time.sleep(0.05)  # Poll more frequently
 
     def test_complete_workflow_capture(self, capturing_client, endpoint_capture):
         """Test capturing a complete workflow with multiple operations"""
