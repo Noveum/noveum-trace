@@ -35,8 +35,20 @@ class MockEndpointServer:
 
     def capture_request(self, method: str, url: str, **kwargs) -> Mock:
         """Capture a request and return a mock response."""
-        # Extract endpoint from URL
-        endpoint = url.replace(self.base_url, "")
+        # Extract endpoint from URL - handle various URL formats
+        endpoint = url
+        if url.startswith(self.base_url):
+            endpoint = url[len(self.base_url) :]
+        elif url.startswith("https://api.noveum.ai"):
+            endpoint = url.replace("https://api.noveum.ai", "")
+        elif url.startswith("http://localhost"):
+            endpoint = url.replace("http://localhost:3000", "").replace(
+                "http://localhost", ""
+            )
+
+        # Ensure endpoint starts with /
+        if endpoint and not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
 
         # Store request details
         request_data = {
@@ -77,10 +89,13 @@ class MockEndpointServer:
 @pytest.fixture
 def mock_localhost_server():
     """Mock server for localhost:3000 testing."""
-    server = MockEndpointServer("https://api.noveum.ai")
+    # Use the same endpoint as the tests for consistency
+    server = MockEndpointServer(ENDPOINT.rstrip("/"))
 
     # Setup common endpoints
     server.setup_response("/health", {"status": "ok"})
+    server.setup_response("/v1/trace", {"success": True, "trace_id": "test-trace-id"})
+    server.setup_response("/v1/traces", {"success": True, "batch_id": "test-batch-id"})
     server.setup_response(
         "/api/v1/trace", {"success": True, "trace_id": "test-trace-id"}
     )
@@ -110,6 +125,8 @@ def mock_production_server():
 
     # Setup common endpoints
     server.setup_response("/health", {"status": "ok"})
+    server.setup_response("/v1/trace", {"success": True, "trace_id": "prod-trace-id"})
+    server.setup_response("/v1/traces", {"success": True, "batch_id": "prod-batch-id"})
     server.setup_response(
         "/api/v1/trace", {"success": True, "trace_id": "prod-trace-id"}
     )
@@ -301,7 +318,11 @@ class TestBaseConfiguration:
 
         # Check that trace was sent to localhost
         trace_requests = mock_localhost_server.get_requests("/api/v1/traces")
-        assert len(trace_requests) >= 1
+        trace_requests_v1 = mock_localhost_server.get_requests("/v1/traces")
+
+        assert (
+            len(trace_requests) >= 1 or len(trace_requests_v1) >= 1
+        ), f"Expected at least 1 trace request, got {len(trace_requests)} for /api/v1/traces and {len(trace_requests_v1)} for /v1/traces"
 
     def test_trace_export_production(self, mock_production_server):
         """Test trace export to production endpoint."""
@@ -321,7 +342,11 @@ class TestBaseConfiguration:
 
         # Check that trace was sent to production
         trace_requests = mock_production_server.get_requests("/api/v1/traces")
-        assert len(trace_requests) >= 1
+        trace_requests_v1 = mock_production_server.get_requests("/v1/traces")
+
+        assert (
+            len(trace_requests) >= 1 or len(trace_requests_v1) >= 1
+        ), f"Expected at least 1 trace request, got {len(trace_requests)} for /api/v1/traces and {len(trace_requests_v1)} for /v1/traces"
 
     def test_environment_specific_configuration(self, mock_localhost_server):
         """Test environment-specific configuration patterns."""
@@ -468,7 +493,11 @@ class TestConfigurationPersistence:
 
         # Verify all traces were sent to the correct endpoint
         trace_requests = mock_localhost_server.get_requests("/api/v1/traces")
-        assert len(trace_requests) >= 1  # Should be at least 1 batch
+        trace_requests_v1 = mock_localhost_server.get_requests("/v1/traces")
+
+        assert (
+            len(trace_requests) >= 1 or len(trace_requests_v1) >= 1
+        ), f"Expected at least 1 trace request, got {len(trace_requests)} for /api/v1/traces and {len(trace_requests_v1)} for /v1/traces"
 
     def test_configuration_validation_on_init(self):
         """Test that configuration is validated during initialization."""

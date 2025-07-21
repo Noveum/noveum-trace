@@ -346,8 +346,18 @@ class TestEndpointPathPreservation:
     @pytest.mark.disable_transport_mocking
     def test_real_world_beta_endpoint_scenario(self):
         """Test a real-world scenario with a beta endpoint."""
-        # Initialize noveum_trace with beta endpoint
-        beta_endpoint = ENDPOINT + "/beta"
+        # Ensure we always use a valid base URL - never use a relative path
+        if ENDPOINT.startswith(("http://", "https://")):
+            base_endpoint = ENDPOINT
+        else:
+            # Fallback to default if ENDPOINT is somehow invalid
+            base_endpoint = "https://api.noveum.ai/api"
+            print(
+                f"WARNING: ENDPOINT '{ENDPOINT}' is invalid, using default: {base_endpoint}"
+            )
+
+        beta_endpoint = base_endpoint + "/beta"
+
         noveum_trace.init(
             api_key="test-key",
             project="test-project",
