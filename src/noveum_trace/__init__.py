@@ -96,7 +96,7 @@ from noveum_trace.context_managers import (
 
 # Core imports
 from noveum_trace.core.client import NoveumClient
-from noveum_trace.core.config import configure, get_config
+from noveum_trace.core.config import DEFAULT_ENDPOINT, configure, get_config
 from noveum_trace.core.context import (
     ContextualTrace,
     get_current_span,
@@ -172,7 +172,7 @@ def init(
     Args:
         project: Project name for organizing traces
         api_key: Noveum API key (defaults to NOVEUM_API_KEY env var)
-        endpoint: API endpoint (defaults to https://api.noveum.ai)
+        endpoint: API endpoint (defaults to https://api.noveum.ai/api)
         environment: Environment name (dev, staging, prod)
         auto_instrument: List of frameworks to auto-instrument
                         (e.g., ["langchain", "openai", "anthropic"])
@@ -201,14 +201,15 @@ def init(
         if _client is not None:
             return
 
-        # Configure the SDK - only include non-None values
+        # Configure the SDK - handle endpoint explicitly to ensure defaults work
         config = {}
         if project is not None:
             config["project"] = project
         if api_key is not None:
             config["api_key"] = api_key
-        if endpoint is not None:
-            config["endpoint"] = endpoint
+        # Always include endpoint in config to ensure consistent behavior
+        # If None, use the default endpoint
+        config["endpoint"] = endpoint if endpoint is not None else DEFAULT_ENDPOINT
         if environment is not None:
             config["environment"] = environment
 

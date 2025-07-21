@@ -1,17 +1,13 @@
 """
-Agent Workflow Example for Noveum Trace SDK.
+Agent Example for Noveum Trace SDK.
 
-This example demonstrates how to trace multi-agent workflows including:
-- Agent registration and identity tracking
-- Inter-agent communication
-- Hierarchical agent coordination
-- Tool usage within agents
+This example demonstrates how to trace complex agent interactions,
+including multi-agent systems, agent workflows, and agent graphs.
 """
 
 import os
 import random
 import time
-from dataclasses import dataclass
 from typing import Any
 
 # Load environment variables (install python-dotenv if needed)
@@ -27,11 +23,16 @@ except ImportError:
 
 import noveum_trace
 
+# Initialize the SDK
+noveum_trace.init(
+    project="agent-example",
+    api_key=os.getenv("NOVEUM_API_KEY"),
+    environment="development",
+)
 
-@dataclass
+
+# Data structures for agent communication
 class AgentMessage:
-    """Message passed between agents."""
-
     sender: str
     recipient: str
     content: str
@@ -46,7 +47,7 @@ class ResearchAgent:
         self.agent_id = agent_id
         self.knowledge_base = []
 
-    @noveum_trace.trace_agent(agent_id="researcher")
+    @noveum_trace.trace_agent(agent_id="researcher_001")
     def research_topic(self, topic: str) -> dict[str, Any]:
         """Research a given topic and return findings."""
 
@@ -64,16 +65,16 @@ class ResearchAgent:
             "sources": search_results,
             "confidence": random.uniform(0.7, 0.95),
             "timestamp": time.time(),
+            "agent_id": self.agent_id,
         }
 
         self.knowledge_base.append(research_result)
-
         return research_result
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="web_search", tool_type="api")
     def _search_web(self, query: str) -> list[dict[str, str]]:
-        """Simulate web search."""
-        time.sleep(0.1)  # Simulate network delay
+        """Search the web for information."""
+        time.sleep(0.3)  # Simulate search time
 
         # Mock search results
         results = [
@@ -93,7 +94,7 @@ class ResearchAgent:
 
         return results
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="source_analyzer", tool_type="analysis")
     def _analyze_sources(self, sources: list[dict[str, str]]) -> str:
         """Analyze research sources and extract key insights."""
         time.sleep(0.2)  # Simulate analysis time
@@ -115,7 +116,7 @@ class WriterAgent:
         self.agent_id = agent_id
         self.writing_style = "professional"
 
-    @noveum_trace.trace_agent(agent_id="writer")
+    @noveum_trace.trace_agent(agent_id="writer_001")
     def write_report(self, research_data: dict[str, Any]) -> str:
         """Write a report based on research data."""
 
@@ -130,7 +131,7 @@ class WriterAgent:
 
         return final_report
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="outline_generator", tool_type="writing")
     def _create_outline(self, research_data: dict[str, Any]) -> list[str]:
         """Create an outline for the report."""
         time.sleep(0.1)
@@ -145,51 +146,58 @@ class WriterAgent:
 
         return outline
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="content_generator", tool_type="writing")
     def _generate_content(
         self, outline: list[str], research_data: dict[str, Any]
     ) -> str:
         """Generate content based on outline and research."""
-        time.sleep(0.3)
+        time.sleep(0.4)
 
         content_sections = []
         for section in outline:
-            if section == "Executive Summary":
-                content_sections.append(
-                    f"## {section}\n\nThis report examines {research_data['topic']} based on comprehensive research."
-                )
-            elif section == "Key Findings":
-                content_sections.append(f"## {section}\n\n{research_data['findings']}")
+            if "Executive Summary" in section:
+                section_content = f"""
+                ## {section}
+                This report provides a comprehensive analysis of {research_data['topic']}.
+                Key findings include: {research_data['findings'][:100]}...
+                """
+            elif "Introduction" in section:
+                section_content = f"""
+                ## {section}
+                {research_data['topic']} represents a critical area of study.
+                This analysis draws from {len(research_data['sources'])} sources.
+                """
             else:
-                content_sections.append(
-                    f"## {section}\n\n[Content for {section} would be generated here]"
-                )
+                section_content = f"""
+                ## {section}
+                [Content for {section} would be generated based on research findings]
+                """
 
-        return "\n\n".join(content_sections)
+            content_sections.append(section_content)
 
-    @noveum_trace.trace_tool
+        return "\n".join(content_sections)
+
+    @noveum_trace.trace_tool(tool_name="content_editor", tool_type="writing")
     def _review_and_edit(self, content: str) -> str:
-        """Review and edit the content."""
+        """Review and edit the generated content."""
         time.sleep(0.2)
 
-        # Simulate editing process
+        # Mock editing process
         edited_content = content.replace("[Content for", "Detailed analysis for")
-        edited_content += "\n\n---\n*Report generated by AI Agent System*"
+        edited_content += "\n\n## Conclusion\nThis analysis provides valuable insights into the topic."
 
         return edited_content
 
 
 class CoordinatorAgent:
-    """Coordinator agent that manages other agents."""
+    """Agent that coordinates other agents."""
 
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
-        self.sub_agents = {}
-        self.task_queue = []
 
-    @noveum_trace.trace_agent(agent_id="coordinator")
+    @noveum_trace.trace_agent(agent_id="coordinator_main")
     def coordinate_research_project(self, topic: str) -> dict[str, Any]:
-        """Coordinate a complete research project."""
+        """Coordinate a multi-agent research project."""
 
         # Initialize sub-agents
         researcher = ResearchAgent("researcher_001")
@@ -231,12 +239,12 @@ class CoordinatorAgent:
             "report": report,
             "quality_score": quality_score,
             "completion_time": time.time(),
-            "agents_involved": ["coordinator", "researcher_001", "writer_001"],
+            "agents_involved": ["coordinator_main", "researcher_001", "writer_001"],
         }
 
         return project_result
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="message_sender", tool_type="communication")
     def _send_agent_message(self, message: AgentMessage) -> bool:
         """Send a message between agents."""
         time.sleep(0.05)  # Simulate message passing delay
@@ -246,7 +254,7 @@ class CoordinatorAgent:
 
         return True
 
-    @noveum_trace.trace_tool
+    @noveum_trace.trace_tool(tool_name="quality_assessor", tool_type="analysis")
     def _assess_quality(self, research_data: dict[str, Any], report: str) -> float:
         """Assess the quality of the completed work."""
         time.sleep(0.1)
@@ -304,8 +312,7 @@ def main():
     )
 
     # Flush traces
-    client = noveum_trace.get_client()
-    client.flush()
+    noveum_trace.flush()
 
     print("\n✅ Demo completed! Traces have been sent to Noveum platform.")
     print("🔍 Check your Noveum dashboard to view the complete agent workflow trace.")
