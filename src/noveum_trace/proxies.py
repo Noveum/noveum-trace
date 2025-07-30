@@ -83,8 +83,7 @@ class TracedCompletions:
             # Capture input attributes
             if self._trace_config.get("capture_inputs", True):
                 messages = kwargs.get("messages", [])
-                max_length = self._trace_config.get("max_input_length", 2000)
-                span.set_attribute("llm.messages", str(messages)[:max_length])
+                span.set_attribute("llm.messages", str(messages))
 
             # Make the actual call
             response = self._original_completions.create(**kwargs)
@@ -101,9 +100,8 @@ class TracedCompletions:
                     )
 
                 if hasattr(response, "choices") and response.choices:
-                    max_output = self._trace_config.get("max_output_length", 2000)
                     content = response.choices[0].message.content
-                    span.set_attribute("llm.response", content[:max_output])
+                    span.set_attribute("llm.response", content)
 
             return response
 
@@ -188,7 +186,7 @@ class TracedImages:
                 prompt = kwargs.get("prompt", "")
                 span.set_attributes(
                     {
-                        "image.prompt": prompt[:500],  # Truncate prompt
+                        "image.prompt": prompt,
                         "image.size": kwargs.get("size", "unknown"),
                         "image.quality": kwargs.get("quality", "standard"),
                         "image.n": kwargs.get("n", 1),
@@ -262,7 +260,7 @@ class TracedSpeech:
                 input_text = kwargs.get("input", "")
                 span.set_attributes(
                     {
-                        "audio.input_text": input_text[:500],  # Truncate text
+                        "audio.input_text": input_text,
                         "audio.voice": kwargs.get("voice", "unknown"),
                         "audio.response_format": kwargs.get("response_format", "mp3"),
                     }
@@ -316,10 +314,7 @@ class TracedTranscriptions:
             # Capture output attributes
             if self._trace_config.get("capture_outputs", True):
                 if hasattr(response, "text"):
-                    max_output = self._trace_config.get("max_output_length", 2000)
-                    span.set_attribute(
-                        "audio.transcription", response.text[:max_output]
-                    )
+                    span.set_attribute("audio.transcription", response.text)
 
             return response
 
@@ -404,19 +399,15 @@ class TracedAgentProxy:
 
                         # Capture specific arguments if configured
                         if self._trace_config.get("capture_args", False) and args:
-                            max_length = self._trace_config.get("max_input_length", 500)
-                            for i, arg in enumerate(args[:3]):  # Limit to first 3 args
-                                span.set_attribute(
-                                    f"agent.arg{i}", str(arg)[:max_length]
-                                )
+                            for i, arg in enumerate(args):
+                                span.set_attribute(f"agent.arg{i}", str(arg))
 
                     # Call the original method
                     result = method(*args, **kwargs)
 
                     # Capture output attributes if configured
                     if self._trace_config.get("capture_outputs", True):
-                        max_length = self._trace_config.get("max_output_length", 500)
-                        span.set_attribute("agent.result", str(result)[:max_length])
+                        span.set_attribute("agent.result", str(result))
 
                     return result
 
@@ -478,10 +469,9 @@ class TracedLangChainLLM:
             try:
                 # Capture input attributes
                 if self._trace_config.get("capture_inputs", True):
-                    max_length = self._trace_config.get("max_input_length", 2000)
                     span.set_attributes(
                         {
-                            "llm.prompt": str(prompt)[:max_length],
+                            "llm.prompt": str(prompt),
                             "llm.args_count": len(args),
                             "llm.kwargs_count": len(kwargs),
                         }
@@ -492,8 +482,7 @@ class TracedLangChainLLM:
 
                 # Capture output attributes
                 if self._trace_config.get("capture_outputs", True):
-                    max_length = self._trace_config.get("max_output_length", 2000)
-                    span.set_attribute("llm.response", str(result)[:max_length])
+                    span.set_attribute("llm.response", str(result))
 
                 return result
 

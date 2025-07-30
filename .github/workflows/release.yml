@@ -40,6 +40,8 @@ jobs:
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
+        NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
   build:
     needs: test

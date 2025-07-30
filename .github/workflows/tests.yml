@@ -43,10 +43,9 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Run integration tests only on main branch pushes
+  # Run integration tests on all PRs and pushes
   integration-test:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [unit-test]
     steps:
     - uses: actions/checkout@v4
@@ -67,6 +66,8 @@ jobs:
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
+        NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5

@@ -149,12 +149,9 @@ class OpenAIInstrumentation(BaseInstrumentation):
                         if self.config.get("capture_inputs", True):
                             messages = kwargs.get("messages", [])
                             if messages:
-                                # Truncate messages for storage
-                                max_length = self.config.get("max_input_length", 2000)
-                                messages_str = str(messages)[:max_length]
                                 span.set_attributes(
                                     {
-                                        "llm.messages": messages_str,
+                                        "llm.messages": str(messages),
                                         "llm.message_count": len(messages),
                                     }
                                 )
@@ -175,12 +172,7 @@ class OpenAIInstrumentation(BaseInstrumentation):
 
                             if hasattr(response, "choices") and response.choices:
                                 content = response.choices[0].message.content
-                                max_output_length = self.config.get(
-                                    "max_output_length", 2000
-                                )
-                                span.set_attribute(
-                                    "llm.response", content[:max_output_length]
-                                )
+                                span.set_attribute("llm.response", content)
 
                         # Calculate cost if configured
                         if self.config.get("calculate_cost", False):
@@ -291,7 +283,7 @@ class OpenAIInstrumentation(BaseInstrumentation):
                             prompt = kwargs.get("prompt", "")
                             span.set_attributes(
                                 {
-                                    "image.prompt": prompt[:500],  # Truncate prompt
+                                    "image.prompt": prompt,
                                     "image.size": kwargs.get("size", "unknown"),
                                     "image.quality": kwargs.get("quality", "standard"),
                                     "image.n": kwargs.get("n", 1),
@@ -391,7 +383,7 @@ class AnthropicInstrumentation(BaseInstrumentation):
                             messages = kwargs.get("messages", [])
                             span.set_attributes(
                                 {
-                                    "llm.messages": str(messages)[:2000],
+                                    "llm.messages": str(messages),
                                     "llm.message_count": len(messages),
                                 }
                             )
@@ -404,7 +396,7 @@ class AnthropicInstrumentation(BaseInstrumentation):
                             # Adapt based on actual Anthropic response structure
                             if hasattr(response, "content"):
                                 span.set_attribute(
-                                    "llm.response", str(response.content)[:2000]
+                                    "llm.response", str(response.content)
                                 )
 
                         span.set_status(SpanStatus.OK)
@@ -611,15 +603,11 @@ def get_default_config(library: str) -> dict[str, Any]:
         "openai": {
             "capture_inputs": True,
             "capture_outputs": True,
-            "max_input_length": 2000,
-            "max_output_length": 2000,
             "calculate_cost": False,
         },
         "anthropic": {
             "capture_inputs": True,
             "capture_outputs": True,
-            "max_input_length": 2000,
-            "max_output_length": 2000,
         },
         "langchain": {
             "capture_inputs": True,
@@ -628,7 +616,7 @@ def get_default_config(library: str) -> dict[str, Any]:
         },
     }
 
-    return defaults.get(library, {})  # type: ignore
+    return defaults.get(library, {})
 
 
 def create_production_config() -> dict[str, dict[str, Any]]:
@@ -642,13 +630,11 @@ def create_production_config() -> dict[str, dict[str, Any]]:
         "openai": {
             "capture_inputs": False,  # Reduce overhead
             "capture_outputs": True,
-            "max_output_length": 500,
             "calculate_cost": True,
         },
         "anthropic": {
             "capture_inputs": False,
             "capture_outputs": True,
-            "max_output_length": 500,
         },
         "langchain": {
             "capture_inputs": False,

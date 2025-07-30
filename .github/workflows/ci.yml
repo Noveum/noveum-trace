@@ -143,9 +143,10 @@ jobs:
         INTEGRATION_TESTS: "true"
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
+        NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
     - name: Upload coverage reports to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}

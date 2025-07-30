@@ -825,23 +825,18 @@ def extract_prompt_template_variables(prompt: str) -> list[str]:
     return [var.strip() for var in variables]
 
 
-def sanitize_llm_content(content: str, max_length: int = 1000) -> str:
+def sanitize_llm_content(content: str) -> str:
     """
     Sanitize LLM content for safe logging.
 
     Args:
         content: Content to sanitize
-        max_length: Maximum length of content
 
     Returns:
         Sanitized content
     """
     if not isinstance(content, str):
         content = str(content)
-
-    # Truncate if too long
-    if len(content) > max_length:
-        content = content[: max_length - 3] + "..."
 
     # Remove or mask sensitive patterns
     patterns = [
