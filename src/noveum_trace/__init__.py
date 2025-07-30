@@ -36,7 +36,7 @@ Example:
     >>> response = openai_client.chat.completions.create(...)
 """
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"

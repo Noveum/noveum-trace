@@ -29,6 +29,7 @@ import noveum_trace
 
 # Test endpoints - configurable via environment
 ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
+ENDPOINT = "http://localhost:3000/api"
 API_KEY = os.environ.get("NOVEUM_API_KEY", "test-api-key")
 
 # LLM Provider API Keys
