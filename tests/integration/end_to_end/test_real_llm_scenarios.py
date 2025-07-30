@@ -10,7 +10,6 @@ NO MOCKING - All tests use real API calls and validate traces via GET requests.
 
 import json
 import os
-import threading
 import time
 from typing import Any, Optional
 
@@ -29,15 +28,14 @@ except ImportError:
 import noveum_trace
 
 # Test endpoints - configurable via environment
-# ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
-ENDPOINT = "https://api.noveum.ai/api"
+ENDPOINT = os.environ.get("NOVEUM_ENDPOINT", "https://api.noveum.ai/api")
 API_KEY = os.environ.get("NOVEUM_API_KEY", "test-api-key")
 
 # LLM Provider API Keys
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-# Import real clients
+# Import real clients>
 try:
     import openai
 
@@ -126,14 +124,33 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
                 # Check if we have actual trace data
                 if "trace" in trace_data:
                     trace = trace_data["trace"]
-                    assert (
-                        trace["trace_id"] == trace_id
-                    ), f"Trace ID mismatch: expected {trace_id}, got {trace['trace_id']}"
+                    if trace:  # Ensure trace is not None
+                        assert (
+                            trace["trace_id"] == trace_id
+                        ), f"Trace ID mismatch: expected {trace_id}, got {trace['trace_id']}"
 
-                    print(
-                        f"✅ Successfully validated trace {trace_id} after {retry_count} retries"
-                    )
-                    return trace_data
+                        print(
+                            f"✅ Successfully validated trace {trace_id} after {retry_count} retries"
+                        )
+                        return trace_data
+
+                # Handle new API response format with success/data wrapper
+                elif (
+                    "success" in trace_data
+                    and trace_data["success"]
+                    and "data" in trace_data
+                ):
+                    trace = trace_data["data"]
+                    if trace:  # Ensure trace is not None
+                        assert (
+                            trace["trace_id"] == trace_id
+                        ), f"Trace ID mismatch: expected {trace_id}, got {trace['trace_id']}"
+
+                        print(
+                            f"✅ Successfully validated trace {trace_id} after {retry_count} retries"
+                        )
+                        # Normalize the response format to have "trace" key
+                        return {"trace": trace}
 
                 # If we get status OK but no trace data, the trace might still be processing
                 elif "status" in trace_data and trace_data["status"] == "ok":
@@ -218,20 +235,15 @@ LLM_MODELS = [
 @pytest.fixture(autouse=True)
 def setup_noveum_trace():
     """Setup noveum trace for each test."""
-    # Generate unique project name for this test run
-    project_name = (
-        f"integration-test-{int(time.time())}-{id(threading.current_thread())}"
-    )
-
     # Ensure clean state
     noveum_trace.shutdown()
 
     # Initialize with optimized transport settings for integration tests
     noveum_trace.init(
-        project=project_name,
+        project="noveum-trace-python",
         api_key=API_KEY,
         endpoint=ENDPOINT,
-        environment="test",
+        environment="git-integ-test",
         transport_config={
             "batch_size": 1,  # Send traces immediately
             "batch_timeout": 0.1,  # Very short timeout for faster tests

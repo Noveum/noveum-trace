@@ -208,13 +208,12 @@ def trace(
         return decorator(func)
 
 
-def _serialize_value(value: Any, max_length: int = 1000) -> str:
+def _serialize_value(value: Any) -> str:
     """
     Safely serialize a value for tracing.
 
     Args:
         value: Value to serialize
-        max_length: Maximum length of serialized string
 
     Returns:
         Serialized string representation
@@ -226,22 +225,12 @@ def _serialize_value(value: Any, max_length: int = 1000) -> str:
         elif isinstance(value, (str, int, float, bool)):
             result = str(value)
         elif isinstance(value, (list, tuple)):
-            if len(value) <= 10:  # Small collections
-                result = str(value)
-            else:
-                result = f"{type(value).__name__}(length={len(value)})"
+            result = str(value)
         elif isinstance(value, dict):
-            if len(value) <= 10:  # Small dictionaries
-                result = str(value)
-            else:
-                result = f"dict(keys={len(value)})"
+            result = str(value)
         else:
-            # For other types, use repr but limit length
+            # For other types, use repr
             result = repr(value)
-
-        # Truncate if too long
-        if len(result) > max_length:
-            result = result[: max_length - 3] + "..."
 
         return result
 

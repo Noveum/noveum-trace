@@ -24,6 +24,7 @@ def trace_retrieval(
     capture_results: bool = True,
     capture_scores: bool = True,
     capture_metadata: bool = True,
+    max_results: int = 50,
     metadata: Optional[dict[str, Any]] = None,
     tags: Optional[dict[str, str]] = None,
 ) -> Union[Callable[..., Any], Callable[[Callable[..., Any]], Callable[..., Any]]]:
@@ -42,6 +43,7 @@ def trace_retrieval(
         capture_results: Whether to capture retrieval results
         capture_scores: Whether to capture relevance scores
         capture_metadata: Whether to capture result metadata
+        max_results: Maximum number of results to capture (default: 50)
         metadata: Additional metadata to attach to the span
         tags: Tags to add to the span
 
@@ -55,9 +57,10 @@ def trace_retrieval(
         ...     return search_results
 
         >>> @trace_retrieval(
-        ...     "hybrid_search",
+        ...     retrieval_type="hybrid_search",
         ...     capture_scores=True,
-        ...     capture_metadata=True
+        ...     capture_metadata=True,
+        ...     max_results=100
         ... )
         >>> def hybrid_search(query: str, filters: dict) -> list:
         ...     # Hybrid search implementation
@@ -149,6 +152,7 @@ def trace_retrieval(
                             capture_results=capture_results,
                             capture_scores=capture_scores,
                             capture_metadata=capture_metadata,
+                            max_results=max_results,
                         )
                         span.set_attributes(result_data)
                     except Exception as e:
@@ -229,8 +233,21 @@ def _extract_retrieval_results(
     capture_results: bool = True,
     capture_scores: bool = True,
     capture_metadata: bool = True,
+    max_results: int = 50,
 ) -> dict[str, Any]:
-    """Extract retrieval result metadata."""
+    """
+    Extract retrieval result metadata.
+
+    Args:
+        result: The retrieval results to extract metadata from
+        capture_results: Whether to capture the actual result content
+        capture_scores: Whether to capture relevance scores
+        capture_metadata: Whether to capture result metadata
+        max_results: Maximum number of results to capture (default: 50, prevents oversized traces)
+
+    Returns:
+        Dictionary containing extracted metadata
+    """
     result_data: dict[str, Any] = {}
 
     # Basic result information
@@ -240,11 +257,15 @@ def _extract_retrieval_results(
     if isinstance(result, list):
         # Handle list of results
         if capture_results and result:
-            # Capture first few results (limit for performance)
-            sample_results = result[:3]
+            # Capture results with configurable limit to prevent performance issues
             result_data["retrieval.sample_results"] = [
-                _serialize_value(r) for r in sample_results
+                _serialize_value(r) for r in result[:max_results]
             ]
+            if len(result) > max_results:
+                result_data["retrieval.results_truncated"] = True
+                result_data["retrieval.total_results"] = len(result)
+            else:
+                result_data["retrieval.results_truncated"] = False
 
         if capture_scores:
             scores = _extract_scores_from_list(result)
@@ -264,15 +285,20 @@ def _extract_retrieval_results(
         if "results" in result:
             result_data["retrieval.result_count"] = len(result["results"])
             if capture_results:
-                sample_results = result["results"][:3]
+                # Capture results with configurable limit to prevent performance issues
                 result_data["retrieval.sample_results"] = [
-                    _serialize_value(r) for r in sample_results
+                    _serialize_value(r) for r in result["results"][:max_results]
                 ]
+                if len(result["results"]) > max_results:
+                    result_data["retrieval.results_truncated"] = True
+                    result_data["retrieval.total_results"] = len(result["results"])
+                else:
+                    result_data["retrieval.results_truncated"] = False
 
         if capture_scores and "scores" in result:
             scores = result["scores"]
             if scores is not None:
-                result_data["retrieval.scores"] = scores[:10]  # Limit scores
+                result_data["retrieval.scores"] = scores
                 if scores:
                     result_data["retrieval.max_score"] = max(scores)
                     result_data["retrieval.min_score"] = min(scores)
@@ -329,7 +355,7 @@ def _extract_metadata_from_list(results: list[Any]) -> Optional[list[dict[str, A
     """Extract metadata from a list of results."""
     metadata_list = []
 
-    for result in results[:3]:  # Limit to first 3 for performance
+    for result in results:
         if isinstance(result, dict):
             # Extract metadata fields
             metadata = {}

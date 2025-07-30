@@ -759,21 +759,33 @@ class TestDecoratorUtilities:
             assert str(value) in result or repr(value) in result
 
     def test_serialize_value_large_collections(self):
-        """Test _serialize_value with large collections."""
+        """Test _serialize_value with large collections shows full content."""
         large_list = list(range(20))
         result = _serialize_value(large_list)
-        assert "length=20" in result
+        assert result == str(large_list)  # Should show full content, not summary
 
         large_dict = {f"key_{i}": i for i in range(20)}
         result = _serialize_value(large_dict)
-        assert "keys=20" in result
+        assert result == str(large_dict)  # Should show full content, not summary
 
-    def test_serialize_value_max_length(self):
-        """Test _serialize_value respects max length."""
+    def test_serialize_value_no_truncation(self):
+        """Test _serialize_value does not truncate or summarize content."""
+        # Test long strings
         long_string = "x" * 2000
-        result = _serialize_value(long_string, max_length=100)
-        assert len(result) <= 100
-        assert result.endswith("...")
+        result = _serialize_value(long_string)
+        assert len(result) == 2000
+        assert result == long_string
+        assert not result.endswith("...")
+
+        # Test large lists
+        large_list = [f"item_{i}" for i in range(100)]
+        result = _serialize_value(large_list)
+        assert result == str(large_list)
+
+        # Test large dictionaries
+        large_dict = {f"key_{i}": f"value_{i}" for i in range(50)}
+        result = _serialize_value(large_dict)
+        assert result == str(large_dict)
 
     def test_serialize_value_complex_objects(self):
         """Test _serialize_value with complex objects."""

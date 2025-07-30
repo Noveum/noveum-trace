@@ -91,6 +91,81 @@ class HttpTransport:
 
         return url
 
+    def _contains_sensitive_data(self, text: str) -> bool:
+        """
+        Check if response text contains potentially sensitive data.
+
+        Args:
+            text: Response text to check
+
+        Returns:
+            True if sensitive patterns are detected
+        """
+        if not text:
+            return False
+
+        # Convert to lowercase for case-insensitive matching
+        text_lower = text.lower()
+
+        # Common sensitive data patterns
+        sensitive_patterns = [
+            "password",
+            "token",
+            "secret",
+            "key",
+            "credential",
+            "authorization",
+            "bearer",
+            "api_key",
+            "access_token",
+            "private_key",
+            "certificate",
+            "ssn",
+            "social_security",
+            "credit_card",
+            "card_number",
+            "cvv",
+            "pin",
+            "account_number",
+        ]
+
+        # Check for sensitive patterns
+        for pattern in sensitive_patterns:
+            if pattern in text_lower:
+                return True
+
+        return False
+
+    def _get_safe_response_preview(
+        self, response: requests.Response, max_length: Optional[int] = None
+    ) -> Optional[str]:
+        """
+        Get a safe preview of response text for logging.
+
+        Args:
+            response: HTTP response object
+            max_length: Maximum length for preview (default: from config or 1000)
+
+        Returns:
+            Safe preview string or None if no response text
+        """
+        if not response.text:
+            return None
+
+        # Use provided max_length or get from config, with fallback to 1000
+        if max_length is None:
+            max_length = getattr(self.config.transport, "max_response_preview", 1000)
+
+        # Check if response contains sensitive patterns
+        if self._contains_sensitive_data(response.text):
+            return f"<Response contains sensitive data, length: {len(response.text)} chars>"
+
+        # Return truncated version if too long
+        if len(response.text) > max_length:
+            return f"{response.text[:max_length]}... (truncated, total length: {len(response.text)} chars)"
+
+        return response.text
+
     def export_trace(self, trace: Trace) -> None:
         """
         Export a trace to the Noveum platform.
@@ -380,7 +455,7 @@ class HttpTransport:
                     f"Unexpected HTTP status code: {response.status_code}",
                     status=response.status_code,
                     url=url,
-                    response_text=response.text[:500] if response.text else None,
+                    response_text=self._get_safe_response_preview(response),
                 )
                 response.raise_for_status()
                 return response.json()
@@ -458,14 +533,17 @@ class HttpTransport:
                     url,
                     response_headers=dict(response.headers),
                     response_size=len(response.text) if response.text else 0,
-                    response_preview=response.text[:200] if response.text else None,
+                    response_preview=self._get_safe_response_preview(response),
                 )
 
             # Check response
             if response.status_code == 200:
                 logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
-                    logger.debug(f"📋 Full response: {response.text}")
+                    safe_preview = self._get_safe_response_preview(
+                        response, max_length=2000
+                    )
+                    logger.debug(f"📋 Response preview: {safe_preview}")
             elif response.status_code == 401:
                 log_error_always(
                     logger,
@@ -500,7 +578,7 @@ class HttpTransport:
                     status=response.status_code,
                     url=url,
                     trace_count=len(traces),
-                    response_text=response.text[:500] if response.text else None,
+                    response_text=self._get_safe_response_preview(response),
                 )
                 response.raise_for_status()
 
