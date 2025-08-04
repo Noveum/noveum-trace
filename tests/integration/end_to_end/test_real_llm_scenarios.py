@@ -8,7 +8,6 @@ complex agent workflows with actual LLM provider APIs.
 NO MOCKING - All tests use real API calls and validate traces via GET requests.
 """
 
-import json
 import os
 import time
 from typing import Any, Optional
@@ -93,7 +92,7 @@ def get_anthropic_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
+def validate_trace_via_api(trace_id: str, timeout: int = 120) -> dict[str, Any]:
     """
     Validate that a trace was successfully sent by fetching it via GET API.
 
@@ -107,6 +106,11 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
     Raises:
         AssertionError: If trace is not found or validation fails
     """
+    # Calculate retry sleep interval proportional to timeout (min 0.5s, max 2.0s)
+    # For default timeout=120s: RETRY_SLEEP = 6.0s -> capped at 2.0s
+    # Unified across all retry paths to ensure consistent back-off behavior
+    RETRY_SLEEP = max(0.5, min(2.0, timeout / 20))
+
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
     url = f"{ENDPOINT.rstrip('/')}/v1/traces/{trace_id}"
@@ -158,14 +162,14 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
                         f"⏳ Trace {trace_id} acknowledged but data not yet available (attempt {retry_count})"
                     )
                     retry_count += 1
-                    time.sleep(0.2)
+                    time.sleep(RETRY_SLEEP)
                     continue
 
                 # If response format is unexpected, log and retry
                 else:
                     print(f"⚠️  Unexpected response format: {trace_data}")
                     retry_count += 1
-                    time.sleep(0.2)
+                    time.sleep(RETRY_SLEEP)
                     continue
 
             elif response.status_code == 404:
@@ -173,7 +177,7 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
                 retry_count += 1
                 if retry_count % 5 == 0:  # Log every 5 retries
                     print(f"⏳ Waiting for trace {trace_id}... (attempt {retry_count})")
-                time.sleep(0.2)
+                time.sleep(RETRY_SLEEP)
                 continue
             elif response.status_code == 401:
                 pytest.fail(
@@ -191,7 +195,7 @@ def validate_trace_via_api(trace_id: str, timeout: int = 2) -> dict[str, Any]:
         except requests.RequestException as e:
             if "timeout" in str(e).lower():
                 print(f"⚠️  Request timeout, retrying... ({retry_count})")
-                time.sleep(0.2)
+                time.sleep(RETRY_SLEEP)
                 continue
             pytest.fail(f"API request failed: {e}")
 
@@ -344,7 +348,10 @@ class TestRealLLMBasicScenarios:
 
         # Flush and validate trace
         noveum_trace.flush()
-        # Removed sleep - batch_size=1 sends traces immediately
+
+        # Give backend time to process the trace
+        print(f"⏱️  Waiting 5 seconds for backend to process {trace_id}...")
+        time.sleep(5)
 
         # Validate trace using the captured ID
         assert trace_id is not None, "Trace ID should have been captured"
@@ -352,6 +359,7 @@ class TestRealLLMBasicScenarios:
 
         # Validate trace structure
         trace = trace_data["trace"]
+
         assert (
             trace["status"] == "ok"
         ), f"Trace status should be 'ok', got: {trace['status']}"
@@ -367,7 +375,9 @@ class TestRealLLMBasicScenarios:
                 llm_span = span
                 break
 
-        assert llm_span is not None, f"Should have LLM span with provider {provider}"
+        assert (
+            llm_span is not None
+        ), f"Should have LLM span with provider {provider}. Available spans: {[s.get('name', 'unnamed') for s in spans]}"
         assert llm_span["attributes"]["llm.model"] == model_name
         assert llm_span["attributes"]["llm.provider"] == provider
         assert "llm.usage.total_tokens" in llm_span["attributes"]
@@ -401,6 +411,8 @@ class TestRealLLMFunctionCalling:
             }
 
             if current_span:
+                import json
+
                 current_span.set_attribute("tool.result", json.dumps(weather_data))
                 current_span.set_attribute("tool.success", True)
 
@@ -458,6 +470,8 @@ class TestRealLLMFunctionCalling:
 
                 for tool_call in message.tool_calls:
                     if tool_call.function.name == "get_weather":
+                        import json
+
                         function_args = json.loads(tool_call.function.arguments)
                         function_response = get_weather(function_args["location"])
 
@@ -506,7 +520,10 @@ class TestRealLLMFunctionCalling:
 
         # Flush and validate traces
         noveum_trace.flush()
-        # Removed sleep - batch_size=1 sends traces immediately
+
+        # Give backend time to process function calling traces with multiple spans
+        print(f"⏱️  Waiting 8 seconds for backend to process {trace_id}...")
+        time.sleep(8)
 
         # Validate trace using the captured ID
         assert trace_id is not None, "Trace ID should have been captured"
@@ -517,6 +534,23 @@ class TestRealLLMFunctionCalling:
 
         # Should have both LLM and tool spans
         spans = trace["spans"]
+
+        # If spans array is empty but span_count > 0, this is a backend issue - FAIL the test with details
+        if trace["span_count"] > 0 and len(spans) == 0:
+            print("\n🚨 BACKEND API FAILURE DETECTED:")
+            print("    Model: openai gpt-4o-mini (function calling)")
+            print(f"    Trace ID: {trace_id}")
+            print(f"    Expected spans: {trace['span_count']}")
+            print(f"    Actual spans returned: {len(spans)}")
+            print("    Full backend response:")
+            import json
+
+            print(json.dumps(trace_data, indent=2, default=str))
+
+            pytest.fail(
+                f"BACKEND API BUG: span_count={trace['span_count']} but spans array is empty! "
+                f"Backend failed to return stored spans for trace {trace_id}"
+            )
         llm_spans = [
             s for s in spans if s["attributes"].get("llm.provider") == "openai"
         ]
@@ -571,6 +605,8 @@ class TestRealAgentScenarios:
 
             if current_span:
                 current_span.set_attribute("agent.completed_steps", 3)
+                import json
+
                 current_span.set_attribute(
                     "research.result_size", len(json.dumps(workflow_result))
                 )
@@ -851,7 +887,10 @@ Provide a 2-3 sentence executive summary that captures the key insights."""
 
         # Flush and validate comprehensive trace
         noveum_trace.flush()
-        # Removed sleep - batch_size=1 sends traces immediately
+
+        # Give backend additional time to process complex traces with multiple spans
+        print(f"⏱️  Waiting 10 seconds for backend to process {trace_id}...")
+        time.sleep(10)
 
         # Validate trace using the captured ID
         assert trace_id is not None, "Trace ID should have been captured"
@@ -863,8 +902,26 @@ Provide a 2-3 sentence executive summary that captures the key insights."""
 
         spans = trace["spans"]
 
+        # If spans array is empty but span_count > 0, this is a backend issue - FAIL the test with details
+        if trace["span_count"] > 0 and len(spans) == 0:
+            print("\n🚨 BACKEND API FAILURE DETECTED:")
+            print(f"    Model: {provider} {model_name}")
+            print(f"    Trace ID: {trace_id}")
+            print(f"    Expected spans: {trace['span_count']}")
+            print(f"    Actual spans returned: {len(spans)}")
+            print("    Full backend response:")
+            import json
+
+            print(json.dumps(trace_data, indent=2, default=str))
+
+            pytest.fail(
+                f"BACKEND API BUG: span_count={trace['span_count']} but spans array is empty! "
+                f"Backend failed to return stored spans for trace {trace_id}"
+            )
+
         # Validate agent spans exist
         agent_spans = [s for s in spans if "agent.id" in s["attributes"]]
+
         assert (
             len(agent_spans) >= 3
         ), f"Should have at least 3 agent spans, got {len(agent_spans)}"
