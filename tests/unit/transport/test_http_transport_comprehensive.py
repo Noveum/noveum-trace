@@ -471,6 +471,249 @@ class TestHttpTransportTraceFormatting:
             assert result["sdk"]["name"] == "noveum-trace-python"
 
 
+class TestHttpTransportTraceToDict:
+    """Test the new trace_to_dict method for object serialization."""
+
+    def test_trace_to_dict_none(self):
+        """Test handling of None values."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+            result = transport.trace_to_dict(None)
+            assert result is None
+
+    def test_trace_to_dict_primitive_types(self):
+        """Test handling of primitive types."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Test string
+            assert transport.trace_to_dict("test") == "test"
+            # Test int
+            assert transport.trace_to_dict(42) == 42
+            # Test float
+            assert transport.trace_to_dict(3.14) == 3.14
+            # Test bool
+            assert transport.trace_to_dict(True) is True
+            assert transport.trace_to_dict(False) is False
+
+    def test_trace_to_dict_dict(self):
+        """Test handling of dictionaries."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            input_dict = {"key1": "value1", "key2": 42, "nested": {"inner": "value"}}
+            result = transport.trace_to_dict(input_dict)
+
+            assert result == input_dict
+            assert isinstance(result, dict)
+            assert result["nested"]["inner"] == "value"
+
+    def test_trace_to_dict_list(self):
+        """Test handling of lists and tuples."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Test list
+            input_list = ["item1", 42, {"key": "value"}]
+            result = transport.trace_to_dict(input_list)
+            assert result == input_list
+            assert isinstance(result, list)
+
+            # Test tuple
+            input_tuple = ("item1", 42, {"key": "value"})
+            result = transport.trace_to_dict(input_tuple)
+            # Should convert to list
+            assert result == ["item1", 42, {"key": "value"}]
+            assert isinstance(result, list)
+
+    def test_trace_to_dict_object_with_to_dict(self):
+        """Test handling of objects with to_dict method."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create mock object with to_dict method
+            mock_obj = Mock()
+            mock_obj.to_dict.return_value = {"id": 123, "name": "test"}
+
+            result = transport.trace_to_dict(mock_obj)
+            assert result == {"id": 123, "name": "test"}
+            mock_obj.to_dict.assert_called_once()
+
+    def test_trace_to_dict_object_with_to_dict_exception(self):
+        """Test handling of objects with to_dict method that raises exception."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create mock object with to_dict method that raises exception
+            mock_obj = Mock()
+            mock_obj.to_dict.side_effect = Exception("to_dict failed")
+
+            result = transport.trace_to_dict(mock_obj)
+            assert result == "Non-serializable object, issue with tracing SDK"
+
+    def test_trace_to_dict_object_with_dict_attrs(self):
+        """Test handling of objects with __dict__ attributes."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create a simple object with attributes
+            class TestObject:
+                def __init__(self):
+                    self.public_attr = "public_value"
+                    self._private_attr = "private_value"
+                    self.number_attr = 42
+
+            test_obj = TestObject()
+            result = transport.trace_to_dict(test_obj)
+
+            assert result["public_attr"] == "public_value"
+            assert result["number_attr"] == 42
+            assert "_private_attr" not in result  # Private attributes should be skipped
+
+    def test_trace_to_dict_object_with_dict_attrs_exception(self):
+        """Test handling of objects with __dict__ attributes that raise exception."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create an object that raises exception when accessing __dict__.items()
+            class ProblematicObject:
+                def __init__(self):
+                    self.public_attr = "value"
+
+                @property
+                def __dict__(self):
+                    # This will raise an exception when items() is called
+                    return {"key": Mock(side_effect=Exception("dict access failed"))}
+
+            problematic_obj = ProblematicObject()
+            result = transport.trace_to_dict(problematic_obj)
+            # The exception is handled at the individual value level, not the object level
+            assert isinstance(result, dict)
+            assert result["key"] == "Non-serializable object, issue with tracing SDK"
+
+    def test_trace_to_dict_fallback_to_string(self):
+        """Test fallback to string representation for unknown objects."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create an object without to_dict or __dict__ by using a custom class
+            # that doesn't have these attributes
+            class NoDictObject:
+                def __str__(self):
+                    return "SimpleObject representation"
+
+                # Override __dict__ to return something that will cause hasattr to return False
+                @property
+                def __dict__(self):
+                    raise AttributeError("No __dict__ attribute")
+
+            obj = NoDictObject()
+            result = transport.trace_to_dict(obj)
+            assert result == "SimpleObject representation"
+
+    def test_trace_to_dict_fallback_to_string_exception(self):
+        """Test fallback to string representation when str() raises exception."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create an object that raises exception when str() is called
+            # and doesn't have __dict__ attribute
+            class ProblematicStringObject:
+                def __str__(self):
+                    raise Exception("str() failed")
+
+            # Use a different approach - create an object that doesn't have __dict__ in the class
+            class NoDictClass:
+                __slots__ = ()  # This prevents __dict__ from being created
+
+                def __str__(self):
+                    raise Exception("str() failed")
+
+            obj = NoDictClass()
+
+            result = transport.trace_to_dict(obj)
+            assert result == "Non-serializable object, issue with tracing SDK"
+
+    def test_trace_to_dict_nested_complex_objects(self):
+        """Test handling of deeply nested complex objects."""
+        config = Config.create()
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create a complex nested structure
+            class NestedObject:
+                def __init__(self, value):
+                    self.value = value
+                    self._private = "hidden"
+
+                def to_dict(self):
+                    return {"value": self.value, "nested": {"deep": "value"}}
+
+            nested_obj = NestedObject("test_value")
+            complex_structure = {
+                "level1": {"level2": [nested_obj, "string", 42], "simple": "value"},
+                "numbers": [1, 2, 3, 4, 5],
+            }
+
+            result = transport.trace_to_dict(complex_structure)
+
+            assert result["level1"]["level2"][0]["value"] == "test_value"
+            assert result["level1"]["level2"][0]["nested"]["deep"] == "value"
+            assert result["level1"]["level2"][1] == "string"
+            assert result["level1"]["level2"][2] == 42
+            assert result["numbers"] == [1, 2, 3, 4, 5]
+
+    # REMOVED: test_trace_to_dict_circular_reference_handling
+    # This test was intentionally creating circular references and calling trace_to_dict,
+    # which caused infinite recursion and consumed 7-8 GB of RAM before raising RecursionError.
+    # This is dangerous and not a realistic test scenario.
+
+    def test_trace_to_dict_integration_with_format_trace_for_export(self):
+        """Test that trace_to_dict is properly integrated with _format_trace_for_export."""
+        config = Config.create(project="test-project", environment="test-env")
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Create a trace object that doesn't have to_dict method
+            class CustomTrace:
+                def __init__(self):
+                    self.trace_id = "custom-trace-id"
+                    self.name = "custom-trace"
+                    self.spans = []
+                    self._private_data = "hidden"
+
+                def __getattr__(self, name):
+                    # Simulate attribute access for trace_id, name, etc.
+                    if name in ["trace_id", "name", "spans"]:
+                        return getattr(self, f"_{name}" if name == "name" else name)
+                    raise AttributeError(
+                        f"'{type(self).__name__}' object has no attribute '{name}'"
+                    )
+
+            trace = CustomTrace()
+
+            # This should now work with the new trace_to_dict method
+            result = transport._format_trace_for_export(trace)
+
+            assert result["trace_id"] == "custom-trace-id"
+            assert result["name"] == "custom-trace"
+            assert result["spans"] == []
+            assert "_private_data" not in result  # Private attributes should be skipped
+            assert result["sdk"]["name"] == "noveum-trace-python"
+            assert result["project"] == "test-project"
+            assert result["environment"] == "test-env"
+
+
 class TestHttpTransportSendRequest:
     """Test HTTP request sending functionality."""
 

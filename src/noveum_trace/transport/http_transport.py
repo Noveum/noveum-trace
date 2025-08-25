@@ -354,6 +354,46 @@ class HttpTransport:
 
         return session
 
+    def trace_to_dict(self, obj: Any) -> Any:
+        """
+        Recursively convert objects to JSON-serializable dictionaries.
+
+        Args:
+            obj: Object to convert
+
+        Returns:
+            JSON-serializable representation of the object
+        """
+        if obj is None:
+            return None
+        elif isinstance(obj, (str, int, float, bool)):
+            return obj
+        elif isinstance(obj, dict):
+            return {key: self.trace_to_dict(value) for key, value in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self.trace_to_dict(item) for item in obj]
+        elif hasattr(obj, "to_dict") and callable(obj.to_dict):
+            try:
+                return self.trace_to_dict(obj.to_dict())
+            except Exception:
+                return "Non-serializable object, issue with tracing SDK"
+        elif hasattr(obj, "__dict__"):
+            try:
+                # Extract attributes from object
+                attrs = {}
+                for key, value in obj.__dict__.items():
+                    if not key.startswith("_"):  # Skip private attributes
+                        attrs[key] = self.trace_to_dict(value)
+                return attrs
+            except Exception:
+                return "Non-serializable object, issue with tracing SDK"
+        else:
+            try:
+                # Try to convert to string representation
+                return str(obj)
+            except Exception:
+                return "Non-serializable object, issue with tracing SDK"
+
     def _format_trace_for_export(self, trace: Trace) -> dict[str, Any]:
         """
         Format trace data for export to Noveum platform.
@@ -366,7 +406,7 @@ class HttpTransport:
         """
         log_trace_flow(logger, "Formatting trace for export", trace_id=trace.trace_id)
 
-        trace_data = trace.to_dict()
+        trace_data = self.trace_to_dict(trace)
 
         # Add SDK metadata
         trace_data["sdk"] = {
