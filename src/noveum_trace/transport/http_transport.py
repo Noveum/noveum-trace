@@ -63,13 +63,10 @@ class HttpTransport:
             logger.debug("🔧 Transport configuration:")
             logger.debug(f"    endpoint: {self.config.transport.endpoint}")
             logger.debug(f"    timeout: {self.config.transport.timeout}s")
-            logger.debug(
-                f"    retry_attempts: {self.config.transport.retry_attempts}")
+            logger.debug(f"    retry_attempts: {self.config.transport.retry_attempts}")
             logger.debug(f"    batch_size: {self.config.transport.batch_size}")
-            logger.debug(
-                f"    batch_timeout: {self.config.transport.batch_timeout}s")
-            logger.debug(
-                f"    compression: {self.config.transport.compression}")
+            logger.debug(f"    batch_timeout: {self.config.transport.batch_timeout}s")
+            logger.debug(f"    compression: {self.config.transport.compression}")
 
     def _get_sdk_version(self) -> str:
         """Get the SDK version."""
@@ -157,8 +154,7 @@ class HttpTransport:
 
         # Use provided max_length or get from config, with fallback to 1000
         if max_length is None:
-            max_length = getattr(self.config.transport,
-                                 "max_response_preview", 1000)
+            max_length = getattr(self.config.transport, "max_response_preview", 1000)
 
         # Check if response contains sensitive patterns
         if self._contains_sensitive_data(response.text):
@@ -233,14 +229,12 @@ class HttpTransport:
             logger.debug(f"    keys: {list(trace_data.keys())}")
             logger.debug(f"    sdk_info: {trace_data.get('sdk', {})}")
             logger.debug(f"    project: {trace_data.get('project', 'None')}")
-            logger.debug(
-                f"    environment: {trace_data.get('environment', 'None')}")
+            logger.debug(f"    environment: {trace_data.get('environment', 'None')}")
 
         # Add to batch processor
         try:
             self.batch_processor.add_trace(trace_data)
-            logger.info(
-                f"✅ Trace {trace.trace_id} successfully queued for export")
+            logger.info(f"✅ Trace {trace.trace_id} successfully queued for export")
         except Exception as e:
             log_error_always(
                 logger,
@@ -354,10 +348,8 @@ class HttpTransport:
 
         if log_debug_enabled():
             logger.debug("🔄 HTTP session configured:")
-            logger.debug(
-                f"    retry_attempts: {self.config.transport.retry_attempts}")
-            logger.debug(
-                f"    retry_backoff: {self.config.transport.retry_backoff}")
+            logger.debug(f"    retry_attempts: {self.config.transport.retry_attempts}")
+            logger.debug(f"    retry_backoff: {self.config.transport.retry_backoff}")
             logger.debug(f"    headers: {dict(session.headers)}")
 
         return session
@@ -380,17 +372,17 @@ class HttpTransport:
             return {key: self.trace_to_dict(value) for key, value in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [self.trace_to_dict(item) for item in obj]
-        elif hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+        elif hasattr(obj, "to_dict") and callable(obj.to_dict):
             try:
                 return self.trace_to_dict(obj.to_dict())
             except Exception:
                 return "Non-serializable object, issue with tracing SDK"
-        elif hasattr(obj, '__dict__'):
+        elif hasattr(obj, "__dict__"):
             try:
                 # Extract attributes from object
                 attrs = {}
                 for key, value in obj.__dict__.items():
-                    if not key.startswith('_'):  # Skip private attributes
+                    if not key.startswith("_"):  # Skip private attributes
                         attrs[key] = self.trace_to_dict(value)
                 return attrs
             except Exception:
@@ -412,8 +404,7 @@ class HttpTransport:
         Returns:
             Formatted trace data
         """
-        log_trace_flow(logger, "Formatting trace for export",
-                       trace_id=trace.trace_id)
+        log_trace_flow(logger, "Formatting trace for export", trace_id=trace.trace_id)
 
         trace_data = self.trace_to_dict(trace)
 
@@ -475,8 +466,7 @@ class HttpTransport:
 
             # Check response
             if response.status_code == 200:
-                logger.debug(
-                    f"Successfully sent trace: {trace_data.get('trace_id')}")
+                logger.debug(f"Successfully sent trace: {trace_data.get('trace_id')}")
                 return response.json()
             elif response.status_code == 401:
                 log_error_always(
@@ -493,8 +483,7 @@ class HttpTransport:
                     status=response.status_code,
                     url=url,
                 )
-                raise TransportError(
-                    "Access forbidden - check project permissions")
+                raise TransportError("Access forbidden - check project permissions")
             elif response.status_code == 429:
                 log_error_always(
                     logger, "Rate limit exceeded", status=response.status_code, url=url
@@ -575,8 +564,7 @@ class HttpTransport:
             )
 
             # Log response details
-            logger.info(
-                f"📡 HTTP RESPONSE: Status {response.status_code} from {url}")
+            logger.info(f"📡 HTTP RESPONSE: Status {response.status_code} from {url}")
 
             if log_debug_enabled():
                 log_http_response(
@@ -590,8 +578,7 @@ class HttpTransport:
 
             # Check response
             if response.status_code == 200:
-                logger.info(
-                    f"✅ Successfully sent batch of {len(traces)} traces")
+                logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
                     safe_preview = self._get_safe_response_preview(
                         response, max_length=2000
@@ -614,8 +601,7 @@ class HttpTransport:
                     url=url,
                     trace_count=len(traces),
                 )
-                raise TransportError(
-                    "Access forbidden - check project permissions")
+                raise TransportError("Access forbidden - check project permissions")
             elif response.status_code == 429:
                 log_error_always(
                     logger,
@@ -689,8 +675,7 @@ class HttpTransport:
         # For now, just return the payload as-is
         # In the future, we could implement gzip compression
         if log_debug_enabled():
-            logger.debug(
-                "🗜️  Payload compression requested but not implemented yet")
+            logger.debug("🗜️  Payload compression requested but not implemented yet")
         return payload
 
     def health_check(self) -> bool:
