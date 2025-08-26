@@ -26,7 +26,6 @@ from openai import OpenAI
 
 # Initialize Noveum Trace SDK
 import noveum_trace
-from noveum_trace.auto_instrument import auto_instrument, uninstrument
 
 # Import the new flexible tracing approaches
 from noveum_trace.context_managers import trace_llm, trace_operation
@@ -168,47 +167,7 @@ def process_user_query_with_context_manager(user_query: str) -> dict[str, Any]:
 
 
 # =============================================================================
-# APPROACH 2: AUTO-INSTRUMENTATION
-# =============================================================================
-
-
-def process_with_auto_instrumentation():
-    """
-    Demonstrate auto-instrumentation of OpenAI calls.
-
-    This approach allows tracing without any code changes to existing functions.
-    """
-    print("\nDemonstrating auto-instrumentation...")
-
-    # Enable auto-instrumentation for OpenAI
-    auto_instrument(
-        "openai",
-        {"capture_inputs": True, "capture_outputs": True, "max_input_length": 1000},
-    )
-
-    try:
-        # This call will be automatically traced without any decorators or context managers
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What are the benefits of tracing LLM applications?",
-                }
-            ],
-        )
-
-        print(
-            f"Auto-instrumented response: {response.choices[0].message.content[:50]}..."
-        )
-
-    finally:
-        # Remove instrumentation when done
-        uninstrument("openai")
-
-
-# =============================================================================
-# APPROACH 3: MANUAL SPAN CREATION
+# APPROACH 2: MANUAL SPAN CREATION
 # =============================================================================
 
 
@@ -293,7 +252,7 @@ def legacy_function_with_manual_spans(query: str):
 
 
 # =============================================================================
-# APPROACH 4: MIXED APPROACH FOR COMPLEX WORKFLOWS
+# APPROACH 3: MIXED APPROACH FOR COMPLEX WORKFLOWS
 # =============================================================================
 
 
@@ -313,23 +272,7 @@ def complex_workflow_mixed_approach(user_input: str):
 
         results = {}
 
-        # Step 1: Use auto-instrumentation for third-party library
-        auto_instrument("openai")
-
-        try:
-            # This call is automatically traced
-            openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            embedding_response = openai_client.embeddings.create(
-                model="text-embedding-ada-002", input=user_input
-            )
-
-            results["embedding_dimensions"] = len(embedding_response.data[0].embedding)
-
-        finally:
-            # Remove instrumentation
-            uninstrument("openai")
-
-        # Step 2: Use context manager for custom operation
+        # Step 1: Use context manager for custom operation
         with trace_operation("custom_processing") as process_span:
             # Simulate processing
             time.sleep(0.5)
@@ -344,7 +287,7 @@ def complex_workflow_mixed_approach(user_input: str):
 
             results["processed_input"] = processed_input
 
-        # Step 3: Use manual span for legacy code
+        # Step 2: Use manual span for legacy code
         client = noveum_trace.get_client()
         legacy_span = client.start_span(
             name="legacy_operation",
@@ -371,7 +314,7 @@ def complex_workflow_mixed_approach(user_input: str):
         finally:
             client.finish_span(legacy_span)
 
-        # Step 4: Use context manager for final LLM call
+        # Step 3: Use context manager for final LLM call
         with trace_llm(model="gpt-3.5-turbo", operation="final_processing") as llm_span:
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             response = openai_client.chat.completions.create(
@@ -419,16 +362,12 @@ def run_flexible_tracing_examples():
     result1 = process_user_query_with_context_manager("What is the capital of France?")
     print(f"Result: {result1['final_response'][:50]}...\n")
 
-    # Example 2: Auto-Instrumentation
-    print("\n📌 EXAMPLE 2: AUTO-INSTRUMENTATION")
-    process_with_auto_instrumentation()
-
-    # Example 3: Manual Span Creation
-    print("\n📌 EXAMPLE 3: MANUAL SPAN CREATION")
+    # Example 2: Manual Span Creation
+    print("\n📌 EXAMPLE 2: MANUAL SPAN CREATION")
     legacy_function_with_manual_spans("legacy system query")
 
-    # Example 4: Mixed Approach
-    print("\n📌 EXAMPLE 4: MIXED APPROACH")
+    # Example 3: Mixed Approach
+    print("\n📌 EXAMPLE 3: MIXED APPROACH")
     complex_workflow_mixed_approach("Demonstrate flexible tracing approaches")
 
     print("\n✅ All flexible tracing examples completed successfully!")
