@@ -28,12 +28,6 @@ Example:
     ...     # Post-processing (not traced)
     ...     return format_response(response)
 
-    Auto-instrumentation for existing code:
-
-    >>> noveum_trace.auto_instrument("openai")
-    >>>
-    >>> # Now all OpenAI calls are automatically traced
-    >>> response = openai_client.chat.completions.create(...)
 """
 
 __version__ = "0.3.5"
@@ -68,17 +62,6 @@ from noveum_trace.agents import (
 )
 from noveum_trace.agents import trace_agent_operation as trace_agent_op
 
-# Auto-instrumentation imports
-from noveum_trace.auto_instrument import (
-    auto_instrument,
-    enable_auto_tracing,
-    get_available_instrumentations,
-    get_instrumented_libraries,
-    is_instrumented,
-    uninstrument,
-    uninstrument_all,
-)
-
 # Context manager imports
 from noveum_trace.context_managers import (
     create_child_span,
@@ -112,15 +95,6 @@ from noveum_trace.decorators.base import trace
 from noveum_trace.decorators.llm import trace_llm
 from noveum_trace.decorators.retrieval import trace_retrieval
 from noveum_trace.decorators.tool import trace_tool
-
-# Proxy object imports
-from noveum_trace.proxies import (
-    TracedAgentProxy,
-    TracedOpenAIClient,
-    create_traced_agent,
-    create_traced_langchain_llm,
-    create_traced_openai_client,
-)
 
 # Streaming imports
 from noveum_trace.streaming import (
@@ -160,22 +134,18 @@ def init(
     api_key: Optional[str] = None,
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
-    auto_instrument: Optional[list[str]] = None,
     **kwargs: Any,
 ) -> None:
     """
     Initialize the Noveum Trace SDK.
 
-    This function sets up the global tracing client and configures
-    automatic instrumentation for specified frameworks.
+    This function sets up the global tracing client.
 
     Args:
         project: Project name for organizing traces
         api_key: Noveum API key (defaults to NOVEUM_API_KEY env var)
         endpoint: API endpoint (defaults to https://api.noveum.ai/api)
         environment: Environment name (dev, staging, prod)
-        auto_instrument: List of frameworks to auto-instrument
-                        (e.g., ["langchain", "openai", "anthropic"])
         **kwargs: Additional configuration options including:
                  - transport_config: Transport layer configuration
                  - tracing_config: Tracing behavior configuration
@@ -187,7 +157,6 @@ def init(
         >>> noveum_trace.init(
         ...     project="my-llm-app",
         ...     environment="production",
-        ...     auto_instrument=["langchain", "openai"],
         ...     transport_config={
         ...         "batch_size": 10,
         ...         "batch_timeout": 1.0
@@ -239,10 +208,6 @@ def init(
         from noveum_trace.core import _register_client
 
         _register_client(_client)
-
-        # Setup auto-instrumentation
-        if auto_instrument:
-            enable_auto_tracing(auto_instrument)
 
 
 def shutdown() -> None:
@@ -389,20 +354,6 @@ __all__ = [
     "trace_pipeline_stage",
     "create_child_span",
     "trace_function_calls",
-    # Auto-instrumentation
-    "auto_instrument",
-    "uninstrument",
-    "uninstrument_all",
-    "is_instrumented",
-    "get_instrumented_libraries",
-    "enable_auto_tracing",
-    "get_available_instrumentations",
-    # Proxy objects
-    "create_traced_openai_client",
-    "create_traced_agent",
-    "create_traced_langchain_llm",
-    "TracedOpenAIClient",
-    "TracedAgentProxy",
     # Streaming
     "trace_streaming",
     "streaming_llm",

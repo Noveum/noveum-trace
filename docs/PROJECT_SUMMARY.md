@@ -28,32 +28,22 @@ noveum-trace-sdk/
 │   ├── agents.py                   # Multi-agent system support
 │   ├── streaming.py               # Streaming LLM response support
 │   ├── threads.py                 # Conversation thread management
-│   ├── proxies.py                 # Traced proxy objects
-│   ├── auto_instrument.py         # Auto-instrumentation system
 │   ├── transport/                  # Transport layer
 │   │   ├── __init__.py
 │   │   ├── http_transport.py      # HTTP client for Noveum API
 │   │   └── batch_processor.py     # Batching and retry logic
-│   ├── utils/                      # Utility modules
-│   │   ├── __init__.py
-│   │   ├── exceptions.py          # Custom exceptions
-│   │   ├── llm_utils.py           # LLM-specific utilities
-│   │   ├── logging.py             # Structured logging system
-│   │   └── pii_redaction.py       # PII redaction utilities
-│   └── integrations/               # Framework integrations
+│   └── utils/                      # Utility modules
 │       ├── __init__.py
-│       ├── openai/                # OpenAI integration
-│       ├── anthropic/             # Anthropic integration
-│       ├── langchain/             # LangChain integration
-│       ├── llamaindex/            # LlamaIndex integration
-│       └── openai.py              # Legacy OpenAI integration
+│       ├── exceptions.py          # Custom exceptions
+│       ├── llm_utils.py           # LLM-specific utilities
+│       ├── logging.py             # Structured logging system
+│       └── pii_redaction.py       # PII redaction utilities
 ├── tests/                          # Test suite
 │   ├── __init__.py
 │   ├── unit/                      # Unit tests
 │   │   ├── core/                  # Core functionality tests
 │   │   ├── decorators/            # Decorator tests
 │   │   ├── transport/             # Transport layer tests
-│   │   ├── integrations/          # Integration tests
 │   │   └── utils/                 # Utility tests
 │   ├── integration/               # Integration tests
 │   │   ├── mock_endpoint/         # Mock backend tests
@@ -66,7 +56,6 @@ noveum-trace-sdk/
 │   │   ├── agent_example.py       # Multi-agent workflows
 │   │   ├── agent_workflow_example.py  # Agent coordination
 │   │   ├── flexible_tracing_example.py  # Context managers
-│   │   ├── langchain_integration_example.py  # Framework integration
 │   │   ├── streaming_example.py   # Streaming support
 │   │   ├── thread_example.py      # Thread management
 │   │   ├── multimodal_examples.py # Multimodal tracing
@@ -101,9 +90,7 @@ noveum-trace-sdk/
 
 - **Decorator-Based API** - `@trace`, `@trace_llm`, `@trace_agent`, `@trace_tool`, `@trace_retrieval`
 - **Context Managers** - Inline tracing with `trace_llm_call`, `trace_agent_operation`, `trace_operation`
-- **Auto-Instrumentation** - Automatic tracing for OpenAI, Anthropic, LangChain
 - **Manual Instrumentation** - Full control with client methods
-- **Proxy Objects** - Traced wrappers for existing objects
 
 ### ✅ Advanced Multi-Agent Support
 
@@ -145,14 +132,7 @@ noveum-trace-sdk/
 - **Data residency** configuration for compliance
 - **Token-level access control** and authentication
 
-### ✅ Framework Integrations
 
-- **Auto-instrumentation** for popular LLM frameworks
-- **Plugin-based architecture** for easy extension
-- **OpenAI integration** (complete with streaming support)
-- **Anthropic integration** (complete)
-- **LangChain integration** (comprehensive)
-- **LlamaIndex integration** (skeleton ready)
 
 ### ✅ Comprehensive Testing
 
@@ -181,7 +161,6 @@ Unlike competitors that force a single pattern, Noveum Trace supports:
 
 - Decorators for new code
 - Context managers for existing code
-- Auto-instrumentation for zero-change integration
 - Manual instrumentation for full control
 
 ### 3. **Built for Multi-Agent Systems**
@@ -244,7 +223,6 @@ First-class support for:
 - **Distributed Tracing** - Cross-service trace correlation
 - **Advanced Security** - End-to-end encryption and zero-trust architecture
 - **Performance Optimization** - Further reduce overhead and memory usage
-- **Framework Expansion** - More LLM framework integrations
 
 ### Long Term (1 Year)
 
@@ -265,7 +243,6 @@ First-class support for:
 ### Business Metrics
 
 - **Adoption Rate**: Growing user base across enterprise and startups
-- **Integration Diversity**: Support for all major LLM frameworks
 - **Community Engagement**: Active contributions and feature requests
 - **Enterprise Readiness**: Production deployments at scale
 

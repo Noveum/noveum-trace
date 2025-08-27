@@ -19,7 +19,7 @@ Noveum Trace provides an easy way to add observability to your LLM applications.
 - **🔌 Framework Agnostic** - Works with any Python LLM framework
 - **🚀 Zero Configuration** - Works out of the box with sensible defaults
 - **📊 Comprehensive Tracing** - Capture function calls, LLM interactions, and agent workflows
-- **🔄 Flexible Approaches** - Decorators, context managers, and auto-instrumentation
+- **🔄 Flexible Approaches** - Decorators, and context managers
 
 ## 🚀 Quick Start
 
@@ -100,7 +100,6 @@ noveum_trace/
 ├── decorators/     # Decorator-based API (@trace, @trace_llm, etc.)
 ├── context_managers/ # Context managers for inline tracing
 ├── transport/      # HTTP transport and batch processing
-├── integrations/   # Framework integrations (OpenAI, etc.)
 ├── agents/         # Multi-agent system support
 ├── streaming/      # Streaming LLM support
 ├── threads/        # Conversation thread management
@@ -284,71 +283,6 @@ def multi_step_workflow(task: str) -> dict:
     return results
 ```
 
-## 🤖 Auto-Instrumentation
-
-Automatically trace existing code without modifications:
-
-```python
-import noveum_trace
-
-# Initialize with auto-instrumentation
-noveum_trace.init(
-    api_key="your-api-key",
-    project="my-project",
-    auto_instrument=["openai", "anthropic", "langchain"]
-)
-
-# Now all OpenAI calls are automatically traced
-import openai
-client = openai.OpenAI()
-
-# This call is automatically traced
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello, world!"}]
-)
-```
-
-## 🔌 Framework Integrations
-
-### OpenAI Integration
-
-```python
-import noveum_trace
-import openai
-
-# Initialize tracing
-noveum_trace.init(api_key="your-key", project="openai-app")
-
-@noveum_trace.trace_llm
-def chat_with_openai(message: str) -> str:
-    client = openai.OpenAI()
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": message}]
-    )
-    return response.choices[0].message.content
-
-# Or use context managers for existing code
-def existing_openai_function(prompt: str) -> str:
-    with noveum_trace.trace_llm_call(model="gpt-4", provider="openai") as span:
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        # Capture usage metrics
-        if response.usage:
-            span.set_attributes({
-                "llm.input_tokens": response.usage.prompt_tokens,
-                "llm.output_tokens": response.usage.completion_tokens,
-                "llm.total_tokens": response.usage.total_tokens
-            })
-
-        return response.choices[0].message.content
-```
-
 ## 🧵 Thread Management
 
 Track conversation threads and multi-turn interactions:
@@ -404,11 +338,7 @@ pytest
 # Run with coverage
 pytest --cov=noveum_trace --cov-report=html
 
-# Run integration tests
-pytest tests/integration/
-
 # Run specific test categories
-pytest -m integration
 pytest -m llm
 pytest -m agent
 ```
@@ -441,7 +371,6 @@ Check out the [examples](docs/examples/) directory for complete working examples
 
 - [Basic Usage](docs/examples/basic_usage.py) - Simple function tracing
 - [Agent Workflow](docs/examples/agent_workflow_example.py) - Multi-agent coordination
-- [Langchain Integration](docs/examples/langchain_integration_example.py) - Framework integration patterns
 - [Flexible Tracing](docs/examples/flexible_tracing_example.py) - Context managers and inline tracing
 - [Streaming Example](docs/examples/streaming_example.py) - Real-time streaming support
 - [Multimodal Examples](docs/examples/multimodal_examples.py) - Image, audio, and video tracing
@@ -462,16 +391,6 @@ with client.create_contextual_trace("custom_workflow") as trace:
     with client.create_contextual_span("step_2") as span2:
         # Step 2 implementation
         span2.set_attributes({"step": 2, "status": "completed"})
-```
-
-### Plugin System
-
-```python
-# Register custom plugins
-noveum_trace.register_plugin("my_plugin", MyCustomPlugin())
-
-# List available plugins
-plugins = noveum_trace.list_plugins()
 ```
 
 ## 📄 License

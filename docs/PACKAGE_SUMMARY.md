@@ -11,7 +11,7 @@
 
 ```
 noveum-trace-sdk/
-├── noveum_trace/                 # Main package (30+ Python files)
+├── noveum_trace/                 # Main package (25+ Python files)
 │   ├── __init__.py              # Public API exports
 │   ├── core/                    # Core functionality (5 files)
 │   │   ├── client.py           # Main client class
@@ -20,6 +20,7 @@ noveum-trace-sdk/
 │   │   ├── span.py             # Span implementation
 │   │   └── trace.py            # Trace implementation
 │   ├── decorators/              # Decorator API (6 files)
+│   │   ├── __init__.py         # Package initialization
 │   │   ├── base.py             # Base decorator
 │   │   ├── llm.py              # LLM tracing
 │   │   ├── agent.py            # Agent tracing
@@ -29,17 +30,9 @@ noveum-trace-sdk/
 │   ├── agents.py               # Multi-agent system support
 │   ├── streaming.py            # Streaming LLM response support
 │   ├── threads.py              # Conversation thread management
-│   ├── proxies.py              # Traced proxy objects
-│   ├── auto_instrument.py      # Auto-instrumentation system
 │   ├── transport/               # Transport layer (3 files)
 │   │   ├── http_transport.py   # HTTP transport
 │   │   └── batch_processor.py  # Batch processing
-│   ├── integrations/            # Framework integrations (8+ files)
-│   │   ├── openai/             # OpenAI integration
-│   │   ├── anthropic/          # Anthropic integration
-│   │   ├── langchain/          # LangChain integration
-│   │   ├── llamaindex/         # LlamaIndex integration
-│   │   └── openai.py           # Legacy OpenAI integration
 │   └── utils/                   # Utilities (5 files)
 │       ├── exceptions.py       # Custom exceptions
 │       ├── llm_utils.py        # LLM utilities
@@ -50,7 +43,6 @@ noveum-trace-sdk/
 │   │   ├── core/               # Core functionality tests
 │   │   ├── decorators/         # Decorator tests
 │   │   ├── transport/          # Transport layer tests
-│   │   ├── integrations/       # Integration tests
 │   │   └── utils/              # Utility tests
 │   ├── integration/            # Integration tests
 │   │   ├── mock_endpoint/      # Mock backend tests
@@ -89,7 +81,7 @@ noveum-trace-sdk/
 - **Complete Decorator API** - `@trace`, `@trace_llm`, `@trace_agent`, `@trace_tool`, `@trace_retrieval`
 - **Context Managers** - `trace_llm_call`, `trace_agent_operation`, `trace_operation` for inline tracing
 - **Manual Instrumentation** - Full client API for custom tracing needs
-- **Auto-Instrumentation** - Zero-code tracing for popular frameworks
+
 
 ### 🤖 Multi-Agent System Support
 
@@ -103,7 +95,7 @@ noveum-trace-sdk/
 
 - **Streaming Support** - Real-time tracing for streaming LLM responses
 - **Thread Management** - Conversation thread tracking and context
-- **Proxy Objects** - Traced wrappers for existing objects
+
 - **Performance Monitoring** - CPU, memory, and cost tracking
 - **Health Checks** - System health monitoring and diagnostics
 
@@ -123,13 +115,7 @@ noveum-trace-sdk/
 - **Authentication** - Bearer token and API key support
 - **Data Validation** - Input validation and error handling
 
-### 🔌 Framework Integrations
 
-- **OpenAI** - Complete integration with streaming support
-- **Anthropic** - Full Claude API support
-- **LangChain** - Comprehensive chain and agent tracing
-- **LlamaIndex** - Document and query tracing
-- **Auto-Discovery** - Automatic detection and instrumentation
 
 ## 📊 Package Quality Metrics
 
@@ -202,11 +188,7 @@ with noveum_trace.trace_llm_call(model="gpt-4") as span:
 
 ### Frameworks
 
-- ✅ LangChain
-- ✅ LlamaIndex
-- ✅ Raw OpenAI API
-- ✅ Raw Anthropic API
-- ✅ Custom frameworks
+- ✅ Custom frameworks (via manual instrumentation)
 
 ### Deployment Environments
 
