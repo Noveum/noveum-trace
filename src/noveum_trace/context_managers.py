@@ -148,11 +148,14 @@ class AgentContextManager(TraceContextManager):
     ):
         name = f"agent.{operation}" if operation else "agent_operation"
 
+        # Extract attributes from kwargs first to avoid parameter conflict
+        incoming_attributes = kwargs.pop("attributes", {})
+        
         attributes = {
             "agent.type": agent_type,
             "agent.operation": operation or "unknown",
             "agent.capabilities": capabilities,
-            **kwargs.get("attributes", {}),
+            **incoming_attributes,
         }
 
         super().__init__(name=name, attributes=attributes, **kwargs)

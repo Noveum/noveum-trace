@@ -932,6 +932,7 @@ def list_agent_workflows() -> list[dict[str, Any]]:
 # Specialized tracing for agent operations
 
 
+@contextmanager
 def trace_agent_operation(
     agent: AgentNode, operation: str, **kwargs: Any
 ) -> Generator[Any, None, None]:
