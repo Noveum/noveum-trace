@@ -362,7 +362,6 @@ pytest
 
 # Run examples
 python docs/examples/basic_usage.py
-python docs/examples/agent_workflow_example.py
 ```
 
 ## 📖 Examples
