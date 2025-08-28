@@ -408,6 +408,37 @@ class HttpTransport:
 
         trace_data = self.trace_to_dict(trace)
 
+        # Handle case where trace_to_dict returns a string due to serialization errors
+        if isinstance(trace_data, str):
+            # Create a minimal trace structure with the error message and all required fields
+            from datetime import datetime, timezone
+
+            current_time = datetime.now(timezone.utc)
+            trace_data = {
+                "trace_id": trace.trace_id,
+                "name": getattr(trace, "name", "unknown"),
+                "start_time": getattr(trace, "start_time", current_time).isoformat(),
+                "end_time": (
+                    getattr(trace, "end_time", current_time).isoformat()
+                    if getattr(trace, "end_time", None)
+                    else current_time.isoformat()
+                ),
+                "duration_ms": getattr(trace, "duration_ms", 0.0) or 0.0,
+                "status": "error",
+                "status_message": trace_data,  # The error message from trace_to_dict
+                "span_count": getattr(trace, "span_count", 0),
+                "error_count": getattr(trace, "error_count", 1),
+                "attributes": {},
+                "metadata": {
+                    "user_id": None,
+                    "session_id": None,
+                    "request_id": None,
+                    "tags": {},
+                    "custom_attributes": {},
+                },
+                "spans": [],
+            }
+
         # Add SDK metadata
         trace_data["sdk"] = {
             "name": "noveum-trace-python",
