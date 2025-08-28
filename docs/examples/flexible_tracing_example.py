@@ -231,8 +231,7 @@ def legacy_function_with_manual_spans(query: str):
             client.finish_span(child_span)
 
         # Add result to parent span
-        span.set_attributes(
-            {"function.result": result, "function.duration_ms": 1500})
+        span.set_attributes({"function.result": result, "function.duration_ms": 1500})
 
         span.set_status("ok")
         print(f"Manual span result: {result}")
@@ -360,8 +359,7 @@ def run_flexible_tracing_examples():
 
     # Example 1: Context Managers
     print("\n📌 EXAMPLE 1: CONTEXT MANAGERS")
-    result1 = process_user_query_with_context_manager(
-        "What is the capital of France?")
+    result1 = process_user_query_with_context_manager("What is the capital of France?")
     print(f"Result: {result1['final_response'][:50]}...\n")
 
     # Example 2: Manual Span Creation

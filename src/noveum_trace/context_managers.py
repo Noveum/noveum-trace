@@ -150,7 +150,7 @@ class AgentContextManager(TraceContextManager):
 
         # Extract attributes from kwargs first to avoid parameter conflict
         incoming_attributes = kwargs.pop("attributes", {})
-        
+
         attributes = {
             "agent.type": agent_type,
             "agent.operation": operation or "unknown",
