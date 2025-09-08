@@ -329,6 +329,16 @@ def start_span(name: str, **kwargs: Any) -> Span:
     return client.start_span(name, **kwargs)
 
 
+# Integrations imports (conditional)
+_integration_exports = []
+try:
+    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+
+    _integration_exports.append("NoveumTraceCallbackHandler")
+except ImportError:
+    # LangChain not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions
@@ -399,6 +409,8 @@ __all__ = [
     # Plugin system
     "register_plugin",
     "list_plugins",
+    # Integrations (conditional)
+    *_integration_exports,
     # Exceptions
     "NoveumTraceError",
     "ConfigurationError",
