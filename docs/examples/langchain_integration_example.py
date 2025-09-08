@@ -34,10 +34,7 @@ def example_basic_llm_tracing():
             project="langchain-integration-demo",
             environment="development",
             endpoint="https://noveum.free.beeceptor.com",
-            transport_config={
-                "batch_size": 1,
-                "batch_timeout": 5.0
-            }
+            transport_config={"batch_size": 1, "batch_timeout": 5.0},
         )
 
         # Create callback handler

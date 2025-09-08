@@ -7,6 +7,7 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 
 import logging
 from typing import Any, Optional
+from collections.abc import Sequence
 from uuid import UUID
 
 from noveum_trace.core.span import SpanStatus
@@ -25,15 +26,16 @@ except ImportError:
     logger.warning("LangChain not available. Install with: pip install langchain-core")
     LANGCHAIN_AVAILABLE = False
     # Create stub base class
+    from typing import Protocol
 
-    class BaseCallbackHandler:
-        pass
+    class BaseCallbackHandler(Protocol):  # type: ignore[no-redef]
+        def __init__(self) -> None: ...
 
 
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler for Noveum Trace integration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the callback handler."""
         if not LANGCHAIN_AVAILABLE:
             raise ImportError(
@@ -52,7 +54,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client = get_client()
         except Exception as e:
             logger.warning("Failed to get Noveum Trace client: %s", e)
-            self._client = None
+            self._client = None  # type: ignore[assignment]
 
     def _should_create_trace(
         self, event_type: str, _serialized: dict[str, Any]
@@ -198,10 +200,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error("Error handling LLM end event: %s", e)
 
-    def on_llm_error(self, error: Exception, run_id: UUID, **kwargs: Any) -> None:
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Handle LLM error event."""
         if not self._ensure_client() or not self._span_stack:
-            return
+            return None
 
         try:
             span = self._span_stack.pop()
@@ -217,6 +226,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         except Exception as e:
             logger.error("Error handling LLM error event: %s", e)
+
+        return None
 
     # Chain Events
     def on_chain_start(
@@ -294,10 +305,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error("Error handling chain end event: %s", e)
 
-    def on_chain_error(self, error: Exception, run_id: UUID, **kwargs: Any) -> None:
+    def on_chain_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Handle chain error event."""
         if not self._ensure_client() or not self._span_stack:
-            return
+            return None
 
         try:
             span = self._span_stack.pop()
@@ -313,6 +331,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         except Exception as e:
             logger.error("Error handling chain error event: %s", e)
+
+        return None
 
     # Tool Events
     def on_tool_start(
@@ -367,10 +387,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
 
-    def on_tool_error(self, error: Exception, run_id: UUID, **kwargs: Any) -> None:
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Handle tool error event."""
         if not self._ensure_client() or not self._span_stack:
-            return
+            return None
 
         try:
             span = self._span_stack.pop()
@@ -380,6 +407,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         except Exception as e:
             logger.error("Error handling tool error event: %s", e)
+
+        return None
 
     # Agent Events
     def on_agent_action(
@@ -479,11 +508,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error("Error handling retriever start event: %s", e)
 
     def on_retriever_end(
-        self, documents: list["Document"], run_id: UUID, **kwargs: Any
-    ) -> None:
+        self,
+        documents: Sequence["Document"],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Handle retriever end event."""
         if not self._ensure_client() or not self._span_stack:
-            return
+            return None
 
         try:
             span = self._span_stack.pop()
@@ -518,10 +552,19 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error("Error handling retriever end event: %s", e)
 
-    def on_retriever_error(self, error: Exception, run_id: UUID, **kwargs: Any) -> None:
+        return None
+
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
         """Handle retriever error event."""
         if not self._ensure_client() or not self._span_stack:
-            return
+            return None
 
         try:
             span = self._span_stack.pop()
@@ -537,6 +580,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         except Exception as e:
             logger.error("Error handling retriever error event: %s", e)
+
+        return None
 
     def on_text(self, text: str, run_id: UUID, **kwargs: Any) -> None:
         """Handle text event (optional, for debugging)."""
