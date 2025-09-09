@@ -5,8 +5,9 @@ These tests verify that the NoveumTraceCallbackHandler integrates correctly
 with LangChain components and produces the expected traces and spans.
 """
 
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
 
 # Skip all tests if LangChain is not available
 pytest_plugins = []
@@ -122,13 +123,16 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             handler.on_llm_start(
-                serialized={"name": "gpt-4", "id": ["openai", "gpt-4"]},
+                serialized={
+                    "name": "gpt-4",
+                    "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+                },
                 prompts=["Hello world"],
                 run_id=run_id,
             )
 
             # Should create trace for standalone LLM call
-            mock_client.start_trace.assert_called_once_with("llm.gpt-4")
+            mock_client.start_trace.assert_called_once_with("llm.openai")
             mock_client.start_span.assert_called_once()
 
             # Check span attributes
@@ -136,9 +140,9 @@ class TestLangChainIntegration:
             attributes = call_args[1]["attributes"]
             assert attributes["langchain.run_id"] == str(run_id)
             assert attributes["llm.model"] == "gpt-4"
-            assert attributes["llm.provider"] == "gpt-4"
-            assert attributes["llm.prompts"] == ["Hello world"]
-            assert attributes["llm.prompt_count"] == 1
+            assert attributes["llm.provider"] == "ChatOpenAI"
+            assert attributes["llm.input.prompts"] == ["Hello world"]
+            assert attributes["llm.input.prompt_count"] == 1
 
             assert len(handler._trace_stack) == 1
             assert len(handler._span_stack) == 1
@@ -273,6 +277,473 @@ class TestLangChainIntegration:
             # No traces or spans should be created
             assert len(handler._trace_stack) == 0
             assert len(handler._span_stack) == 0
+
+    def test_extract_model_name(self):
+        """Test model name extraction from serialized LLM data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with model in kwargs
+            serialized = {"kwargs": {"model": "gpt-4-turbo"}}
+            assert handler._extract_model_name(serialized) == "gpt-4-turbo"
+
+            # Test with provider from id path
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            assert handler._extract_model_name(serialized) == "openai"
+
+            # Test fallback to class name
+            serialized = {"name": "GPT4"}
+            assert handler._extract_model_name(serialized) == "GPT4"
+
+            # Test empty/None serialized
+            assert handler._extract_model_name({}) == "unknown"
+            assert handler._extract_model_name(None) == "unknown"
+
+    def test_extract_agent_type(self):
+        """Test agent type extraction from serialized agent data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with agent type from id path
+            serialized = {"id": ["langchain", "agents", "react", "ReActAgent"]}
+            assert handler._extract_agent_type(serialized) == "react"
+
+            # Test with different agent type
+            serialized = {"id": ["langchain", "agents", "zero_shot", "ZeroShotAgent"]}
+            assert handler._extract_agent_type(serialized) == "zero_shot"
+
+            # Test empty/None serialized
+            assert handler._extract_agent_type({}) == "unknown"
+            assert handler._extract_agent_type(None) == "unknown"
+
+    def test_extract_agent_capabilities(self):
+        """Test agent capabilities extraction from tools in serialized data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with various tool types
+            serialized = {
+                "kwargs": {
+                    "tools": [
+                        {"name": "web_search"},
+                        {"name": "calculator"},
+                        {"name": "file_reader"},
+                        {"name": "api_client"},
+                    ]
+                }
+            }
+            capabilities = handler._extract_agent_capabilities(serialized)
+            assert "tool_usage" in capabilities
+            assert "web_search" in capabilities
+            assert "calculation" in capabilities
+            assert "file_operations" in capabilities
+            assert "api_calls" in capabilities
+
+            # Test with no tools (default reasoning)
+            serialized = {"kwargs": {"tools": []}}
+            assert handler._extract_agent_capabilities(serialized) == "reasoning"
+
+            # Test empty/None serialized
+            assert handler._extract_agent_capabilities({}) == "unknown"
+            assert handler._extract_agent_capabilities(None) == "unknown"
+
+    def test_extract_tool_function_name(self):
+        """Test tool function name extraction from serialized tool data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with function name in kwargs
+            serialized = {"kwargs": {"name": "search_web"}}
+            assert handler._extract_tool_function_name(serialized) == "search_web"
+
+            # Test fallback to class name
+            serialized = {"name": "WebSearchTool"}
+            assert handler._extract_tool_function_name(serialized) == "WebSearchTool"
+
+            # Test empty/None serialized
+            assert handler._extract_tool_function_name({}) == "unknown"
+            assert handler._extract_tool_function_name(None) == "unknown"
+
+    def test_llm_start_with_new_attributes(self):
+        """Test LLM start event with new attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_llm_start(
+                serialized={"name": "gpt-4", "kwargs": {"model": "gpt-4-turbo"}},
+                prompts=["Hello world", "How are you?"],
+                run_id=run_id,
+            )
+
+            # Check span attributes include new structure
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert attributes["llm.operation"] == "completion"
+            assert attributes["llm.input.prompts"] == ["Hello world", "How are you?"]
+            assert attributes["llm.input.prompt_count"] == 2
+
+    def test_llm_end_with_new_attributes(self):
+        """Test LLM end event with new flattened usage attributes."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            # Mock LLM response with token usage
+            mock_response = Mock()
+            mock_generation = Mock()
+            mock_generation.text = "Paris is the capital of France"
+            mock_response.generations = [[mock_generation]]
+            mock_response.llm_output = {
+                "token_usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 8,
+                    "total_tokens": 18,
+                },
+                "finish_reason": "stop",
+            }
+
+            run_id = uuid4()
+            handler.on_llm_end(response=mock_response, run_id=run_id)
+
+            # Check new flattened attributes structure
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == [
+                "Paris is the capital of France"
+            ]
+            assert attributes["llm.output.response_count"] == 1
+            assert attributes["llm.output.finish_reason"] == "stop"
+            assert attributes["llm.input_tokens"] == 10
+            assert attributes["llm.output_tokens"] == 8
+            assert attributes["llm.total_tokens"] == 18
+
+    def test_chain_start_with_new_attributes(self):
+        """Test chain start event with new attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_chain_start(
+                serialized={"name": "llm_chain"},
+                inputs={"topic": "AI", "style": "academic"},
+                run_id=run_id,
+            )
+
+            # Check span attributes include new structure
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert attributes["chain.operation"] == "execution"
+            assert "chain.inputs" in attributes
+
+    def test_chain_end_with_new_attributes(self):
+        """Test chain end event with new output attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            run_id = uuid4()
+            handler.on_chain_end(
+                outputs={"text": "AI is fascinating", "confidence": 0.95}, run_id=run_id
+            )
+
+            # Check new output attributes structure
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert "chain.output.outputs" in attributes
+
+    def test_tool_start_with_new_attributes(self):
+        """Test tool start event with enhanced naming and attributes."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_tool_start(
+                serialized={"name": "WebSearchTool", "kwargs": {"name": "search_web"}},
+                input_str="What is the capital of France?",
+                run_id=run_id,
+            )
+
+            # Check enhanced span name and attributes
+            call_args = mock_client.start_span.call_args
+            span_name = call_args[1]["name"]
+            assert span_name == "tool:WebSearchTool:search_web"
+
+            attributes = call_args[1]["attributes"]
+            assert attributes["tool.name"] == "WebSearchTool"
+            assert attributes["tool.operation"] == "search_web"
+            assert (
+                attributes["tool.input.input_str"] == "What is the capital of France?"
+            )
+
+    def test_tool_end_with_new_attributes(self):
+        """Test tool end event with new output attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            run_id = uuid4()
+            handler.on_tool_end(output="Paris is the capital of France.", run_id=run_id)
+
+            # Check new output attributes structure
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["tool.output.output"] == "Paris is the capital of France."
+
+    def test_agent_start_functionality(self):
+        """Test agent start event functionality."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_agent_start(
+                serialized={
+                    "name": "ReActAgent",
+                    "id": ["langchain", "agents", "react", "ReActAgent"],
+                    "kwargs": {
+                        "tools": [{"name": "web_search"}, {"name": "calculator"}]
+                    },
+                },
+                inputs={"input": "What is 2+2 and what's the weather?"},
+                run_id=run_id,
+            )
+
+            # Should create trace and span for agent
+            mock_client.start_trace.assert_called_once()
+            mock_client.start_span.assert_called_once()
+
+            # Check span attributes
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert attributes["agent.name"] == "ReActAgent"
+            assert attributes["agent.type"] == "react"
+            assert attributes["agent.operation"] == "execution"
+            assert "tool_usage" in attributes["agent.capabilities"]
+            assert "web_search" in attributes["agent.capabilities"]
+            assert "calculation" in attributes["agent.capabilities"]
+
+    def test_agent_action_with_new_attributes(self):
+        """Test agent action event with new output attributes."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            # Mock agent action
+            mock_action = Mock()
+            mock_action.tool = "calculator"
+            mock_action.tool_input = "2+2"
+            mock_action.log = "I need to calculate 2+2"
+
+            run_id = uuid4()
+            handler.on_agent_action(action=mock_action, run_id=run_id)
+
+            # Check that attributes were set with new structure
+            mock_span.set_attributes.assert_called_once()
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["agent.output.action.tool"] == "calculator"
+            assert attributes["agent.output.action.tool_input"] == "2+2"
+            assert attributes["agent.output.action.log"] == "I need to calculate 2+2"
+
+    def test_agent_finish_with_new_attributes(self):
+        """Test agent finish event with enhanced functionality."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._current_trace = mock_trace
+            handler._trace_stack = [mock_trace]
+            handler._span_stack = [mock_span]
+
+            # Mock agent finish
+            mock_finish = Mock()
+            mock_finish.return_values = {"output": "The answer is 4"}
+            mock_finish.log = "Task completed successfully"
+
+            run_id = uuid4()
+            handler.on_agent_finish(finish=mock_finish, run_id=run_id)
+
+            # Check that span was finished with proper attributes
+            mock_span.set_attributes.assert_called_once()
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert (
+                attributes["agent.output.finish.return_values"]["output"]
+                == "The answer is 4"
+            )
+            assert (
+                attributes["agent.output.finish.log"] == "Task completed successfully"
+            )
+
+            # Should finish span and trace
+            mock_client.finish_span.assert_called_once_with(mock_span)
+            mock_client.finish_trace.assert_called_once_with(mock_trace)
+
+    def test_retriever_start_with_new_attributes(self):
+        """Test retriever start event with new attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_retriever_start(
+                serialized={"name": "VectorStoreRetriever"},
+                query="What is machine learning?",
+                run_id=run_id,
+            )
+
+            # Check span attributes include new structure
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert attributes["retrieval.type"] == "search"
+            assert attributes["retrieval.operation"] == "VectorStoreRetriever"
+            assert attributes["retrieval.query"] == "What is machine learning?"
+
+    def test_retriever_end_with_new_attributes(self):
+        """Test retriever end event with new output attribute structure."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            # Mock documents
+            mock_doc1 = Mock()
+            mock_doc1.page_content = "Machine learning is a subset of AI"
+            mock_doc2 = Mock()
+            mock_doc2.page_content = "It involves training algorithms on data"
+
+            documents = [mock_doc1, mock_doc2]
+
+            run_id = uuid4()
+            handler.on_retriever_end(documents=documents, run_id=run_id)
+
+            # Check new output attributes structure
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["retrieval.result_count"] == 2
+            assert len(attributes["retrieval.sample_results"]) == 2
+            assert attributes["retrieval.results_truncated"] is False
+
+    def test_operation_name_with_model_extraction(self):
+        """Test operation name generation with model name extraction."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test LLM operation name with model extraction
+            serialized = {"name": "ChatOpenAI", "kwargs": {"model": "gpt-4-turbo"}}
+            assert (
+                handler._get_operation_name("llm_start", serialized)
+                == "llm.gpt-4-turbo"
+            )
+
+            # Test fallback to provider
+            serialized = {
+                "name": "ChatOpenAI",
+                "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+            }
+            assert handler._get_operation_name("llm_start", serialized) == "llm.openai"
 
     def test_repr(self):
         """Test string representation of callback handler."""

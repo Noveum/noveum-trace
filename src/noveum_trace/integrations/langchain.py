@@ -75,7 +75,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         name = serialized.get("name", "unknown")
 
         if event_type == "llm_start":
-            return f"llm.{name}"
+            # Use model name instead of class name for better readability
+            model_name = self._extract_model_name(serialized)
+            return f"llm.{model_name}"
         elif event_type == "chain_start":
             return f"chain.{name}"
         elif event_type == "agent_start":
@@ -86,6 +88,87 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return f"tool.{name}"
 
         return f"{event_type}.{name}"
+
+    def _extract_model_name(self, serialized: dict[str, Any]) -> str:
+        """Extract model name from serialized LLM data."""
+        if not serialized:
+            return "unknown"
+
+        # Try to get model name from kwargs
+        kwargs = serialized.get("kwargs", {})
+        model = kwargs.get("model")
+        if model:
+            return model
+
+        # Fallback to provider name
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "openai" from ["langchain", "chat_models", "openai", "ChatOpenAI"]
+            return id_path[-2]
+
+        # Final fallback to class name
+        return serialized.get("name", "unknown")
+
+    def _extract_agent_type(self, serialized: dict[str, Any]) -> str:
+        """Extract agent type from serialized agent data."""
+        if not serialized:
+            return "unknown"
+
+        # Get agent category from ID path
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "react" from ["langchain", "agents", "react", "ReActAgent"]
+            return id_path[-2]
+
+        return "unknown"
+
+    def _extract_agent_capabilities(self, serialized: dict[str, Any]) -> str:
+        """Extract agent capabilities from tools in serialized data."""
+        if not serialized:
+            return "unknown"
+
+        capabilities = []
+        kwargs = serialized.get("kwargs", {})
+        tools = kwargs.get("tools", [])
+
+        if tools:
+            capabilities.append("tool_usage")
+
+            # Extract specific tool types
+            tool_types = set()
+            for tool in tools:
+                if isinstance(tool, dict):
+                    tool_name = tool.get("name", "").lower()
+                    if "search" in tool_name or "web" in tool_name:
+                        tool_types.add("web_search")
+                    elif "calc" in tool_name or "math" in tool_name:
+                        tool_types.add("calculation")
+                    elif "file" in tool_name or "read" in tool_name:
+                        tool_types.add("file_operations")
+                    elif "api" in tool_name or "request" in tool_name:
+                        tool_types.add("api_calls")
+
+            if tool_types:
+                capabilities.extend(tool_types)
+
+        # Add default capabilities
+        if not capabilities:
+            capabilities = ["reasoning"]
+
+        return ",".join(capabilities)
+
+    def _extract_tool_function_name(self, serialized: dict[str, Any]) -> str:
+        """Extract function name from serialized tool data."""
+        if not serialized:
+            return "unknown"
+
+        kwargs = serialized.get("kwargs", {})
+        func_name = kwargs.get("name")
+        if func_name:
+            return func_name
+
+        # Fallback to class name
+        return serialized.get("name", "unknown")
 
     def _ensure_client(self) -> bool:
         """Ensure we have a valid client."""
@@ -135,9 +218,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                             serialized.get("id", "unknown") if serialized else "unknown"
                         )
                     ),
-                    # Limit to avoid large payloads
-                    "llm.prompts": prompts[:5] if len(prompts) > 5 else prompts,
-                    "llm.prompt_count": len(prompts),
+                    "llm.operation": "completion",
+                    # Input attributes
+                    "llm.input.prompts": prompts[:5] if len(prompts) > 5 else prompts,
+                    "llm.input.prompt_count": len(prompts),
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -175,16 +259,29 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             if hasattr(response, "llm_output") and response.llm_output:
                 token_usage = response.llm_output.get("token_usage", {})
 
+            # Flatten usage attributes to match ContextManager format
+            usage_attrs = {}
+            if token_usage:
+                usage_attrs.update(
+                    {
+                        "llm.input_tokens": token_usage.get("prompt_tokens", 0),
+                        "llm.output_tokens": token_usage.get("completion_tokens", 0),
+                        "llm.total_tokens": token_usage.get("total_tokens", 0),
+                    }
+                )
+
             span.set_attributes(
                 {
-                    "llm.response": generations,
-                    "llm.response_count": len(generations),
-                    "llm.usage": token_usage,
-                    "llm.finish_reason": (
+                    # Output attributes
+                    "llm.output.response": generations,
+                    "llm.output.response_count": len(generations),
+                    "llm.output.finish_reason": (
                         response.llm_output.get("finish_reason")
                         if hasattr(response, "llm_output") and response.llm_output
                         else None
                     ),
+                    # Flattened usage attributes
+                    **usage_attrs,
                 }
             )
 
@@ -257,6 +354,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "chain.name": (
                         serialized.get("name", "unknown") if serialized else "unknown"
                     ),
+                    "chain.operation": "execution",
+                    # Input attributes
                     "chain.inputs": {
                         k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
                         for k, v in inputs.items()
@@ -286,7 +385,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             span.set_attributes(
                 {
-                    "chain.outputs": {
+                    # Output attributes
+                    "chain.output.outputs": {
                         k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
                         for k, v in outputs.items()
                     }
@@ -342,18 +442,23 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name("tool_start", serialized)
+        self._get_operation_name("tool_start", serialized)
 
         try:
             # Tools always create spans (never standalone traces)
+            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
+
+            # Extract actual function name from serialized data
+            func_name = self._extract_tool_function_name(serialized)
+
             span = self._client.start_span(
-                name=operation_name,
+                name=f"tool:{tool_name}:{func_name}",
                 attributes={
                     "langchain.run_id": str(run_id),
-                    "tool.name": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
-                    ),
-                    "tool.input": (
+                    "tool.name": tool_name,
+                    "tool.operation": func_name,
+                    # Input attributes
+                    "tool.input.input_str": (
                         input_str[:500] + "..." if len(input_str) > 500 else input_str
                     ),
                     **{
@@ -378,7 +483,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span = self._span_stack.pop()
 
             span.set_attributes(
-                {"tool.output": output[:500] + "..." if len(output) > 500 else output}
+                {
+                    "tool.output.output": (
+                        output[:500] + "..." if len(output) > 500 else output
+                    )
+                }
             )
 
             span.set_status(SpanStatus.OK)
@@ -411,6 +520,58 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return None
 
     # Agent Events
+    def on_agent_start(
+        self,
+        serialized: dict[str, Any],
+        inputs: dict[str, Any],
+        run_id: UUID,
+        **kwargs: Any,
+    ) -> None:
+        """Handle agent start event."""
+        if not self._ensure_client():
+            return
+
+        operation_name = self._get_operation_name("agent_start", serialized)
+
+        try:
+            if self._should_create_trace("agent_start", serialized):
+                # Create new trace for agent
+                self._current_trace = self._client.start_trace(operation_name)
+                self._trace_stack.append(self._current_trace)
+
+            # Create span for agent
+            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
+
+            # Extract actual agent information from serialized data
+            agent_type = self._extract_agent_type(serialized)
+            agent_capabilities = self._extract_agent_capabilities(serialized)
+
+            span = self._client.start_span(
+                name=operation_name,
+                attributes={
+                    "langchain.run_id": str(run_id),
+                    "agent.name": agent_name,
+                    "agent.type": agent_type,
+                    "agent.operation": "execution",
+                    "agent.capabilities": agent_capabilities,
+                    # Input attributes
+                    "agent.input.inputs": {
+                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        for k, v in inputs.items()
+                    },
+                    **{
+                        k: v
+                        for k, v in kwargs.items()
+                        if k not in ["tags", "metadata"]
+                        and isinstance(v, (str, int, float, bool))
+                    },
+                },
+            )
+            self._span_stack.append(span)
+
+        except Exception as e:
+            logger.error("Error handling agent start event: %s", e)
+
     def on_agent_action(
         self, action: "AgentAction", run_id: UUID, **kwargs: Any
     ) -> None:
@@ -420,6 +581,24 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             span = self._span_stack[-1]  # Add to current span
+
+            # Add agent output attributes
+            span.set_attributes(
+                {
+                    "agent.output.action.tool": action.tool,
+                    "agent.output.action.tool_input": (
+                        str(action.tool_input)[:200] + "..."
+                        if len(str(action.tool_input)) > 200
+                        else str(action.tool_input)
+                    ),
+                    "agent.output.action.log": (
+                        action.log[:300] + "..."
+                        if len(action.log) > 300
+                        else action.log
+                    ),
+                }
+            )
+
             span.add_event(
                 "agent_action",
                 {
@@ -448,7 +627,32 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
-            span = self._span_stack[-1]  # Add to current span
+            span = self._span_stack.pop()  # Pop the agent span
+
+            # Add agent output attributes
+            span.set_attributes(
+                {
+                    "agent.output.finish.return_values": {
+                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        for k, v in finish.return_values.items()
+                    },
+                    "agent.output.finish.log": (
+                        finish.log[:300] + "..."
+                        if len(finish.log) > 300
+                        else finish.log
+                    ),
+                }
+            )
+
+            span.set_status(SpanStatus.OK)
+            self._client.finish_span(span)
+
+            # Finish trace if this was the top-level agent
+            if self._current_trace and len(self._span_stack) == 0:
+                self._client.finish_trace(self._current_trace)
+                self._trace_stack.pop()
+                self._current_trace = None
+
             span.add_event(
                 "agent_finish",
                 {
@@ -488,11 +692,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 name=operation_name,
                 attributes={
                     "langchain.run_id": str(run_id),
+                    "retrieval.type": "search",
+                    "retrieval.operation": (
+                        serialized.get("name", "unknown") if serialized else "unknown"
+                    ),
+                    # Input attributes
                     "retrieval.query": (
                         query[:300] + "..." if len(query) > 300 else query
-                    ),
-                    "retrieval.source": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     **{
                         k: v
@@ -535,8 +741,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             span.set_attributes(
                 {
-                    "retrieval.documents_count": len(documents),
-                    "retrieval.documents": doc_previews,
+                    # Output attributes
+                    "retrieval.result_count": len(documents),
+                    "retrieval.sample_results": doc_previews,
+                    "retrieval.results_truncated": len(documents) > 10,
                 }
             )
 
