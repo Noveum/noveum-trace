@@ -36,8 +36,6 @@ __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
 
 import threading
-
-# Type imports
 from typing import Any, Optional
 
 # Agent imports
@@ -65,13 +63,17 @@ from noveum_trace.agents import trace_agent_operation as trace_agent_op
 # Context manager imports
 from noveum_trace.context_managers import (
     create_child_span,
+)
+from noveum_trace.context_managers import trace_agent as trace_agent_operation
+from noveum_trace.context_managers import (
     trace_batch_operation,
     trace_function_calls,
+)
+from noveum_trace.context_managers import trace_llm as trace_llm_call
+from noveum_trace.context_managers import (
     trace_operation,
     trace_pipeline_stage,
 )
-from noveum_trace.context_managers import trace_agent as trace_agent_operation
-from noveum_trace.context_managers import trace_llm as trace_llm_call
 
 # Core imports
 from noveum_trace.core.client import NoveumClient
@@ -84,9 +86,9 @@ from noveum_trace.core.context import (
 )
 from noveum_trace.core.span import Span
 from noveum_trace.core.trace import Trace
-from noveum_trace.decorators.agent import trace_agent
 
 # Decorator imports
+from noveum_trace.decorators.agent import trace_agent
 from noveum_trace.decorators.base import trace
 from noveum_trace.decorators.llm import trace_llm
 from noveum_trace.decorators.retrieval import trace_retrieval

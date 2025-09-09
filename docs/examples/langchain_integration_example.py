@@ -15,9 +15,10 @@ Environment Variables:
 
 import os
 
+from dotenv import load_dotenv
+
 import noveum_trace
 from noveum_trace import NoveumTraceCallbackHandler
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -60,9 +61,9 @@ def example_chain_tracing():
     print("\n=== Chain Tracing ===")
 
     try:
-        from langchain_openai import ChatOpenAI
         from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
+        from langchain_openai import ChatOpenAI
 
         # Create callback handler
         callback_handler = NoveumTraceCallbackHandler()
@@ -95,8 +96,8 @@ def example_tool_usage():
     print("\n=== Tool Usage Tracing ===")
 
     try:
+        from langchain.agents import AgentType, initialize_agent
         from langchain.tools import Tool
-        from langchain.agents import initialize_agent, AgentType
         from langchain_openai import ChatOpenAI
 
         # Create callback handler
