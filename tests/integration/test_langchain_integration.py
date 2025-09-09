@@ -757,3 +757,444 @@ class TestLangChainIntegration:
             assert "NoveumTraceCallbackHandler" in repr_str
             assert "active_traces=0" in repr_str
             assert "active_spans=0" in repr_str
+
+    def test_chain_error_handling(self):
+        """Test chain error event handling."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._current_trace = mock_trace
+            handler._trace_stack = [mock_trace]
+            handler._span_stack = [mock_span]
+
+            error = Exception("Chain execution failed")
+            run_id = uuid4()
+
+            result = handler.on_chain_error(error=error, run_id=run_id)
+
+            # Should record exception and set error status
+            mock_span.record_exception.assert_called_once_with(error)
+            mock_span.set_status.assert_called_once()
+            mock_client.finish_span.assert_called_once_with(mock_span)
+
+            # Should finish trace since it was standalone
+            mock_client.finish_trace.assert_called_once_with(mock_trace)
+
+            assert len(handler._trace_stack) == 0
+            assert len(handler._span_stack) == 0
+            assert handler._current_trace is None
+            assert result is None
+
+    def test_tool_error_handling(self):
+        """Test tool error event handling."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            error = Exception("Tool execution failed")
+            run_id = uuid4()
+
+            result = handler.on_tool_error(error=error, run_id=run_id)
+
+            # Should record exception and set error status
+            mock_span.record_exception.assert_called_once_with(error)
+            mock_span.set_status.assert_called_once()
+            mock_client.finish_span.assert_called_once_with(mock_span)
+
+            assert len(handler._span_stack) == 0
+            assert result is None
+
+    def test_retriever_error_handling(self):
+        """Test retriever error event handling."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._current_trace = mock_trace
+            handler._trace_stack = [mock_trace]
+            handler._span_stack = [mock_span]
+
+            error = Exception("Retrieval failed")
+            run_id = uuid4()
+
+            result = handler.on_retriever_error(error=error, run_id=run_id)
+
+            # Should record exception and set error status
+            mock_span.record_exception.assert_called_once_with(error)
+            mock_span.set_status.assert_called_once()
+            mock_client.finish_span.assert_called_once_with(mock_span)
+
+            # Should finish trace since it was standalone
+            mock_client.finish_trace.assert_called_once_with(mock_trace)
+
+            assert len(handler._trace_stack) == 0
+            assert len(handler._span_stack) == 0
+            assert handler._current_trace is None
+            assert result is None
+
+    def test_agent_error_handling(self):
+        """Test agent error event handling - method doesn't exist in LangChain."""
+        # The on_agent_error method doesn't exist in the LangChain callback handler
+        # This test is kept for completeness but will be skipped
+        pytest.skip(
+            "on_agent_error method not implemented in LangChain callback handler"
+        )
+
+    def test_nested_llm_in_chain(self):
+        """Test LLM call within a chain (should not create new trace)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Start chain (creates trace)
+            handler.on_chain_start(
+                serialized={"name": "llm_chain"}, inputs={"topic": "AI"}, run_id=run_id
+            )
+
+            # LLM within chain (should not create new trace)
+            handler.on_llm_start(
+                serialized={"name": "gpt-4"}, prompts=["Hello"], run_id=run_id
+            )
+
+            # Should only have one trace created (for chain)
+            assert mock_client.start_trace.call_count == 1
+            # Should have two spans (chain + LLM)
+            assert mock_client.start_span.call_count == 2
+
+    def test_nested_tool_in_agent(self):
+        """Test tool call within an agent (should not create new trace)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Start agent (creates trace)
+            handler.on_agent_start(
+                serialized={"name": "ReActAgent"},
+                inputs={"input": "test"},
+                run_id=run_id,
+            )
+
+            # Tool within agent (should not create new trace)
+            handler.on_tool_start(
+                serialized={"name": "calculator"}, input_str="2+2", run_id=run_id
+            )
+
+            # Should only have one trace created (for agent)
+            assert mock_client.start_trace.call_count == 1
+            # Should have two spans (agent + tool)
+            assert mock_client.start_span.call_count == 2
+
+    def test_nested_retriever_in_chain(self):
+        """Test retriever call within a chain (should not create new trace)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Start chain (creates trace)
+            handler.on_chain_start(
+                serialized={"name": "rag_chain"},
+                inputs={"query": "test"},
+                run_id=run_id,
+            )
+
+            # Retriever within chain (should not create new trace)
+            handler.on_retriever_start(
+                serialized={"name": "VectorStoreRetriever"}, query="test", run_id=run_id
+            )
+
+            # Should only have one trace created (for chain)
+            assert mock_client.start_trace.call_count == 1
+            # Should have two spans (chain + retriever)
+            assert mock_client.start_span.call_count == 2
+
+    def test_empty_llm_response(self):
+        """Test LLM end event with empty response."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            # Mock empty LLM response
+            mock_response = Mock()
+            mock_response.generations = []
+            mock_response.llm_output = {}
+
+            run_id = uuid4()
+            handler.on_llm_end(response=mock_response, run_id=run_id)
+
+            # Check that attributes were set correctly for empty response
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == []
+            assert attributes["llm.output.response_count"] == 0
+            assert attributes["llm.output.finish_reason"] is None
+
+    def test_large_input_truncation(self):
+        """Test that large inputs are properly truncated."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Test large number of prompts truncation (limited to 5)
+            many_prompts = [f"prompt {i}" for i in range(10)]
+            handler.on_llm_start(
+                serialized={"name": "gpt-4"}, prompts=many_prompts, run_id=run_id
+            )
+
+            # Check that prompts were limited to 5
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert len(attributes["llm.input.prompts"]) <= 5
+
+    def test_large_chain_input_truncation(self):
+        """Test that large chain inputs are properly truncated."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Test large input truncation
+            large_input = "x" * 300
+            handler.on_chain_start(
+                serialized={"name": "test_chain"},
+                inputs={"large_input": large_input},
+                run_id=run_id,
+            )
+
+            # Check that input was truncated (200 chars + "..." = 203)
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert len(attributes["chain.inputs"]["large_input"]) <= 203
+            assert attributes["chain.inputs"]["large_input"].endswith("...")
+
+    def test_missing_llm_output(self):
+        """Test LLM end event with missing llm_output."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            # Mock LLM response without llm_output
+            mock_response = Mock()
+            mock_response.generations = []
+            mock_response.llm_output = None
+
+            run_id = uuid4()
+            handler.on_llm_end(response=mock_response, run_id=run_id)
+
+            # Should handle gracefully
+            mock_span.set_attributes.assert_called_once()
+            mock_span.set_status.assert_called_once()
+
+    def test_text_event_handling(self):
+        """Test text event handler."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            run_id = uuid4()
+            handler.on_text(text="Some text output", run_id=run_id)
+
+            # Should add event to current span
+            mock_span.add_event.assert_called_once()
+            call_args = mock_span.add_event.call_args
+            assert call_args[0][0] == "text_output"
+            assert "text" in call_args[0][1]
+
+    def test_text_event_large_text_truncation(self):
+        """Test text event with large text truncation."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = [mock_span]
+
+            run_id = uuid4()
+            large_text = "x" * 300
+            handler.on_text(text=large_text, run_id=run_id)
+
+            # Check that text was truncated (200 chars + "..." = 203)
+            call_args = mock_span.add_event.call_args
+            event_data = call_args[0][1]
+            assert len(event_data["text"]) <= 203
+            assert event_data["text"].endswith("...")
+
+    def test_ensure_client_recovery(self):
+        """Test _ensure_client method and client recovery."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # Create handler with no client initially
+            handler = NoveumTraceCallbackHandler()
+            handler._client = None
+
+            # Should return True when client is available
+            assert handler._ensure_client() is True
+            assert handler._client == mock_client
+
+    def test_ensure_client_with_existing_client(self):
+        """Test _ensure_client with existing client."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # Create handler and manually set client
+            handler = NoveumTraceCallbackHandler()
+            handler._client = mock_client
+
+            # Should return True immediately
+            assert handler._ensure_client() is True
+            # Should not call get_client again (it was called once during initialization)
+            assert mock_get_client.call_count == 1
+
+    def test_operations_with_no_client(self):
+        """Test operations when client is not available."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_get_client.side_effect = Exception("Client not available")
+
+            handler = NoveumTraceCallbackHandler()
+            handler._client = None
+            run_id = uuid4()
+
+            # All operations should handle gracefully
+            handler.on_llm_start(
+                serialized={"name": "gpt-4"}, prompts=["test"], run_id=run_id
+            )
+            handler.on_llm_end(response=Mock(), run_id=run_id)
+            handler.on_chain_start(
+                serialized={"name": "test"}, inputs={}, run_id=run_id
+            )
+            handler.on_chain_end(outputs={}, run_id=run_id)
+            handler.on_tool_start(
+                serialized={"name": "test"}, input_str="test", run_id=run_id
+            )
+            handler.on_tool_end(output="test", run_id=run_id)
+            handler.on_agent_start(
+                serialized={"name": "test"}, inputs={}, run_id=run_id
+            )
+            handler.on_agent_action(action=Mock(), run_id=run_id)
+            handler.on_agent_finish(finish=Mock(), run_id=run_id)
+            handler.on_retriever_start(
+                serialized={"name": "test"}, query="test", run_id=run_id
+            )
+            handler.on_retriever_end(documents=[], run_id=run_id)
+            handler.on_text(text="test", run_id=run_id)
+
+            # No exceptions should be raised
+            assert True
+
+    def test_operations_with_empty_span_stack(self):
+        """Test operations when span stack is empty."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            handler._span_stack = []
+            run_id = uuid4()
+
+            # These operations should handle gracefully
+            handler.on_llm_end(response=Mock(), run_id=run_id)
+            handler.on_chain_end(outputs={}, run_id=run_id)
+            handler.on_tool_end(output="test", run_id=run_id)
+            handler.on_agent_action(action=Mock(), run_id=run_id)
+            handler.on_agent_finish(finish=Mock(), run_id=run_id)
+            handler.on_retriever_end(documents=[], run_id=run_id)
+            handler.on_text(text="test", run_id=run_id)
+
+            # No exceptions should be raised
+            assert True

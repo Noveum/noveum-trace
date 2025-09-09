@@ -6,8 +6,8 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
 import logging
-from typing import Any, Optional
 from collections.abc import Sequence
+from typing import Any, Optional
 from uuid import UUID
 
 from noveum_trace.core.span import SpanStatus
@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Try to import LangChain dependencies
 try:
-    from langchain_core.callbacks import BaseCallbackHandler
-    from langchain_core.outputs import LLMResult
     from langchain_core.agents import AgentAction, AgentFinish
+    from langchain_core.callbacks import BaseCallbackHandler
     from langchain_core.documents import Document
+    from langchain_core.outputs import LLMResult
 
     LANGCHAIN_AVAILABLE = True
 except ImportError:

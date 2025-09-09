@@ -65,17 +65,13 @@ from noveum_trace.agents import trace_agent_operation as trace_agent_op
 # Context manager imports
 from noveum_trace.context_managers import (
     create_child_span,
-)
-from noveum_trace.context_managers import trace_agent as trace_agent_operation
-from noveum_trace.context_managers import (
     trace_batch_operation,
     trace_function_calls,
-)
-from noveum_trace.context_managers import trace_llm as trace_llm_call
-from noveum_trace.context_managers import (
     trace_operation,
     trace_pipeline_stage,
 )
+from noveum_trace.context_managers import trace_agent as trace_agent_operation
+from noveum_trace.context_managers import trace_llm as trace_llm_call
 
 # Core imports
 from noveum_trace.core.client import NoveumClient

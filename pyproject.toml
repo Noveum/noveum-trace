@@ -78,6 +78,7 @@ dev = [
     # Framework integrations for testing
     "openai>=1.0.0",
     "anthropic>=0.3.0",
+    "langchain-core>=0.1.0",
 
     # Development utilities
     "pre-commit>=3.0.0",
@@ -91,7 +92,6 @@ test = [
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
     "pytest-asyncio>=0.21.0",
-    "langchain-core>=0.1.0",
 ]
 
 # Linting dependencies
