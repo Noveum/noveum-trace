@@ -639,6 +639,9 @@ class TestLangChainIntegration:
             handler._trace_stack = [mock_trace]
             handler._span_stack = [mock_span]
 
+            # Set proper name for the mock span to avoid being treated as a tool span
+            mock_span.name = "agent:test_agent"
+
             # Mock agent finish
             mock_finish = Mock()
             mock_finish.return_values = {"output": "The answer is 4"}

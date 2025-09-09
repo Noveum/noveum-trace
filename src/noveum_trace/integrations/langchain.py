@@ -64,7 +64,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if event_type in ["chain_start", "agent_start"]:
             return True  # Always create trace for chains/agents
 
-        if event_type in ["llm_start", "retriever_start"]:
+        if event_type in ["llm_start", "retriever_start", "tool_start"]:
             return len(self._trace_stack) == 0  # Only if not nested
 
         return False
@@ -170,6 +170,68 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Fallback to class name
         return serialized.get("name", "unknown")
+
+    def _create_tool_span_from_action(
+        self, action: "AgentAction", run_id: UUID
+    ) -> None:
+        """Create a tool span from an agent action (when on_tool_start/on_tool_end aren't triggered)."""
+        try:
+            tool_name = action.tool
+            tool_input = str(action.tool_input)
+
+            # Create a tool span similar to on_tool_start
+            span = self._client.start_span(
+                name=f"tool:{tool_name}:{tool_name}",
+                attributes={
+                    "langchain.run_id": str(run_id),
+                    "tool.name": tool_name,
+                    "tool.operation": tool_name,
+                    "tool.input.input_str": tool_input,
+                    "tool.input.argument_count": 1,
+                    "tool.input.expression": tool_input,  # For calculator tools
+                },
+            )
+            self._span_stack.append(span)
+
+        except Exception as e:
+            logger.error("Error creating tool span from action: %s", e)
+
+    def _complete_tool_spans_from_finish(self, finish: "AgentFinish") -> None:
+        """Complete any pending tool spans when agent finishes."""
+        try:
+            # Look for tool spans and complete them
+            tool_spans_to_complete = []
+            for i in range(len(self._span_stack) - 1, -1, -1):
+                span = self._span_stack[i]
+                span_name = getattr(span, "name", "")
+                if span_name.startswith("tool:"):
+                    tool_spans_to_complete.append(self._span_stack.pop(i))
+
+            # Complete tool spans with the final result
+            for tool_span in tool_spans_to_complete:
+                # Extract result from the finish log
+                result = "Tool execution completed"
+                if hasattr(finish, "log") and finish.log:
+                    # Try to extract the result from the log
+                    log_lines = finish.log.split("\n")
+                    for line in log_lines:
+                        if "Observation:" in line:
+                            result = line.replace("Observation:", "").strip()
+                            break
+                        elif "Final Answer:" in line:
+                            result = line.replace("Final Answer:", "").strip()
+                            break
+
+                tool_span.set_attributes(
+                    {
+                        "tool.output.output": result,
+                    }
+                )
+                tool_span.set_status(SpanStatus.OK)
+                self._client.finish_span(tool_span)
+
+        except Exception as e:
+            logger.error("Error completing tool spans from finish: %s", e)
 
     def _ensure_client(self) -> bool:
         """Ensure we have a valid client."""
@@ -435,20 +497,44 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
     # Tool Events
     def on_tool_start(
-        self, serialized: dict[str, Any], input_str: str, run_id: UUID, **kwargs: Any
+        self,
+        serialized: dict[str, Any],
+        input_str: str,
+        run_id: UUID,
+        inputs: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Handle tool start event."""
         if not self._ensure_client():
             return
 
-        self._get_operation_name("tool_start", serialized)
+        operation_name = self._get_operation_name("tool_start", serialized)
 
         try:
-            # Tools always create spans (never standalone traces)
+            # Check if we should create a new trace for this tool call
+            if self._should_create_trace("tool_start", serialized):
+                # Standalone tool call - create new trace
+                self._current_trace = self._client.start_trace(operation_name)
+                self._trace_stack.append(self._current_trace)
+
             tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = self._extract_tool_function_name(serialized)
+
+            # Prepare input attributes
+            input_attrs = {
+                "tool.input.input_str": input_str,  # String representation for compatibility
+            }
+
+            # Add structured inputs if available
+            if inputs:
+                for key, value in inputs.items():
+                    # Convert values to strings for attribute storage
+                    input_attrs[f"tool.input.{key}"] = str(value)
+                input_attrs["tool.input.argument_count"] = str(len(inputs))
+            else:
+                input_attrs["tool.input.argument_count"] = "0"
 
             span = self._client.start_span(
                 name=f"tool:{tool_name}:{func_name}",
@@ -457,11 +543,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "tool.name": tool_name,
                     "tool.operation": func_name,
                     # Input attributes
-                    "tool.input.input_str": input_str,
+                    **input_attrs,
                     **{
                         k: v
                         for k, v in kwargs.items()
-                        if k not in ["tags", "metadata"]
+                        if k not in ["tags", "metadata", "inputs"]
                         and isinstance(v, (str, int, float, bool))
                     },
                 },
@@ -477,12 +563,32 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
-            span = self._span_stack.pop()
+            # Find and finish the most recent tool span
+            # Look for tool spans (both "tool:" and "tool_call:" patterns)
+            tool_span = None
+            for i in range(len(self._span_stack) - 1, -1, -1):
+                span_name = getattr(self._span_stack[i], "name", "")
+                if span_name.startswith("tool:") or span_name.startswith("tool_call:"):
+                    tool_span = self._span_stack.pop(i)
+                    break
 
-            span.set_attributes({"tool.output.output": output})
+            if tool_span:
+                tool_span.set_attributes({"tool.output.output": output})
+                tool_span.set_status(SpanStatus.OK)
+                self._client.finish_span(tool_span)
+            else:
+                # Fallback to the last span if no tool span found
+                span = self._span_stack.pop()
+                span.set_attributes({"tool.output.output": output})
+                span.set_status(SpanStatus.OK)
+                self._client.finish_span(span)
 
-            span.set_status(SpanStatus.OK)
-            self._client.finish_span(span)
+            # Finish trace if this was a standalone tool call
+            if self._current_trace and len(self._span_stack) == 0:
+                self._client.finish_trace(self._current_trace)
+                if self._trace_stack:
+                    self._trace_stack.pop()
+                self._current_trace = None
 
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
@@ -579,6 +685,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 }
             )
 
+            # Add event for agent action (tool call decision)
             span.add_event(
                 "agent_action",
                 {
@@ -587,6 +694,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "action.log": action.log,
                 },
             )
+
+            # Also create a tool span for the tool execution
+            # This handles cases where LangChain doesn't trigger on_tool_start/on_tool_end
+            self._create_tool_span_from_action(action, run_id)
 
         except Exception as e:
             logger.error("Error handling agent action event: %s", e)
@@ -599,6 +710,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
+            # Complete any pending tool spans first
+            self._complete_tool_spans_from_finish(finish)
+
             span = self._span_stack.pop()  # Pop the agent span
 
             # Add agent output attributes
@@ -611,8 +725,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 }
             )
 
-            span.set_status(SpanStatus.OK)
-
+            # Add event for agent finish
             span.add_event(
                 "agent_finish",
                 {
@@ -623,6 +736,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 },
             )
 
+            span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
 
             # Finish trace if this was the top-level agent
