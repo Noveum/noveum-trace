@@ -32,9 +32,7 @@ def example_basic_llm_tracing():
 
         # Initialize Noveum Trace with batch size 1
         noveum_trace.init(
-            project="langchain-integration-demo",
-            environment="development",
-            endpoint="https://noveum.free.beeceptor.com",
+            # endpoint="https://noveum.free.beeceptor.com",
             transport_config={"batch_size": 1, "batch_timeout": 5.0},
         )
 

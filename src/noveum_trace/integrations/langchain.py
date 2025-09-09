@@ -26,7 +26,8 @@ from noveum_trace.core.span import SpanStatus
 logger = logging.getLogger(__name__)
 
 if not LANGCHAIN_AVAILABLE:
-    logger.warning("LangChain not available. Install with: pip install langchain-core")
+    logger.warning(
+        "LangChain not available. Install with: pip install langchain-core")
 
     # Create stub base class
     class BaseCallbackHandler(Protocol):  # type: ignore[no-redef]
@@ -210,13 +211,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes={
                     "langchain.run_id": str(run_id),
                     "llm.model": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
+                        serialized.get(
+                            "name", "unknown") if serialized else "unknown"
                     ),
                     "llm.provider": (
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
                         else (
-                            serialized.get("id", "unknown") if serialized else "unknown"
+                            serialized.get(
+                                "id", "unknown") if serialized else "unknown"
                         )
                     ),
                     "llm.operation": "completion",
@@ -250,7 +253,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             if hasattr(response, "generations") and response.generations:
                 generations = [
-                    gen.text[:500] + "..." if len(gen.text) > 500 else gen.text
+                    gen.text
                     for generation_list in response.generations
                     for gen in generation_list
                 ][
@@ -292,7 +295,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was a standalone LLM call
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -319,7 +323,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was a standalone LLM call
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -353,12 +358,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes={
                     "langchain.run_id": str(run_id),
                     "chain.name": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
+                        serialized.get(
+                            "name", "unknown") if serialized else "unknown"
                     ),
                     "chain.operation": "execution",
                     # Input attributes
                     "chain.inputs": {
-                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        k: str(v)
                         for k, v in inputs.items()
                     },
                     **{
@@ -388,7 +394,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 {
                     # Output attributes
                     "chain.output.outputs": {
-                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        k: str(v)
                         for k, v in outputs.items()
                     }
                 }
@@ -400,7 +406,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was the top-level chain
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -427,7 +434,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was the top-level chain
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -447,7 +455,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Tools always create spans (never standalone traces)
-            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
+            tool_name = serialized.get(
+                "name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = self._extract_tool_function_name(serialized)
@@ -459,9 +468,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "tool.name": tool_name,
                     "tool.operation": func_name,
                     # Input attributes
-                    "tool.input.input_str": (
-                        input_str[:500] + "..." if len(input_str) > 500 else input_str
-                    ),
+                    "tool.input.input_str": input_str,
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -485,9 +492,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             span.set_attributes(
                 {
-                    "tool.output.output": (
-                        output[:500] + "..." if len(output) > 500 else output
-                    )
+                    "tool.output.output": output
                 }
             )
 
@@ -541,7 +546,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 self._trace_stack.append(self._current_trace)
 
             # Create span for agent
-            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
+            agent_name = serialized.get(
+                "name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
             agent_type = self._extract_agent_type(serialized)
@@ -557,7 +563,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "agent.capabilities": agent_capabilities,
                     # Input attributes
                     "agent.input.inputs": {
-                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        k: str(v)
                         for k, v in inputs.items()
                     },
                     **{
@@ -587,16 +593,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_attributes(
                 {
                     "agent.output.action.tool": action.tool,
-                    "agent.output.action.tool_input": (
-                        str(action.tool_input)[:200] + "..."
-                        if len(str(action.tool_input)) > 200
-                        else str(action.tool_input)
-                    ),
-                    "agent.output.action.log": (
-                        action.log[:300] + "..."
-                        if len(action.log) > 300
-                        else action.log
-                    ),
+                    "agent.output.action.tool_input": str(action.tool_input),
+                    "agent.output.action.log": action.log,
                 }
             )
 
@@ -604,16 +602,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "agent_action",
                 {
                     "action.tool": action.tool,
-                    "action.tool_input": (
-                        str(action.tool_input)[:200] + "..."
-                        if len(str(action.tool_input)) > 200
-                        else str(action.tool_input)
-                    ),
-                    "action.log": (
-                        action.log[:300] + "..."
-                        if len(action.log) > 300
-                        else action.log
-                    ),
+                    "action.tool_input": str(action.tool_input),
+                    "action.log": action.log,
                 },
             )
 
@@ -634,14 +624,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_attributes(
                 {
                     "agent.output.finish.return_values": {
-                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        k: str(v)
                         for k, v in finish.return_values.items()
                     },
-                    "agent.output.finish.log": (
-                        finish.log[:300] + "..."
-                        if len(finish.log) > 300
-                        else finish.log
-                    ),
+                    "agent.output.finish.log": finish.log,
                 }
             )
 
@@ -651,21 +637,18 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was the top-level agent
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
             span.add_event(
                 "agent_finish",
                 {
                     "finish.return_values": {
-                        k: str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
+                        k: str(v)
                         for k, v in finish.return_values.items()
                     },
-                    "finish.log": (
-                        finish.log[:300] + "..."
-                        if len(finish.log) > 300
-                        else finish.log
-                    ),
+                    "finish.log": finish.log,
                 },
             )
 
@@ -680,7 +663,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name("retriever_start", serialized)
+        operation_name = self._get_operation_name(
+            "retriever_start", serialized)
 
         try:
             if self._should_create_trace("retriever_start", serialized):
@@ -695,12 +679,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "langchain.run_id": str(run_id),
                     "retrieval.type": "search",
                     "retrieval.operation": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
+                        serialized.get(
+                            "name", "unknown") if serialized else "unknown"
                     ),
                     # Input attributes
-                    "retrieval.query": (
-                        query[:300] + "..." if len(query) > 300 else query
-                    ),
+                    "retrieval.query": query,
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -733,12 +716,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             doc_previews = []
             for doc in documents[:10]:  # Limit to first 10 documents
                 if hasattr(doc, "page_content"):
-                    content = (
-                        doc.page_content[:200] + "..."
-                        if len(doc.page_content) > 200
-                        else doc.page_content
-                    )
-                    doc_previews.append(content)
+                    doc_previews.append(doc.page_content)
 
             span.set_attributes(
                 {
@@ -755,7 +733,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was a standalone retrieval
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -784,7 +763,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Finish trace if this was a standalone retrieval
             if self._current_trace and len(self._span_stack) == 0:
                 self._client.finish_trace(self._current_trace)
-                self._trace_stack.pop()
+                if self._trace_stack:
+                    self._trace_stack.pop()
                 self._current_trace = None
 
         except Exception as e:
@@ -800,7 +780,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span = self._span_stack[-1]
             span.add_event(
-                "text_output", {"text": text[:200] + "..." if len(text) > 200 else text}
+                "text_output", {"text": text}
             )
         except Exception as e:
             logger.error("Error handling text event: %s", e)
