@@ -26,8 +26,7 @@ from noveum_trace.core.span import SpanStatus
 logger = logging.getLogger(__name__)
 
 if not LANGCHAIN_AVAILABLE:
-    logger.warning(
-        "LangChain not available. Install with: pip install langchain-core")
+    logger.warning("LangChain not available. Install with: pip install langchain-core")
 
     # Create stub base class
     class BaseCallbackHandler(Protocol):  # type: ignore[no-redef]
@@ -211,15 +210,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes={
                     "langchain.run_id": str(run_id),
                     "llm.model": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     "llm.provider": (
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
                         else (
-                            serialized.get(
-                                "id", "unknown") if serialized else "unknown"
+                            serialized.get("id", "unknown") if serialized else "unknown"
                         )
                     ),
                     "llm.operation": "completion",
@@ -358,15 +355,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes={
                     "langchain.run_id": str(run_id),
                     "chain.name": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     "chain.operation": "execution",
                     # Input attributes
-                    "chain.inputs": {
-                        k: str(v)
-                        for k, v in inputs.items()
-                    },
+                    "chain.inputs": {k: str(v) for k, v in inputs.items()},
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -393,10 +386,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_attributes(
                 {
                     # Output attributes
-                    "chain.output.outputs": {
-                        k: str(v)
-                        for k, v in outputs.items()
-                    }
+                    "chain.output.outputs": {k: str(v) for k, v in outputs.items()}
                 }
             )
 
@@ -455,8 +445,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Tools always create spans (never standalone traces)
-            tool_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = self._extract_tool_function_name(serialized)
@@ -490,11 +479,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span = self._span_stack.pop()
 
-            span.set_attributes(
-                {
-                    "tool.output.output": output
-                }
-            )
+            span.set_attributes({"tool.output.output": output})
 
             span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
@@ -546,8 +531,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 self._trace_stack.append(self._current_trace)
 
             # Create span for agent
-            agent_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
             agent_type = self._extract_agent_type(serialized)
@@ -562,10 +546,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "agent.operation": "execution",
                     "agent.capabilities": agent_capabilities,
                     # Input attributes
-                    "agent.input.inputs": {
-                        k: str(v)
-                        for k, v in inputs.items()
-                    },
+                    "agent.input.inputs": {k: str(v) for k, v in inputs.items()},
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -624,14 +605,24 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_attributes(
                 {
                     "agent.output.finish.return_values": {
-                        k: str(v)
-                        for k, v in finish.return_values.items()
+                        k: str(v) for k, v in finish.return_values.items()
                     },
                     "agent.output.finish.log": finish.log,
                 }
             )
 
             span.set_status(SpanStatus.OK)
+
+            span.add_event(
+                "agent_finish",
+                {
+                    "finish.return_values": {
+                        k: str(v) for k, v in finish.return_values.items()
+                    },
+                    "finish.log": finish.log,
+                },
+            )
+
             self._client.finish_span(span)
 
             # Finish trace if this was the top-level agent
@@ -640,17 +631,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 if self._trace_stack:
                     self._trace_stack.pop()
                 self._current_trace = None
-
-            span.add_event(
-                "agent_finish",
-                {
-                    "finish.return_values": {
-                        k: str(v)
-                        for k, v in finish.return_values.items()
-                    },
-                    "finish.log": finish.log,
-                },
-            )
 
         except Exception as e:
             logger.error("Error handling agent finish event: %s", e)
@@ -663,8 +643,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name(
-            "retriever_start", serialized)
+        operation_name = self._get_operation_name("retriever_start", serialized)
 
         try:
             if self._should_create_trace("retriever_start", serialized):
@@ -679,8 +658,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "langchain.run_id": str(run_id),
                     "retrieval.type": "search",
                     "retrieval.operation": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     # Input attributes
                     "retrieval.query": query,
@@ -779,9 +757,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             span = self._span_stack[-1]
-            span.add_event(
-                "text_output", {"text": text}
-            )
+            span.add_event("text_output", {"text": text})
         except Exception as e:
             logger.error("Error handling text event: %s", e)
 

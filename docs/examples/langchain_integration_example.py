@@ -156,7 +156,7 @@ def example_error_handling():
         # Create LLM with invalid API key to trigger error
         llm = ChatOpenAI(
             model="gpt-3.5-turbo",
-            openai_api_key="invalid-key",
+            api_key="invalid-key",
             callbacks=[callback_handler],
         )
 

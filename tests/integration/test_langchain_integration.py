@@ -1011,7 +1011,7 @@ class TestLangChainIntegration:
             assert len(attributes["llm.input.prompts"]) <= 5
 
     def test_large_chain_input_truncation(self):
-        """Test that large chain inputs are properly truncated."""
+        """Test that large chain inputs are stored without truncation."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1024,7 +1024,7 @@ class TestLangChainIntegration:
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            # Test large input truncation
+            # Test large input (no truncation expected)
             large_input = "x" * 300
             handler.on_chain_start(
                 serialized={"name": "test_chain"},
@@ -1032,11 +1032,11 @@ class TestLangChainIntegration:
                 run_id=run_id,
             )
 
-            # Check that input was truncated (200 chars + "..." = 203)
+            # Check that input was stored without truncation
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
-            assert len(attributes["chain.inputs"]["large_input"]) <= 203
-            assert attributes["chain.inputs"]["large_input"].endswith("...")
+            assert len(attributes["chain.inputs"]["large_input"]) == 300
+            assert attributes["chain.inputs"]["large_input"] == large_input
 
     def test_missing_llm_output(self):
         """Test LLM end event with missing llm_output."""
@@ -1086,7 +1086,7 @@ class TestLangChainIntegration:
             assert "text" in call_args[0][1]
 
     def test_text_event_large_text_truncation(self):
-        """Test text event with large text truncation."""
+        """Test text event with large text (no truncation expected)."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1102,11 +1102,11 @@ class TestLangChainIntegration:
             large_text = "x" * 300
             handler.on_text(text=large_text, run_id=run_id)
 
-            # Check that text was truncated (200 chars + "..." = 203)
+            # Check that text was stored without truncation
             call_args = mock_span.add_event.call_args
             event_data = call_args[0][1]
-            assert len(event_data["text"]) <= 203
-            assert event_data["text"].endswith("...")
+            assert len(event_data["text"]) == 300
+            assert event_data["text"] == large_text
 
     def test_ensure_client_recovery(self):
         """Test _ensure_client method and client recovery."""
