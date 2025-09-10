@@ -50,6 +50,7 @@ dependencies = [
 # Framework integrations
 openai = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.3.0"]
+langchain = ["langchain-core>=0.1.0"]
 
 # Development dependencies
 dev = [
@@ -77,6 +78,7 @@ dev = [
     # Framework integrations for testing
     "openai>=1.0.0",
     "anthropic>=0.3.0",
+    "langchain-core>=0.1.0",
 
     # Development utilities
     "pre-commit>=3.0.0",

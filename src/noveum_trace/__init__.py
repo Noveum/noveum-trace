@@ -36,8 +36,6 @@ __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
 
 import threading
-
-# Type imports
 from typing import Any, Optional
 
 # Agent imports
@@ -88,9 +86,9 @@ from noveum_trace.core.context import (
 )
 from noveum_trace.core.span import Span
 from noveum_trace.core.trace import Trace
-from noveum_trace.decorators.agent import trace_agent
 
 # Decorator imports
+from noveum_trace.decorators.agent import trace_agent
 from noveum_trace.decorators.base import trace
 from noveum_trace.decorators.llm import trace_llm
 from noveum_trace.decorators.retrieval import trace_retrieval
@@ -329,6 +327,16 @@ def start_span(name: str, **kwargs: Any) -> Span:
     return client.start_span(name, **kwargs)
 
 
+# Integrations imports (conditional)
+_integration_exports = []
+try:
+    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+
+    _integration_exports.append("NoveumTraceCallbackHandler")
+except ImportError:
+    # LangChain not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions
@@ -399,6 +407,8 @@ __all__ = [
     # Plugin system
     "register_plugin",
     "list_plugins",
+    # Integrations (conditional)
+    *_integration_exports,
     # Exceptions
     "NoveumTraceError",
     "ConfigurationError",
