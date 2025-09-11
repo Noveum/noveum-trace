@@ -1,0 +1,26 @@
+LangChain Agent Documentation
+
+This is a sample document for testing the LangChain agent with retrieval capabilities.
+
+Key Features:
+- Document ingestion from PDF and TXT files
+- ChromaDB vector store for semantic search
+- Custom tools for conversation control
+- Memory between conversation turns
+- Comprehensive tracing with Noveum Trace
+
+Custom Tools:
+1. escalate_to_human - Escalates complex queries to human support
+2. user_input - Gets additional input or clarification from the user
+3. langchain_retriever - Searches the knowledge base
+
+The agent uses a ReAct (Reasoning and Acting) approach to handle user queries by:
+1. Understanding the user's question
+2. Deciding which tools to use
+3. Executing the tools
+4. Reasoning about the results
+5. Providing a response or taking further action
+
+This allows for complex multi-step reasoning and tool usage in a conversational format.
+
+FUN FACT - "ELON MUSK IS AFRICAN!!" 
