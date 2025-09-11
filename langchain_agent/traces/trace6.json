@@ -1,0 +1,106 @@
+{
+    "traces": [
+        {
+            "trace_id": "a7120b51-fa82-4691-a2dc-d2229f38f623",
+            "name": "chain_start.unknown",
+            "start_time": "2025-09-11T15:52:49.992530+00:00",
+            "end_time": "2025-09-11T15:52:50.850684+00:00",
+            "duration_ms": 858.154,
+            "status": "ok",
+            "status_message": null,
+            "span_count": 2,
+            "error_count": 0,
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [
+                {
+                    "span_id": "ac4b271c-3f80-41c7-8dc8-997c7fc046a8",
+                    "trace_id": "a7120b51-fa82-4691-a2dc-d2229f38f623",
+                    "parent_span_id": null,
+                    "name": "chain_start.unknown",
+                    "start_time": "2025-09-11T15:52:49.992569+00:00",
+                    "end_time": "2025-09-11T15:52:50.850676+00:00",
+                    "duration_ms": 858.107,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "50d67ef0-01e2-4000-8b8e-6b4accdb3479",
+                        "chain.name": "unknown",
+                        "chain.operation": "execution",
+                        "chain.inputs": {
+                            "input": "hi"
+                        },
+                        "name": "AgentExecutor",
+                        "agent.output.finish.return_values": {
+                            "output": "N/A"
+                        },
+                        "agent.output.finish.log": "This is a simple greeting and does not require any special tools.\nFinal Answer: N/A"
+                    },
+                    "events": [
+                        {
+                            "name": "agent_finish",
+                            "timestamp": "2025-09-11T15:52:50.850670+00:00",
+                            "attributes": {
+                                "finish.return_values": {
+                                    "output": "N/A"
+                                },
+                                "finish.log": "This is a simple greeting and does not require any special tools.\nFinal Answer: N/A"
+                            }
+                        }
+                    ],
+                    "links": []
+                },
+                {
+                    "span_id": "599b68ec-1f24-4df1-8e44-cc8f7a353b47",
+                    "trace_id": "a7120b51-fa82-4691-a2dc-d2229f38f623",
+                    "parent_span_id": "ac4b271c-3f80-41c7-8dc8-997c7fc046a8",
+                    "name": "llm.openai",
+                    "start_time": "2025-09-11T15:52:49.992904+00:00",
+                    "end_time": "2025-09-11T15:52:50.850508+00:00",
+                    "duration_ms": 857.604,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "c83beb39-a7f3-48d0-b9a2-401ec073034d",
+                        "llm.model": "ChatOpenAI",
+                        "llm.provider": "ChatOpenAI",
+                        "llm.operation": "completion",
+                        "llm.input.prompts": [
+                            "Human: Answer the following questions as best you can. You have access to the following tools:\n\nescalate_to_human(reason: str = 'Complex query requiring human assistance') -> str - Use this tool when the query is too complex or you cannot resolve the user's issue. This will escalate to human customer support.\nuser_input(prompt: str = 'Please provide more information') -> str - Use this tool when you need additional information or clarification from the user. This will prompt the user for more details.\nlangchain_retriever(query: str) -> str - Use this tool to search through the knowledge base for relevant information. Input should be a search query.\n\nUse the following format:\n\nQuestion: the input question you must answer\nThought: you should always think about what to do\nAction: the action to take, should be one of [escalate_to_human, user_input, langchain_retriever]\nAction Input: the input to the action\nObservation: the result of the action\n... (this Thought/Action/Action Input/Observation can repeat N times)\nThought: I now know the final answer\nFinal Answer: the final answer to the original input question\n\nBegin!\n\nQuestion: hi\nThought:"
+                        ],
+                        "llm.input.prompt_count": 1,
+                        "batch_size": 1,
+                        "llm.output.response": [
+                            "This is a simple greeting and does not require any special tools.\nFinal Answer: N/A"
+                        ],
+                        "llm.output.response_count": 1,
+                        "llm.output.finish_reason": null,
+                        "llm.input_tokens": 253,
+                        "llm.output_tokens": 18,
+                        "llm.total_tokens": 271
+                    },
+                    "events": [],
+                    "links": []
+                }
+            ],
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm"
+        }
+    ],
+    "timestamp": 1757605970.8511806
+}

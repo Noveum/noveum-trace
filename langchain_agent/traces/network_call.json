@@ -1,0 +1,1667 @@
+{
+    "success": true,
+    "traces": [
+        {
+            "trace_id": "c08b4da9-4285-44e1-acda-34abc591ee31",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:17:32.535000000",
+            "end_time": "2025-09-11 12:17:34.168000000",
+            "duration_ms": 1632.9260000000002,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:17:34.253000000",
+            "updated_at": "2025-09-11 12:17:34.253000000"
+        },
+        {
+            "trace_id": "bb5beb8b-2ea4-4bd0-af82-fb4df56af46b",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:17:18.857000000",
+            "end_time": "2025-09-11 12:17:21.926000000",
+            "duration_ms": 3069.039,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:17:21.987000000",
+            "updated_at": "2025-09-11 12:17:21.987000000"
+        },
+        {
+            "trace_id": "37eb59e8-0e0d-4f4d-8bba-f9c4242687f5",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:17:04.910000000",
+            "end_time": "2025-09-11 12:17:08.248000000",
+            "duration_ms": 3337.7,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:17:08.306000000",
+            "updated_at": "2025-09-11 12:17:08.306000000"
+        },
+        {
+            "trace_id": "806833b0-8245-403b-8679-2ded4b30e1d7",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:16:54.167000000",
+            "end_time": "2025-09-11 12:16:56.303000000",
+            "duration_ms": 2135.529,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:16:56.362000000",
+            "updated_at": "2025-09-11 12:16:56.362000000"
+        },
+        {
+            "trace_id": "3cb6e34f-a262-460e-870b-8b45ed31f285",
+            "name": "test_llm_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:16:48.144000000",
+            "end_time": "2025-09-11 12:16:48.565000000",
+            "duration_ms": 421.88,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:16:48.620000000",
+            "updated_at": "2025-09-11 12:16:48.620000000"
+        },
+        {
+            "trace_id": "6c4da606-fc4a-4d7b-b6cb-af8c0da7bf11",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:16:41.823000000",
+            "end_time": "2025-09-11 12:16:42.525000000",
+            "duration_ms": 701.696,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:16:42.595000000",
+            "updated_at": "2025-09-11 12:16:42.595000000"
+        },
+        {
+            "trace_id": "529b1da4-e8a0-4d0e-9472-0cd1b29e377e",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:16:35.067000000",
+            "end_time": "2025-09-11 12:16:36.533000000",
+            "duration_ms": 1465.749,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:16:36.777000000",
+            "updated_at": "2025-09-11 12:16:36.777000000"
+        },
+        {
+            "trace_id": "e4c63369-ec9e-4b4a-bfe8-3d2761fc193e",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:14:34.531000000",
+            "end_time": "2025-09-11 12:14:36.117000000",
+            "duration_ms": 1585.698,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:14:36.336000000",
+            "updated_at": "2025-09-11 12:14:36.336000000"
+        },
+        {
+            "trace_id": "3aa9c84f-a917-4665-a17e-89e2115a6427",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:14:21.550000000",
+            "end_time": "2025-09-11 12:14:23.857000000",
+            "duration_ms": 2307.2219999999998,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:14:23.948000000",
+            "updated_at": "2025-09-11 12:14:23.948000000"
+        },
+        {
+            "trace_id": "273bc561-0d93-4c97-abf0-ef8801dc184c",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:14:06.690000000",
+            "end_time": "2025-09-11 12:14:10.880000000",
+            "duration_ms": 4189.521,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:14:10.970000000",
+            "updated_at": "2025-09-11 12:14:10.970000000"
+        },
+        {
+            "trace_id": "e79dc43a-2ae2-4f6d-856e-0c18b4664e8b",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:56.097000000",
+            "end_time": "2025-09-11 12:13:58.024000000",
+            "duration_ms": 1927.1309999999999,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:58.109000000",
+            "updated_at": "2025-09-11 12:13:58.109000000"
+        },
+        {
+            "trace_id": "61b08e66-ce54-46ea-b29d-d8734ce9e46a",
+            "name": "test_llm_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:50.012000000",
+            "end_time": "2025-09-11 12:13:50.450000000",
+            "duration_ms": 437.91999999999996,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:50.525000000",
+            "updated_at": "2025-09-11 12:13:50.525000000"
+        },
+        {
+            "trace_id": "5f94c67f-de80-4b6c-8a6a-cb2c1a0b1b1e",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:45.017000000",
+            "end_time": "2025-09-11 12:13:47.491000000",
+            "duration_ms": 2474.1270000000004,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:47.605000000",
+            "updated_at": "2025-09-11 12:13:47.605000000"
+        },
+        {
+            "trace_id": "81ce60f3-629d-4bea-955d-5f2ad9441a59",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:44.321000000",
+            "end_time": "2025-09-11 12:13:44.676000000",
+            "duration_ms": 355.009,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:44.933000000",
+            "updated_at": "2025-09-11 12:13:44.933000000"
+        },
+        {
+            "trace_id": "c41436c3-905d-4925-9256-5052c8959fc2",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:37.452000000",
+            "end_time": "2025-09-11 12:13:38.411000000",
+            "duration_ms": 959.0699999999999,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:38.741000000",
+            "updated_at": "2025-09-11 12:13:38.741000000"
+        },
+        {
+            "trace_id": "0f7e6d48-bc2e-4fac-88e3-8d20d89eca93",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:31.515000000",
+            "end_time": "2025-09-11 12:13:34.324000000",
+            "duration_ms": 2809.008,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:34.433000000",
+            "updated_at": "2025-09-11 12:13:34.433000000"
+        },
+        {
+            "trace_id": "725905eb-646b-46e2-b19c-5d7e989774f6",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:15.406000000",
+            "end_time": "2025-09-11 12:13:20.814000000",
+            "duration_ms": 5407.879999999999,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:20.921000000",
+            "updated_at": "2025-09-11 12:13:20.921000000"
+        },
+        {
+            "trace_id": "23eb3334-3880-4ba0-9aad-073c46b2be4e",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:13:05.153000000",
+            "end_time": "2025-09-11 12:13:06.736000000",
+            "duration_ms": 1582.639,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:13:06.827000000",
+            "updated_at": "2025-09-11 12:13:06.827000000"
+        },
+        {
+            "trace_id": "dcb7692e-efb8-4bae-a785-d5222648db68",
+            "name": "test_llm_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:12:58.905000000",
+            "end_time": "2025-09-11 12:12:59.387000000",
+            "duration_ms": 481.41,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:12:59.575000000",
+            "updated_at": "2025-09-11 12:12:59.575000000"
+        },
+        {
+            "trace_id": "70e48536-966d-4101-b2e3-dbe9aae68ed8",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:12:50.905000000",
+            "end_time": "2025-09-11 12:12:53.131000000",
+            "duration_ms": 2226.111,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:12:53.326000000",
+            "updated_at": "2025-09-11 12:12:53.326000000"
+        },
+        {
+            "trace_id": "1c974ca3-7fa1-4df5-9331-c5ad2d6bd72e",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:12:44.203000000",
+            "end_time": "2025-09-11 12:12:45.052000000",
+            "duration_ms": 848.441,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:12:45.316000000",
+            "updated_at": "2025-09-11 12:12:45.316000000"
+        },
+        {
+            "trace_id": "80903341-b246-4c64-917f-2868974007e2",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:08:42.468000000",
+            "end_time": "2025-09-11 12:08:44.337000000",
+            "duration_ms": 1868.9260000000002,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:08:44.439000000",
+            "updated_at": "2025-09-11 12:08:44.439000000"
+        },
+        {
+            "trace_id": "bdb310ab-e5c3-409b-9f04-c806a4a54ff0",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:08:28.309000000",
+            "end_time": "2025-09-11 12:08:31.782000000",
+            "duration_ms": 3472.813,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:08:31.886000000",
+            "updated_at": "2025-09-11 12:08:31.886000000"
+        },
+        {
+            "trace_id": "f2343fd8-b000-4951-99ea-d1b5bdcffc9b",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:08:14.347000000",
+            "end_time": "2025-09-11 12:08:17.619000000",
+            "duration_ms": 3271.642,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:08:17.727000000",
+            "updated_at": "2025-09-11 12:08:17.727000000"
+        },
+        {
+            "trace_id": "bcd12ad2-2d8a-45f6-a8f5-13de5ba92804",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:08:03.649000000",
+            "end_time": "2025-09-11 12:08:05.669000000",
+            "duration_ms": 2019.6589999999999,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:08:05.762000000",
+            "updated_at": "2025-09-11 12:08:05.762000000"
+        },
+        {
+            "trace_id": "c430c372-5674-46b3-a5c1-79ccc7ac737a",
+            "name": "test_llm_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:57.538000000",
+            "end_time": "2025-09-11 12:07:57.972000000",
+            "duration_ms": 434,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:58.066000000",
+            "updated_at": "2025-09-11 12:07:58.066000000"
+        },
+        {
+            "trace_id": "20c143f5-2b88-4251-8a32-2e15ee190d64",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:51.098000000",
+            "end_time": "2025-09-11 12:07:51.734000000",
+            "duration_ms": 636.476,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:51.960000000",
+            "updated_at": "2025-09-11 12:07:51.960000000"
+        },
+        {
+            "trace_id": "b7e3ed6a-367c-4c1b-8543-16da5ed6f783",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:44.645000000",
+            "end_time": "2025-09-11 12:07:45.649000000",
+            "duration_ms": 1004.2120000000001,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:46.019000000",
+            "updated_at": "2025-09-11 12:07:46.019000000"
+        },
+        {
+            "trace_id": "ebba814f-efb3-4c34-828e-eeefb181b7bf",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:35.839000000",
+            "end_time": "2025-09-11 12:07:37.515000000",
+            "duration_ms": 1676.276,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:37.607000000",
+            "updated_at": "2025-09-11 12:07:37.607000000"
+        },
+        {
+            "trace_id": "a7e4285c-de91-45ed-8e05-a33255981545",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:22.645000000",
+            "end_time": "2025-09-11 12:07:25.153000000",
+            "duration_ms": 2507.963,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:25.246000000",
+            "updated_at": "2025-09-11 12:07:25.246000000"
+        },
+        {
+            "trace_id": "7a9e1394-ec3f-4c9f-a456-227b0dc1f5bf",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:07:08.546000000",
+            "end_time": "2025-09-11 12:07:11.975000000",
+            "duration_ms": 3428.879,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:07:12.068000000",
+            "updated_at": "2025-09-11 12:07:12.068000000"
+        },
+        {
+            "trace_id": "1b284d02-6d95-496f-82d2-a4e0c1427ca3",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:57.331000000",
+            "end_time": "2025-09-11 12:06:59.871000000",
+            "duration_ms": 2540.0119999999997,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:59.956000000",
+            "updated_at": "2025-09-11 12:06:59.956000000"
+        },
+        {
+            "trace_id": "4e932dcd-ef4c-4939-a0f9-4f7f4955e8d0",
+            "name": "test_llm_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:51.095000000",
+            "end_time": "2025-09-11 12:06:51.669000000",
+            "duration_ms": 574.106,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:51.752000000",
+            "updated_at": "2025-09-11 12:06:51.752000000"
+        },
+        {
+            "trace_id": "3b0b184f-6b27-4de0-adde-ac092edfd890",
+            "name": "test_research_workflow_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:50.739000000",
+            "end_time": "2025-09-11 12:06:54.614000000",
+            "duration_ms": 3874.685,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:57.842000000",
+            "updated_at": "2025-09-11 12:06:57.842000000"
+        },
+        {
+            "trace_id": "7c6bb41e-f0d0-4b3a-a500-6492b7e4d834",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:43.893000000",
+            "end_time": "2025-09-11 12:06:45.251000000",
+            "duration_ms": 1358.086,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:45.510000000",
+            "updated_at": "2025-09-11 12:06:45.510000000"
+        },
+        {
+            "trace_id": "81fa0f87-e85a-405a-a8f3-0113527ec210",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:36.480000000",
+            "end_time": "2025-09-11 12:06:38.454000000",
+            "duration_ms": 1974.538,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:38.813000000",
+            "updated_at": "2025-09-11 12:06:38.813000000"
+        },
+        {
+            "trace_id": "9d69d3f5-beb7-49ed-9ee8-ebd676a56295",
+            "name": "test_research_workflow_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:33.625000000",
+            "end_time": "2025-09-11 12:06:38.742000000",
+            "duration_ms": 5116.679999999999,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:45.009000000",
+            "updated_at": "2025-09-11 12:06:45.009000000"
+        },
+        {
+            "trace_id": "e8d12b31-fb81-4ac0-a99e-d0235405d6b1",
+            "name": "test_openai_function_calling",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:21.184000000",
+            "end_time": "2025-09-11 12:06:24.101000000",
+            "duration_ms": 2917.207,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:32.334000000",
+            "updated_at": "2025-09-11 12:06:32.334000000"
+        },
+        {
+            "trace_id": "de489312-f66c-454a-af94-54bb186302f8",
+            "name": "test_llm_openai_gpt-3.5-turbo",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:14.307000000",
+            "end_time": "2025-09-11 12:06:15.292000000",
+            "duration_ms": 985.77,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:16.969000000",
+            "updated_at": "2025-09-11 12:06:16.969000000"
+        },
+        {
+            "trace_id": "80f86035-91b0-4bb3-a6bf-b83f195f9b04",
+            "name": "test_llm_openai_gpt-4o-mini",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:06:06.306000000",
+            "end_time": "2025-09-11 12:06:07.477000000",
+            "duration_ms": 1171.375,
+            "span_count": 1,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:06:10.065000000",
+            "updated_at": "2025-09-11 12:06:10.065000000"
+        },
+        {
+            "trace_id": "4675c7f8-e284-4c0c-bff4-2f901c2ecbe3",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 08:14:09.681000000",
+            "end_time": "2025-09-11 08:14:26.581000000",
+            "duration_ms": 16900.385,
+            "span_count": 6,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 08:14:27.015000000",
+            "updated_at": "2025-09-11 08:14:27.015000000"
+        },
+        {
+            "trace_id": "ffa0e79c-5d3a-412e-826e-70c440443f45",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 08:13:57.640000000",
+            "end_time": "2025-09-11 08:13:58.424000000",
+            "duration_ms": 783.971,
+            "span_count": 2,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 08:13:58.636000000",
+            "updated_at": "2025-09-11 08:13:58.636000000"
+        },
+        {
+            "trace_id": "8adfdd3d-5b26-4e6b-ab9a-58a814adb6bd",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 08:13:07.814000000",
+            "end_time": "2025-09-11 08:13:30.364000000",
+            "duration_ms": 22550.011000000002,
+            "span_count": 12,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 08:13:31.978000000",
+            "updated_at": "2025-09-11 08:13:31.978000000"
+        },
+        {
+            "trace_id": "1d84ac89-66de-419a-a4fb-b993fc2e8641",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 08:02:13.796000000",
+            "end_time": "2025-09-11 08:02:16.256000000",
+            "duration_ms": 2460.267,
+            "span_count": 4,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 08:02:17.331000000",
+            "updated_at": "2025-09-11 08:02:17.331000000"
+        },
+        {
+            "trace_id": "3c979615-7192-45db-a576-101526cec842",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:59:56.165000000",
+            "end_time": "2025-09-11 07:59:58.628000000",
+            "duration_ms": 2463.16,
+            "span_count": 4,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:59:59.961000000",
+            "updated_at": "2025-09-11 07:59:59.961000000"
+        },
+        {
+            "trace_id": "3d051d6d-16e5-438c-9481-28aa05380dd4",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:59:29.677000000",
+            "end_time": "2025-09-11 07:59:33.746000000",
+            "duration_ms": 4068.5460000000003,
+            "span_count": 6,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:59:36.665000000",
+            "updated_at": "2025-09-11 07:59:36.665000000"
+        },
+        {
+            "trace_id": "8a881bbb-1b8e-4a8c-b1a3-7f8dd416fb9a",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:57:22.757000000",
+            "end_time": "2025-09-11 07:57:59.617000000",
+            "duration_ms": 36860.399,
+            "span_count": 10,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:58:01.773000000",
+            "updated_at": "2025-09-11 07:58:01.773000000"
+        },
+        {
+            "trace_id": "9efaa0c4-1b06-4ba8-a7b4-79a7fca26259",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:55:20.158000000",
+            "end_time": "2025-09-11 07:55:25.114000000",
+            "duration_ms": 4956.652,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:55:26.059000000",
+            "updated_at": "2025-09-11 07:55:26.059000000"
+        },
+        {
+            "trace_id": "121bb7f1-d805-49fe-92af-31dbe0aa827e",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:54:24.032000000",
+            "end_time": "2025-09-11 07:54:28.279000000",
+            "duration_ms": 4247.2519999999995,
+            "span_count": 6,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:54:28.614000000",
+            "updated_at": "2025-09-11 07:54:28.614000000"
+        },
+        {
+            "trace_id": "a8fe28a3-2ebb-428d-b679-9aba40c69be0",
+            "name": "chain_start.unknown",
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 07:54:07.865000000",
+            "end_time": "2025-09-11 07:54:11.076000000",
+            "duration_ms": 3210.286,
+            "span_count": 4,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 07:54:12.329000000",
+            "updated_at": "2025-09-11 07:54:12.329000000"
+        }
+    ],
+    "pagination": {
+        "total": 1512,
+        "limit": 50,
+        "offset": 0,
+        "has_more": true
+    },
+    "filters_applied": {
+        "sort": "start_time:desc"
+    },
+    "telemetry_plugin": null,
+    "timestamp": "2025-09-11T16:02:00.925Z",
+    "processing_time_ms": 22
+}

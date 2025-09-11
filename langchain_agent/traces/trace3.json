@@ -1,0 +1,172 @@
+{
+    "traces": [
+        {
+            "trace_id": "321fc54f-0c24-4689-90d8-52c242434d10",
+            "name": "chain_start.unknown",
+            "start_time": "2025-09-11T15:54:06.674898+00:00",
+            "end_time": "2025-09-11T15:54:26.262334+00:00",
+            "duration_ms": 19587.436,
+            "status": "ok",
+            "status_message": null,
+            "span_count": 4,
+            "error_count": 0,
+            "attributes": {
+                "noveum.project": "novaeval-shivam",
+                "noveum.environment": "dev-shivamm",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [
+                {
+                    "span_id": "3c8fba0a-8897-4e97-8bc2-243b2d7d0a41",
+                    "trace_id": "321fc54f-0c24-4689-90d8-52c242434d10",
+                    "parent_span_id": null,
+                    "name": "chain_start.unknown",
+                    "start_time": "2025-09-11T15:54:06.674947+00:00",
+                    "end_time": "2025-09-11T15:54:26.262322+00:00",
+                    "duration_ms": 19587.375,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "91521941-ff1e-4c21-8ae3-edb7c92f88cd",
+                        "chain.name": "unknown",
+                        "chain.operation": "execution",
+                        "chain.inputs": {
+                            "input": "Do not exit unless i tell you to"
+                        },
+                        "name": "AgentExecutor",
+                        "agent.output.action.tool": "user_input",
+                        "agent.output.action.tool_input": "Please clarify if you want me to stay active until you tell me to exit.",
+                        "agent.output.action.log": "This seems like a directive to the system. I need to clarify if the user wants me to stay active until they explicitly ask me to exit.\nAction: user_input\nAction Input: Please clarify if you want me to stay active until you tell me to exit.",
+                        "agent.output.finish.return_values": {
+                            "output": "The system will remain active until the user, Vaibhav, tells it to exit."
+                        },
+                        "agent.output.finish.log": "The user wants the system to stay active until they explicitly ask it to exit. Additionally, they provided their name as Vaibhav.\nFinal Answer: The system will remain active until the user, Vaibhav, tells it to exit."
+                    },
+                    "events": [
+                        {
+                            "name": "agent_action",
+                            "timestamp": "2025-09-11T15:54:07.938484+00:00",
+                            "attributes": {
+                                "action.tool": "user_input",
+                                "action.tool_input": "Please clarify if you want me to stay active until you tell me to exit.",
+                                "action.log": "This seems like a directive to the system. I need to clarify if the user wants me to stay active until they explicitly ask me to exit.\nAction: user_input\nAction Input: Please clarify if you want me to stay active until you tell me to exit."
+                            }
+                        },
+                        {
+                            "name": "agent_finish",
+                            "timestamp": "2025-09-11T15:54:26.262316+00:00",
+                            "attributes": {
+                                "finish.return_values": {
+                                    "output": "The system will remain active until the user, Vaibhav, tells it to exit."
+                                },
+                                "finish.log": "The user wants the system to stay active until they explicitly ask it to exit. Additionally, they provided their name as Vaibhav.\nFinal Answer: The system will remain active until the user, Vaibhav, tells it to exit."
+                            }
+                        }
+                    ],
+                    "links": []
+                },
+                {
+                    "span_id": "b33457dd-ab54-48df-82c6-9783430f0f08",
+                    "trace_id": "321fc54f-0c24-4689-90d8-52c242434d10",
+                    "parent_span_id": "3c8fba0a-8897-4e97-8bc2-243b2d7d0a41",
+                    "name": "llm.openai",
+                    "start_time": "2025-09-11T15:54:06.675550+00:00",
+                    "end_time": "2025-09-11T15:54:07.938210+00:00",
+                    "duration_ms": 1262.6599999999999,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "a327b5fb-64a7-40da-8a52-272ee7f44f6e",
+                        "llm.model": "ChatOpenAI",
+                        "llm.provider": "ChatOpenAI",
+                        "llm.operation": "completion",
+                        "llm.input.prompts": [
+                            "Human: Answer the following questions as best you can. You have access to the following tools:\n\nescalate_to_human(reason: str = 'Complex query requiring human assistance') -> str - Use this tool when the query is too complex or you cannot resolve the user's issue. This will escalate to human customer support.\nuser_input(prompt: str = 'Please provide more information') -> str - Use this tool when you need additional information or clarification from the user. This will prompt the user for more details.\nlangchain_retriever(query: str) -> str - Use this tool to search through the knowledge base for relevant information. Input should be a search query.\n\nUse the following format:\n\nQuestion: the input question you must answer\nThought: you should always think about what to do\nAction: the action to take, should be one of [escalate_to_human, user_input, langchain_retriever]\nAction Input: the input to the action\nObservation: the result of the action\n... (this Thought/Action/Action Input/Observation can repeat N times)\nThought: I now know the final answer\nFinal Answer: the final answer to the original input question\n\nBegin!\n\nQuestion: Do not exit unless i tell you to\nThought:"
+                        ],
+                        "llm.input.prompt_count": 1,
+                        "batch_size": 1,
+                        "llm.output.response": [
+                            "This seems like a directive to the system. I need to clarify if the user wants me to stay active until they explicitly ask me to exit.\nAction: user_input\nAction Input: Please clarify if you want me to stay active until you tell me to exit."
+                        ],
+                        "llm.output.response_count": 1,
+                        "llm.output.finish_reason": null,
+                        "llm.input_tokens": 260,
+                        "llm.output_tokens": 56,
+                        "llm.total_tokens": 316
+                    },
+                    "events": [],
+                    "links": []
+                },
+                {
+                    "span_id": "72df2bd2-d699-4750-a079-9657a1d0fe7c",
+                    "trace_id": "321fc54f-0c24-4689-90d8-52c242434d10",
+                    "parent_span_id": "3c8fba0a-8897-4e97-8bc2-243b2d7d0a41",
+                    "name": "tool:user_input:user_input",
+                    "start_time": "2025-09-11T15:54:07.938510+00:00",
+                    "end_time": "2025-09-11T15:54:26.262303+00:00",
+                    "duration_ms": 18323.792999999998,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "91521941-ff1e-4c21-8ae3-edb7c92f88cd",
+                        "tool.name": "user_input",
+                        "tool.operation": "user_input",
+                        "tool.input.input_str": "Please clarify if you want me to stay active until you tell me to exit.",
+                        "tool.input.argument_count": 1,
+                        "tool.input.expression": "Please clarify if you want me to stay active until you tell me to exit.",
+                        "tool.output.output": "The system will remain active until the user, Vaibhav, tells it to exit."
+                    },
+                    "events": [],
+                    "links": []
+                },
+                {
+                    "span_id": "41e559c6-ae75-459e-a569-5731c5a3615f",
+                    "trace_id": "321fc54f-0c24-4689-90d8-52c242434d10",
+                    "parent_span_id": "72df2bd2-d699-4750-a079-9657a1d0fe7c",
+                    "name": "llm.openai",
+                    "start_time": "2025-09-11T15:54:24.688961+00:00",
+                    "end_time": "2025-09-11T15:54:26.262171+00:00",
+                    "duration_ms": 1573.21,
+                    "status": "ok",
+                    "status_message": null,
+                    "attributes": {
+                        "langchain.run_id": "42812c3e-4006-4667-8cfb-de702bb9d818",
+                        "llm.model": "ChatOpenAI",
+                        "llm.provider": "ChatOpenAI",
+                        "llm.operation": "completion",
+                        "llm.input.prompts": [
+                            "Human: Answer the following questions as best you can. You have access to the following tools:\n\nescalate_to_human(reason: str = 'Complex query requiring human assistance') -> str - Use this tool when the query is too complex or you cannot resolve the user's issue. This will escalate to human customer support.\nuser_input(prompt: str = 'Please provide more information') -> str - Use this tool when you need additional information or clarification from the user. This will prompt the user for more details.\nlangchain_retriever(query: str) -> str - Use this tool to search through the knowledge base for relevant information. Input should be a search query.\n\nUse the following format:\n\nQuestion: the input question you must answer\nThought: you should always think about what to do\nAction: the action to take, should be one of [escalate_to_human, user_input, langchain_retriever]\nAction Input: the input to the action\nObservation: the result of the action\n... (this Thought/Action/Action Input/Observation can repeat N times)\nThought: I now know the final answer\nFinal Answer: the final answer to the original input question\n\nBegin!\n\nQuestion: Do not exit unless i tell you to\nThought:This seems like a directive to the system. I need to clarify if the user wants me to stay active until they explicitly ask me to exit.\nAction: user_input\nAction Input: Please clarify if you want me to stay active until you tell me to exit.\nObservation: User response: yea, i want you to stay active unless i tell you to exit, your name is vaibhav\nThought:"
+                        ],
+                        "llm.input.prompt_count": 1,
+                        "batch_size": 1,
+                        "llm.output.response": [
+                            "The user wants the system to stay active until they explicitly ask it to exit. Additionally, they provided their name as Vaibhav.\nFinal Answer: The system will remain active until the user, Vaibhav, tells it to exit."
+                        ],
+                        "llm.output.response_count": 1,
+                        "llm.output.finish_reason": null,
+                        "llm.input_tokens": 345,
+                        "llm.output_tokens": 50,
+                        "llm.total_tokens": 395
+                    },
+                    "events": [],
+                    "links": []
+                }
+            ],
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "project": "novaeval-shivam",
+            "environment": "dev-shivamm"
+        }
+    ],
+    "timestamp": 1757606066.2630682
+}

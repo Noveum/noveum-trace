@@ -1,0 +1,38 @@
+{
+    "success": true,
+    "traces": [
+        {
+            "trace_id": "c08b4da9-4285-44e1-acda-34abc591ee31",
+            "name": "test_research_workflow_anthropic_claude-3-haiku-20240307",
+            "project": "noveum-trace-python",
+            "environment": "git-integ-test",
+            "status": "ok",
+            "status_message": "",
+            "start_time": "2025-09-11 12:17:32.535000000",
+            "end_time": "2025-09-11 12:17:34.168000000",
+            "duration_ms": 1632.9260000000002,
+            "span_count": 8,
+            "error_count": 0,
+            "sdk": {
+                "name": "noveum-trace-python",
+                "version": "0.3.7"
+            },
+            "attributes": {
+                "noveum.project": "noveum-trace-python",
+                "noveum.environment": "git-integ-test",
+                "noveum.sdk.version": "0.3.7",
+                "noveum.sampling.decision": "record"
+            },
+            "metadata": {
+                "user_id": null,
+                "session_id": null,
+                "request_id": null,
+                "tags": {},
+                "custom_attributes": {}
+            },
+            "spans": [],
+            "created_at": "2025-09-11 12:17:34.253000000",
+            "updated_at": "2025-09-11 12:17:34.253000000"
+        }
+    ]
+}
