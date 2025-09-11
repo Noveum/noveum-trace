@@ -496,7 +496,7 @@ class HttpTransport:
             )
 
             # Check response
-            if response.status_code == 200:
+            if response.status_code in [200, 201]:
                 logger.debug(f"Successfully sent trace: {trace_data.get('trace_id')}")
                 return response.json()
             elif response.status_code == 401:
@@ -608,7 +608,7 @@ class HttpTransport:
                 )
 
             # Check response
-            if response.status_code == 200:
+            if response.status_code in [200, 201]:
                 logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
                     safe_preview = self._get_safe_response_preview(
