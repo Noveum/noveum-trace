@@ -741,6 +741,40 @@ class TestHttpTransportSendRequest:
                 timeout=transport.config.transport.timeout,
             )
 
+    def test_send_request_success_201_created(self):
+        """Test successful HTTP request with 201 Created status."""
+        config = Config.create()
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Mock 201 Created response
+            mock_response = Mock()
+            mock_response.status_code = 201
+            mock_response.json.return_value = {
+                "success": True,
+                "message": "Traces stored successfully",
+                "timestamp": "2025-09-10T12:48:41.652Z",
+                "processing_time_ms": 3,
+            }
+
+            transport.session.post = Mock(return_value=mock_response)
+
+            trace_data = {"trace_id": "test-id"}
+            result = transport._send_request(trace_data)
+
+            assert result == {
+                "success": True,
+                "message": "Traces stored successfully",
+                "timestamp": "2025-09-10T12:48:41.652Z",
+                "processing_time_ms": 3,
+            }
+            transport.session.post.assert_called_once_with(
+                "https://api.noveum.ai/api/v1/trace",
+                json=trace_data,
+                timeout=transport.config.transport.timeout,
+            )
+
     def test_send_request_auth_error(self):
         """Test HTTP request with authentication error."""
         config = Config.create()
@@ -892,6 +926,31 @@ class TestHttpTransportSendBatch:
 
             traces = [{"trace_id": "test-1"}, {"trace_id": "test-2"}]
 
+            transport._send_batch(traces)
+
+            # Verify request was made
+            transport.session.post.assert_called_once()
+            args, kwargs = transport.session.post.call_args
+            assert kwargs["json"]["traces"] == traces
+            assert "timestamp" in kwargs["json"]
+
+    def test_send_batch_success_201_created(self):
+        """Test successful batch send with 201 Created status."""
+        config = Config.create()
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            # Mock 201 Created response
+            mock_response = Mock()
+            mock_response.status_code = 201
+            mock_response.text = '{"success":true,"message":"Traces stored successfully","timestamp":"2025-09-10T12:48:41.652Z","processing_time_ms":3}'
+
+            transport.session.post = Mock(return_value=mock_response)
+
+            traces = [{"trace_id": "test-1"}, {"trace_id": "test-2"}]
+
+            # Should not raise any exception
             transport._send_batch(traces)
 
             # Verify request was made
