@@ -144,7 +144,8 @@ class LangChainAgent:
                 # Initialize noveum trace
                 noveum_trace.init(
                     api_key=noveum_api_key or os.getenv("NOVEUM_API_KEY"),
-                    transport_config={"batch_size": 1, "batch_timeout": 5.0}
+                    transport_config={"batch_size": 1, "batch_timeout": 5.0},
+                    endpoint="https://noveum.free.beeceptor.com"
                 )
 
                 # Create callback handler
