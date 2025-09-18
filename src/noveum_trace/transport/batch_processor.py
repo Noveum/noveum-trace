@@ -110,7 +110,7 @@ class BatchProcessor:
             )
 
         try:
-            self._queue.put(trace_data, timeout=1.0)
+            self._queue.put(trace_data, block=False)
             new_queue_size = self._queue.qsize()
 
             if log_debug_enabled():
@@ -122,7 +122,7 @@ class BatchProcessor:
         except queue.Full as e:
             log_error_always(
                 logger,
-                f"Trace queue is full, dropping trace {trace_id}",
+                f"Trace queue is full, dropping trace {trace_id}, please increase the max queue size",
                 trace_id=trace_id,
                 queue_size=queue_size,
                 max_queue_size=self.config.transport.max_queue_size,
