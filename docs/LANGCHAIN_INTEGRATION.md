@@ -136,28 +136,6 @@ noveum_trace.init(
 )
 ```
 
-## Disabling Tracing
-
-If you need to turn off tracing for debugging or performance reasons, here are your options:
-
-### Skip Initialization
-
-If you don't call `noveum_trace.init()`, no tracing will occur:
-
-```python
-# Comment out or remove this line to disable all tracing
-# noveum_trace.init(project="my-app", api_key="your-key")
-```
-
-### Remove Callbacks
-
-You can also disable tracing by not adding the callback handler to your components:
-
-```python
-# Without callbacks, no tracing will occur
-llm = ChatOpenAI()  # No callbacks = no tracing
-```
-
 ## Error Handling
 
 The integration includes robust error handling:
@@ -177,3 +155,4 @@ Once your application is running with tracing enabled, you can view the captured
 ## Next Steps
 
 - Explore the [examples directory](examples/) for more complex use cases
+- Check out [langchain_integration_example.py](examples/langchain_integration_example.py) for complete working examples
