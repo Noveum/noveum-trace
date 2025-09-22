@@ -8,7 +8,7 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 import logging
 import threading
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 
 # Import LangChain dependencies
@@ -31,7 +31,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Thread-safe runs dictionary for span tracking
         # Maps run_id -> span (for backward compatibility)
-        self.runs: dict[UUID, Any] = {}
+        self.runs: dict[Union[UUID, str], Any] = {}
         self._runs_lock = threading.Lock()
 
         # Track if we're managing a trace lifecycle
@@ -46,12 +46,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None  # type: ignore[assignment]
 
-    def _set_run(self, run_id: UUID, span: Any) -> None:
+    def _set_run(self, run_id: Union[UUID, str], span: Any) -> None:
         """Thread-safe method to set a run span."""
         with self._runs_lock:
             self.runs[run_id] = span
 
-    def _pop_run(self, run_id: UUID) -> Any:
+    def _pop_run(self, run_id: Union[UUID, str]) -> Any:
         """Thread-safe method to pop and return a run span."""
         with self._runs_lock:
             return self.runs.pop(run_id, None)
