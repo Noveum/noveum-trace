@@ -23,6 +23,7 @@ Environment Variables:
 
 import os
 import time
+
 from dotenv import load_dotenv
 
 import noveum_trace
@@ -52,9 +53,7 @@ def mixed_tracing_example():
 
         # Create LangChain LLM
         llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            callbacks=[callback_handler]
+            model="gpt-3.5-turbo", temperature=0.7, callbacks=[callback_handler]
         )
 
         print("1. Starting agent_operation context...")
@@ -67,8 +66,8 @@ def mixed_tracing_example():
             attributes={
                 "agent.session_id": "session_123",
                 "agent.priority": "high",
-                "agent.domain": "research"
-            }
+                "agent.domain": "research",
+            },
         ) as agent_span:
 
             print("   ✓ Agent operation span created")
@@ -76,11 +75,13 @@ def mixed_tracing_example():
             print("   ✓ Operation: knowledge_retrieval")
 
             # Add some custom attributes to the agent span
-            agent_span.set_attributes({
-                "agent.start_time": time.time(),
-                "agent.request_id": "req_456",
-                "agent.user_id": "user_789"
-            })
+            agent_span.set_attributes(
+                {
+                    "agent.start_time": time.time(),
+                    "agent.request_id": "req_456",
+                    "agent.user_id": "user_789",
+                }
+            )
 
             print("   ✓ Added custom attributes to agent span")
 
@@ -92,18 +93,20 @@ def mixed_tracing_example():
                 attributes={
                     "prep.step": "query_formulation",
                     "prep.timestamp": time.time(),
-                    "prep.source": "user_input"
-                }
+                    "prep.source": "user_input",
+                },
             ) as prep_span:
 
                 print("   ✓ Custom span created for data preparation")
 
                 # Simulate some data preparation work
                 query = "What are the latest developments in artificial intelligence?"
-                prep_span.set_attributes({
-                    "prep.query_length": len(query),
-                    "prep.query_type": "research_question"
-                })
+                prep_span.set_attributes(
+                    {
+                        "prep.query_length": len(query),
+                        "prep.query_type": "research_question",
+                    }
+                )
 
                 print(f"   ✓ Prepared query: {query[:50]}...")
 
@@ -113,20 +116,22 @@ def mixed_tracing_example():
                 try:
                     response = llm.invoke(query)
                     print(
-                        f"   ✓ LangChain response received: {response.content[:100]}...")
+                        f"   ✓ LangChain response received: {response.content[:100]}..."
+                    )
 
                     # Add response info to our span
-                    prep_span.set_attributes({
-                        "prep.response_length": len(response.content),
-                        "prep.response_success": True
-                    })
+                    prep_span.set_attributes(
+                        {
+                            "prep.response_length": len(response.content),
+                            "prep.response_success": True,
+                        }
+                    )
 
                 except Exception as e:
                     print(f"   ✗ LangChain call failed: {e}")
-                    prep_span.set_attributes({
-                        "prep.response_success": False,
-                        "prep.error": str(e)
-                    })
+                    prep_span.set_attributes(
+                        {"prep.response_success": False, "prep.error": str(e)}
+                    )
                     raise
 
             print("\n4. Starting agent_task context...")
@@ -139,30 +144,34 @@ def mixed_tracing_example():
                 attributes={
                     "task.id": "task_789",
                     "task.priority": "medium",
-                    "task.dependencies": ["knowledge_retrieval"]
-                }
+                    "task.dependencies": ["knowledge_retrieval"],
+                },
             ) as task_span:
 
                 print("   ✓ Agent task span created")
-                print(f"   ✓ Task type: content_analysis")
+                print("   ✓ Task type: content_analysis")
 
                 # Add task-specific attributes
-                task_span.set_attributes({
-                    "task.start_time": time.time(),
-                    "task.parent_operation": "knowledge_retrieval",
-                    "task.expected_duration": 30.0
-                })
+                task_span.set_attributes(
+                    {
+                        "task.start_time": time.time(),
+                        "task.parent_operation": "knowledge_retrieval",
+                        "task.expected_duration": 30.0,
+                    }
+                )
 
                 # Simulate some analysis work
                 print("   ✓ Performing content analysis...")
                 time.sleep(0.5)  # Simulate processing time
 
                 # Add analysis results
-                task_span.set_attributes({
-                    "analysis.completed": True,
-                    "analysis.duration": 0.5,
-                    "analysis.complexity": "medium"
-                })
+                task_span.set_attributes(
+                    {
+                        "analysis.completed": True,
+                        "analysis.duration": 0.5,
+                        "analysis.complexity": "medium",
+                    }
+                )
 
                 print("   ✓ Analysis completed")
 
@@ -170,29 +179,37 @@ def mixed_tracing_example():
                 print("\n5. Making another LangChain call within agent_task...")
 
                 try:
-                    follow_up_query = "Can you summarize the key points from your previous response?"
+                    follow_up_query = (
+                        "Can you summarize the key points from your previous response?"
+                    )
                     follow_up_response = llm.invoke(follow_up_query)
                     print(
-                        f"   ✓ Follow-up response: {follow_up_response.content[:100]}...")
+                        f"   ✓ Follow-up response: {follow_up_response.content[:100]}..."
+                    )
 
-                    task_span.set_attributes({
-                        "task.follow_up_success": True,
-                        "task.final_response_length": len(follow_up_response.content)
-                    })
+                    task_span.set_attributes(
+                        {
+                            "task.follow_up_success": True,
+                            "task.final_response_length": len(
+                                follow_up_response.content
+                            ),
+                        }
+                    )
 
                 except Exception as e:
                     print(f"   ✗ Follow-up call failed: {e}")
-                    task_span.set_attributes({
-                        "task.follow_up_success": False,
-                        "task.error": str(e)
-                    })
+                    task_span.set_attributes(
+                        {"task.follow_up_success": False, "task.error": str(e)}
+                    )
 
             # Update the main agent span with final results
-            agent_span.set_attributes({
-                "agent.end_time": time.time(),
-                "agent.status": "completed",
-                "agent.tasks_completed": 1
-            })
+            agent_span.set_attributes(
+                {
+                    "agent.end_time": time.time(),
+                    "agent.status": "completed",
+                    "agent.tasks_completed": 1,
+                }
+            )
 
             print("\n6. Agent operation completed successfully!")
             print("   ✓ All spans properly nested and traced")
@@ -204,41 +221,36 @@ def mixed_tracing_example():
     except Exception as e:
         print(f"Error in mixed tracing example: {e}")
         import traceback
+
         traceback.print_exc()
 
 
 def advanced_mixed_tracing_example():
     """Advanced example with more complex nesting and error handling."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("=== Advanced Mixed Tracing Example ===")
     print("Demonstrating complex nesting with error handling")
     print()
 
     try:
-        from langchain_openai import ChatOpenAI
         from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
+        from langchain_openai import ChatOpenAI
 
         # Create callback handler
         callback_handler = NoveumTraceCallbackHandler()
 
         # Create LangChain components
         llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.3,
-            callbacks=[callback_handler]
+            model="gpt-3.5-turbo", temperature=0.3, callbacks=[callback_handler]
         )
 
         prompt = PromptTemplate(
             input_variables=["topic", "context"],
-            template="Based on the context: {context}\n\nProvide insights about: {topic}"
+            template="Based on the context: {context}\n\nProvide insights about: {topic}",
         )
 
-        chain = LLMChain(
-            llm=llm,
-            prompt=prompt,
-            callbacks=[callback_handler]
-        )
+        chain = LLMChain(llm=llm, prompt=prompt, callbacks=[callback_handler])
 
         print("1. Starting complex agent workflow...")
 
@@ -250,32 +262,32 @@ def advanced_mixed_tracing_example():
             attributes={
                 "workflow.id": "wf_001",
                 "workflow.version": "1.0",
-                "workflow.complexity": "high"
-            }
+                "workflow.complexity": "high",
+            },
         ) as _:
 
             print("   ✓ Main workflow agent started")
 
             # Step 1: Data collection
             with trace_operation(
-                "data_collection",
-                attributes={"step": 1, "phase": "input"}
+                "data_collection", attributes={"step": 1, "phase": "input"}
             ) as data_span:
 
                 print("   ✓ Data collection phase")
                 context_data = "Recent AI developments include GPT-4, multimodal models, and improved reasoning capabilities."
                 topic = "AI safety and ethics"
 
-                data_span.set_attributes({
-                    "data.context_length": len(context_data),
-                    "data.topic": topic,
-                    "data.collection_method": "manual"
-                })
+                data_span.set_attributes(
+                    {
+                        "data.context_length": len(context_data),
+                        "data.topic": topic,
+                        "data.collection_method": "manual",
+                    }
+                )
 
             # Step 2: LangChain chain execution
             with trace_operation(
-                "langchain_analysis",
-                attributes={"step": 2, "phase": "processing"}
+                "langchain_analysis", attributes={"step": 2, "phase": "processing"}
             ) as analysis_span:
 
                 print("   ✓ LangChain chain execution")
@@ -284,18 +296,19 @@ def advanced_mixed_tracing_example():
                     result = chain.run(topic=topic, context=context_data)
                     print(f"   ✓ Chain result: {result[:100]}...")
 
-                    analysis_span.set_attributes({
-                        "analysis.success": True,
-                        "analysis.result_length": len(result),
-                        "analysis.chain_type": "LLMChain"
-                    })
+                    analysis_span.set_attributes(
+                        {
+                            "analysis.success": True,
+                            "analysis.result_length": len(result),
+                            "analysis.chain_type": "LLMChain",
+                        }
+                    )
 
                 except Exception as e:
                     print(f"   ✗ Chain execution failed: {e}")
-                    analysis_span.set_attributes({
-                        "analysis.success": False,
-                        "analysis.error": str(e)
-                    })
+                    analysis_span.set_attributes(
+                        {"analysis.success": False, "analysis.error": str(e)}
+                    )
                     raise
 
             # Step 3: Nested agent task for validation
@@ -305,8 +318,8 @@ def advanced_mixed_tracing_example():
                 capabilities=["validation", "quality_check"],
                 attributes={
                     "validation.step": 3,
-                    "validation.phase": "quality_assurance"
-                }
+                    "validation.phase": "quality_assurance",
+                },
             ) as _:
 
                 print("   ✓ Validation agent started")
@@ -314,49 +327,49 @@ def advanced_mixed_tracing_example():
                 # Another LangChain call for validation
                 with trace_operation(
                     "validation_check",
-                    attributes={"validation.type": "quality_assessment"}
+                    attributes={"validation.type": "quality_assessment"},
                 ) as validation_span:
 
                     try:
                         validation_query = f"Rate the quality of this analysis on a scale of 1-10: {result[:200]}"
                         validation_response = llm.invoke(validation_query)
                         print(
-                            f"   ✓ Validation response: {validation_response.content}")
+                            f"   ✓ Validation response: {validation_response.content}"
+                        )
 
-                        validation_span.set_attributes({
-                            "validation.success": True,
-                            "validation.response": validation_response.content
-                        })
+                        validation_span.set_attributes(
+                            {
+                                "validation.success": True,
+                                "validation.response": validation_response.content,
+                            }
+                        )
 
                     except Exception as e:
                         print(f"   ✗ Validation failed: {e}")
-                        validation_span.set_attributes({
-                            "validation.success": False,
-                            "validation.error": str(e)
-                        })
+                        validation_span.set_attributes(
+                            {"validation.success": False, "validation.error": str(e)}
+                        )
 
             # Final step: Results compilation
             with trace_operation(
-                "results_compilation",
-                attributes={"step": 4, "phase": "output"}
+                "results_compilation", attributes={"step": 4, "phase": "output"}
             ) as results_span:
 
                 print("   ✓ Compiling final results")
-                results_span.set_attributes({
-                    "results.status": "completed",
-                    "results.workflow_success": True
-                })
+                results_span.set_attributes(
+                    {"results.status": "completed", "results.workflow_success": True}
+                )
 
             print("\n   ✓ Complex workflow completed successfully!")
             print("   ✓ All nested spans properly created and linked")
             print("   ✓ Mixed tracing approach handled complex scenarios")
 
     except ImportError as e:
-        print(
-            f"Skipping advanced example - required packages not installed: {e}")
+        print(f"Skipping advanced example - required packages not installed: {e}")
     except Exception as e:
         print(f"Error in advanced mixed tracing example: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -381,7 +394,7 @@ def main():
     mixed_tracing_example()
     advanced_mixed_tracing_example()
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("=== Examples Complete ===")
     print("Check your Noveum dashboard to see the traced operations!")
     print("You should see:")

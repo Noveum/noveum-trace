@@ -6,8 +6,9 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
 import logging
+import threading
 from collections.abc import Sequence
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 # Import LangChain dependencies
@@ -28,8 +29,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Initialize the callback handler."""
         super().__init__()
 
-        # Simple runs dictionary for span tracking
-        self.runs: Dict[UUID, Any] = {}
+        # Thread-safe runs dictionary for span tracking
+        # Maps run_id -> span (for backward compatibility)
+        self.runs: dict[UUID, Any] = {}
+        self._runs_lock = threading.Lock()
 
         # Track if we're managing a trace lifecycle
         self._trace_managed_by_langchain: Optional[Any] = None
@@ -42,6 +45,26 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None  # type: ignore[assignment]
+
+    def _set_run(self, run_id: UUID, span: Any) -> None:
+        """Thread-safe method to set a run span."""
+        with self._runs_lock:
+            self.runs[run_id] = span
+
+    def _pop_run(self, run_id: UUID) -> Any:
+        """Thread-safe method to pop and return a run span."""
+        with self._runs_lock:
+            return self.runs.pop(run_id, None)
+
+    def _active_runs(self) -> int:
+        """Thread-safe method to get the number of active runs."""
+        with self._runs_lock:
+            return len(self.runs)
+
+    def _get_run(self, run_id: UUID) -> Any:
+        """Thread-safe method to get a run span without removing it."""
+        with self._runs_lock:
+            return self.runs.get(run_id)
 
     def _get_or_create_trace_context(self, operation_name: str) -> tuple[Any, bool]:
         """
@@ -190,28 +213,32 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "tool.input.expression": tool_input,  # For calculator tools
                 },
             )
-            # Store in runs dict with a unique run_id for this tool action
+            # Store in runs dict with agent run_id as prefix to associate with parent agent
             import uuid
-            tool_run_id = uuid.uuid4()
-            self.runs[tool_run_id] = span
+
+            tool_run_id = f"{run_id}_tool_{uuid.uuid4()}"
+            self._set_run(tool_run_id, span)
 
         except Exception as e:
             logger.error("Error creating tool span from action: %s", e)
 
-    def _complete_tool_spans_from_finish(self, finish: "AgentFinish") -> None:
+    def _complete_tool_spans_from_finish(
+        self, finish: "AgentFinish", agent_run_id: UUID
+    ) -> None:
         """Complete any pending tool spans when agent finishes."""
         try:
-            # Look for tool spans in runs dict and complete them
+            # Look for tool spans in runs dict that belong to this specific agent
             tool_spans_to_complete = []
-            for run_id, span in list(self.runs.items()):
-                span_name = getattr(span, "name", "")
-                if span_name.startswith("tool:"):
-                    tool_spans_to_complete.append((run_id, span))
+            with self._runs_lock:
+                for run_id, span in list(self.runs.items()):
+                    # Only complete tool spans that belong to this agent (prefixed with agent_run_id)
+                    if str(run_id).startswith(f"{agent_run_id}_tool_"):
+                        tool_spans_to_complete.append((run_id, span))
 
             # Complete tool spans with the final result
             for run_id, tool_span in tool_spans_to_complete:
                 # Remove from runs dict
-                self.runs.pop(run_id, None)
+                self._pop_run(run_id)
 
                 # Extract result from the finish log
                 result = "Tool execution completed"
@@ -270,8 +297,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(
-                operation_name)
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span
             span = self._client.start_span(
@@ -283,8 +309,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
                         else (
-                            serialized.get(
-                                "id", "unknown") if serialized else "unknown"
+                            serialized.get("id", "unknown") if serialized else "unknown"
                         )
                     ),
                     "llm.operation": "completion",
@@ -301,7 +326,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Store span for later cleanup
-            self.runs[run_id] = span
+            self._set_run(run_id, span)
 
             # Track if we need to manage trace lifecycle
             if should_manage:
@@ -323,7 +348,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return
 
@@ -374,10 +399,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -397,7 +424,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return None
 
@@ -407,10 +434,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -439,8 +468,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(
-                operation_name)
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span for chain
             span = self._client.start_span(
@@ -448,8 +476,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes={
                     "langchain.run_id": str(run_id),
                     "chain.name": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     "chain.operation": "execution",
                     # Input attributes
@@ -464,7 +491,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Store span for later cleanup
-            self.runs[run_id] = span
+            self._set_run(run_id, span)
 
             # Track if we need to manage trace lifecycle
             if should_manage:
@@ -486,7 +513,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return
 
@@ -502,10 +529,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -525,7 +554,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return None
 
@@ -535,10 +564,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -568,11 +599,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(
-                operation_name)
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
-            tool_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = self._extract_tool_function_name(serialized)
@@ -609,7 +638,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Store span for later cleanup
-            self.runs[run_id] = span
+            self._set_run(run_id, span)
 
             # Track if we need to manage trace lifecycle
             if should_manage:
@@ -631,7 +660,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return
 
@@ -641,10 +670,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -664,7 +695,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return None
 
@@ -674,10 +705,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -706,12 +739,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(
-                operation_name)
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span for agent
-            agent_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
             agent_type = self._extract_agent_type(serialized)
@@ -737,7 +768,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Store span for later cleanup
-            self.runs[run_id] = span
+            self._set_run(run_id, span)
 
             # Track if we need to manage trace lifecycle
             if should_manage:
@@ -760,7 +791,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Get the current agent span
-            span = self.runs.get(run_id)
+            span = self._get_run(run_id)
             if span is None:
                 return
 
@@ -803,13 +834,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return
 
         try:
             # Complete any pending tool spans first
-            self._complete_tool_spans_from_finish(finish)
+            self._complete_tool_spans_from_finish(finish, run_id)
 
             # Add agent output attributes
             span.set_attributes(
@@ -836,10 +867,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -862,13 +895,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name(
-            "retriever_start", serialized)
+        operation_name = self._get_operation_name("retriever_start", serialized)
 
         try:
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(
-                operation_name)
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span
             span = self._client.start_span(
@@ -877,8 +908,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "langchain.run_id": str(run_id),
                     "retrieval.type": "search",
                     "retrieval.operation": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     # Input attributes
                     "retrieval.query": query,
@@ -892,7 +922,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Store span for later cleanup
-            self.runs[run_id] = span
+            self._set_run(run_id, span)
 
             # Track if we need to manage trace lifecycle
             if should_manage:
@@ -914,7 +944,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return None
 
@@ -938,10 +968,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -963,7 +995,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         # Get and remove span from runs dict
-        span = self.runs.pop(run_id, None)
+        span = self._pop_run(run_id)
         if span is None:
             return None
 
@@ -973,10 +1005,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (self._trace_managed_by_langchain and
-                    len(self.runs) == 0):  # No more active spans
+            if (
+                self._trace_managed_by_langchain and self._active_runs() == 0
+            ):  # No more active spans
                 self._client.finish_trace(self._trace_managed_by_langchain)
                 from noveum_trace.core.context import set_current_trace
+
                 set_current_trace(None)
                 self._trace_managed_by_langchain = None
 
@@ -998,7 +1032,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
-            span = self.runs.get(run_id)
+            span = self._get_run(run_id)
             if span is not None:
                 span.add_event("text_output", {"text": text})
         except Exception as e:
@@ -1008,7 +1042,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """String representation of the callback handler."""
         return (
             f"NoveumTraceCallbackHandler("
-            f"active_runs={len(self.runs)}, "
+            f"active_runs={self._active_runs()}, "
             f"managing_trace={self._trace_managed_by_langchain is not None})"
         )
 
