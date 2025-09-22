@@ -169,7 +169,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     elif "api" in tool_name or "request" in tool_name:
                         tool_types.add("api_calls")
                     else:
-                        tool_types.add(tool.name if tool.name else "other")
+                        tool_types.add(
+                            tool.get("name", "other") if tool.get("name") else "other"
+                        )
 
             if tool_types:
                 capabilities.extend(tool_types)

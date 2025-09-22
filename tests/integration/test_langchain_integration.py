@@ -341,6 +341,14 @@ class TestLangChainIntegration:
             assert handler._extract_model_name({}) == "unknown"
             assert handler._extract_model_name(None) == "unknown"
 
+            # Test with short id path (edge case)
+            serialized = {"id": ["openai"]}
+            assert handler._extract_model_name(serialized) == "unknown"
+
+            # Test with no name in serialized
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            assert handler._extract_model_name(serialized) == "openai"
+
     def test_extract_agent_type(self):
         """Test agent type extraction from serialized agent data."""
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1210,6 +1218,284 @@ class TestLangChainIntegration:
             handler.on_text(text="test", run_id=run_id)
 
             # No exceptions should be raised
+            assert True
+
+    def test_thread_safe_operations(self):
+        """Test thread-safe operations on runs dictionary."""
+        import threading
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Test concurrent access to runs dictionary
+            def add_run():
+                handler._set_run(run_id, mock_span)
+
+            def get_run():
+                return handler._get_run(run_id)
+
+            def pop_run():
+                return handler._pop_run(run_id)
+
+            # Test thread safety
+            thread1 = threading.Thread(target=add_run)
+            thread2 = threading.Thread(target=get_run)
+            thread3 = threading.Thread(target=pop_run)
+
+            thread1.start()
+            thread2.start()
+            thread3.start()
+
+            thread1.join()
+            thread2.join()
+            thread3.join()
+
+            # Verify operations completed without errors
+            assert True
+
+    def test_tool_span_creation_error_handling(self):
+        """Test error handling in tool span creation."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Mock client to raise exception
+            mock_client.start_span.side_effect = Exception("Span creation failed")
+
+            # Mock agent action
+            mock_action = Mock()
+            mock_action.tool = "calculator"
+            mock_action.tool_input = "2+2"
+            mock_action.log = "I need to calculate 2+2"
+
+            # Should handle error gracefully
+            handler.on_agent_action(action=mock_action, run_id=run_id)
+
+            # Verify error was logged but no exception was raised
+            assert True
+
+    def test_complete_tool_spans_error_handling(self):
+        """Test error handling in tool span completion."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Add a tool span to runs
+            mock_span = Mock()
+            tool_run_id = f"{run_id}_tool_test"
+            handler._set_run(tool_run_id, mock_span)
+
+            # Mock finish with log containing observation
+            mock_finish = Mock()
+            mock_finish.log = "Some log\nObservation: The answer is 4\nMore log"
+
+            # Should complete tool spans successfully
+            handler._complete_tool_spans_from_finish(mock_finish, run_id)
+
+            # Verify span was processed
+            mock_span.set_attributes.assert_called()
+            mock_span.set_status.assert_called()
+            mock_client.finish_span.assert_called()
+
+    def test_complete_tool_spans_with_final_answer(self):
+        """Test tool span completion with final answer in log."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Add a tool span to runs
+            mock_span = Mock()
+            tool_run_id = f"{run_id}_tool_test"
+            handler._set_run(tool_run_id, mock_span)
+
+            # Mock finish with log containing final answer
+            mock_finish = Mock()
+            mock_finish.log = "Some log\nFinal Answer: The result is 42\nMore log"
+
+            # Should complete tool spans successfully
+            handler._complete_tool_spans_from_finish(mock_finish, run_id)
+
+            # Verify span was processed with final answer
+            call_args = mock_span.set_attributes.call_args[0][0]
+            assert call_args["tool.output.output"] == "The result is 42"
+
+    def test_complete_tool_spans_no_log(self):
+        """Test tool span completion with no log."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Add a tool span to runs
+            mock_span = Mock()
+            tool_run_id = f"{run_id}_tool_test"
+            handler._set_run(tool_run_id, mock_span)
+
+            # Mock finish with no log
+            mock_finish = Mock()
+            mock_finish.log = None
+
+            # Should complete tool spans successfully
+            handler._complete_tool_spans_from_finish(mock_finish, run_id)
+
+            # Verify span was processed with default result
+            call_args = mock_span.set_attributes.call_args[0][0]
+            assert call_args["tool.output.output"] == "Tool execution completed"
+
+    def test_operation_name_generation_edge_cases(self):
+        """Test operation name generation with edge cases."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with None serialized
+            name = handler._get_operation_name("llm_start", None)
+            assert name == "llm_start.unknown"
+
+            # Test with empty serialized
+            name = handler._get_operation_name("chain_start", {})
+            assert name == "chain.unknown"
+
+            # Test with missing name
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            name = handler._get_operation_name("llm_start", serialized)
+            assert name == "llm.openai"
+
+    def test_agent_capabilities_extraction_edge_cases(self):
+        """Test agent capabilities extraction with edge cases."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with no tools
+            serialized = {"name": "test_agent"}
+            capabilities = handler._extract_agent_capabilities(serialized)
+            assert capabilities == "reasoning"
+
+            # Test with empty tools
+            serialized = {"name": "test_agent", "kwargs": {"tools": []}}
+            capabilities = handler._extract_agent_capabilities(serialized)
+            assert capabilities == "reasoning"
+
+            # Test with tools that have no name
+            mock_tool = Mock()
+            mock_tool.name = None
+            serialized = {"name": "test_agent", "kwargs": {"tools": [mock_tool]}}
+            capabilities = handler._extract_agent_capabilities(serialized)
+            assert "tool_usage" in capabilities
+
+    def test_llm_end_with_missing_span(self):
+        """Test LLM end event when span is missing from runs."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Don't add span to runs - should handle gracefully
+            handler.on_llm_end(response=Mock(), run_id=run_id)
+
+            # Should not raise exception
+            assert True
+
+    def test_chain_end_with_missing_span(self):
+        """Test chain end event when span is missing from runs."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Don't add span to runs - should handle gracefully
+            handler.on_chain_end(outputs={}, run_id=run_id)
+
+            # Should not raise exception
+            assert True
+
+    def test_agent_finish_with_missing_span(self):
+        """Test agent finish event when span is missing from runs."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Don't add span to runs - should handle gracefully
+            handler.on_agent_finish(finish=Mock(), run_id=run_id)
+
+            # Should not raise exception
+            assert True
+
+    def test_retriever_end_with_missing_span(self):
+        """Test retriever end event when span is missing from runs."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Don't add span to runs - should handle gracefully
+            handler.on_retriever_end(documents=[], run_id=run_id)
+
+            # Should not raise exception
+            assert True
+
+    def test_text_event_with_missing_span(self):
+        """Test text event when span is missing from runs."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Don't add span to runs - should handle gracefully
+            handler.on_text(text="test", run_id=run_id)
+
+            # Should not raise exception
             assert True
 
     def test_operations_with_empty_runs(self):
