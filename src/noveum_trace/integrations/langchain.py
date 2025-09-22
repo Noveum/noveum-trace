@@ -279,6 +279,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 return False
         return True
 
+    def _finish_trace_if_needed(self) -> None:
+        """Finish the trace if we're managing it and no active spans remain."""
+        if (
+            self._trace_managed_by_langchain and self._active_runs() == 0
+        ):  # No more active spans
+            self._client.finish_trace(self._trace_managed_by_langchain)
+            from noveum_trace.core.context import set_current_trace
+
+            set_current_trace(None)
+            self._trace_managed_by_langchain = None
+
     # LLM Events
     def on_llm_start(
         self,
@@ -401,14 +412,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling LLM end event: %s", e)
@@ -436,14 +440,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling LLM error event: %s", e)
@@ -531,14 +528,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling chain end event: %s", e)
@@ -566,14 +556,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling chain error event: %s", e)
@@ -672,14 +655,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
@@ -707,14 +683,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling tool error event: %s", e)
@@ -869,14 +838,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling agent finish event: %s", e)
@@ -970,14 +932,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling retriever end event: %s", e)
@@ -1007,14 +962,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             self._client.finish_span(span)
 
             # Check if we should finish the trace
-            if (
-                self._trace_managed_by_langchain and self._active_runs() == 0
-            ):  # No more active spans
-                self._client.finish_trace(self._trace_managed_by_langchain)
-                from noveum_trace.core.context import set_current_trace
-
-                set_current_trace(None)
-                self._trace_managed_by_langchain = None
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling retriever error event: %s", e)
