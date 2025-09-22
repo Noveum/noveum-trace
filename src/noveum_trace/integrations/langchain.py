@@ -6,31 +6,20 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
 import logging
+import threading
 from collections.abc import Sequence
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Union
 from uuid import UUID
 
-# Try to import LangChain dependencies
-try:
-    from langchain_core.agents import AgentAction, AgentFinish
-    from langchain_core.callbacks import BaseCallbackHandler
-    from langchain_core.documents import Document
-    from langchain_core.outputs import LLMResult
-
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
+# Import LangChain dependencies
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.documents import Document
+from langchain_core.outputs import LLMResult
 
 from noveum_trace.core.span import SpanStatus
 
 logger = logging.getLogger(__name__)
-
-if not LANGCHAIN_AVAILABLE:
-    logger.warning("LangChain not available. Install with: pip install langchain-core")
-
-    # Create stub base class
-    class BaseCallbackHandler(Protocol):  # type: ignore[no-redef]
-        def __init__(self) -> None: ...
 
 
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
@@ -38,15 +27,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
     def __init__(self) -> None:
         """Initialize the callback handler."""
-        if not LANGCHAIN_AVAILABLE:
-            raise ImportError(
-                "LangChain is not installed. Install with: pip install langchain-core"
-            )
-
         super().__init__()
-        self._trace_stack: list[Any] = []  # Active traces
-        self._span_stack: list[Any] = []  # Active spans
-        self._current_trace: Optional[Any] = None  # Current trace context
+
+        # Thread-safe runs dictionary for span tracking
+        # Maps run_id -> span (for backward compatibility)
+        self.runs: dict[Union[UUID, str], Any] = {}
+        self._runs_lock = threading.Lock()
+
+        # Track if we're managing a trace lifecycle
+        self._trace_managed_by_langchain: Optional[Any] = None
 
         # Import here to avoid circular imports
         from noveum_trace import get_client
@@ -57,17 +46,48 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None  # type: ignore[assignment]
 
-    def _should_create_trace(
-        self, event_type: str, _serialized: dict[str, Any]
-    ) -> bool:
-        """Determine if event should create new trace or just span."""
-        if event_type in ["chain_start", "agent_start"]:
-            return True  # Always create trace for chains/agents
+    def _set_run(self, run_id: Union[UUID, str], span: Any) -> None:
+        """Thread-safe method to set a run span."""
+        with self._runs_lock:
+            self.runs[run_id] = span
 
-        if event_type in ["llm_start", "retriever_start", "tool_start"]:
-            return len(self._trace_stack) == 0  # Only if not nested
+    def _pop_run(self, run_id: Union[UUID, str]) -> Any:
+        """Thread-safe method to pop and return a run span."""
+        with self._runs_lock:
+            return self.runs.pop(run_id, None)
 
-        return False
+    def _active_runs(self) -> int:
+        """Thread-safe method to get the number of active runs."""
+        with self._runs_lock:
+            return len(self.runs)
+
+    def _get_run(self, run_id: UUID) -> Any:
+        """Thread-safe method to get a run span without removing it."""
+        with self._runs_lock:
+            return self.runs.get(run_id)
+
+    def _get_or_create_trace_context(self, operation_name: str) -> tuple[Any, bool]:
+        """
+        Get existing trace from global context or create new one.
+
+        Args:
+            operation_name: Name for the operation
+
+        Returns:
+            (trace, should_manage_lifecycle) tuple
+        """
+        from noveum_trace.core.context import get_current_trace, set_current_trace
+
+        existing_trace = get_current_trace()
+
+        if existing_trace is not None:
+            # Use existing trace - don't manage its lifecycle
+            return existing_trace, False
+        else:
+            # Create new trace in global context
+            new_trace = self._client.start_trace(operation_name)
+            set_current_trace(new_trace)
+            return new_trace, True
 
     def _get_operation_name(self, event_type: str, serialized: dict[str, Any]) -> str:
         """Generate standardized operation names."""
@@ -148,6 +168,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         tool_types.add("file_operations")
                     elif "api" in tool_name or "request" in tool_name:
                         tool_types.add("api_calls")
+                    else:
+                        tool_types.add(
+                            tool.get("name", "other") if tool.get("name") else "other"
+                        )
 
             if tool_types:
                 capabilities.extend(tool_types)
@@ -191,24 +215,33 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "tool.input.expression": tool_input,  # For calculator tools
                 },
             )
-            self._span_stack.append(span)
+            # Store in runs dict with agent run_id as prefix to associate with parent agent
+            import uuid
+
+            tool_run_id = f"{run_id}_tool_{uuid.uuid4()}"
+            self._set_run(tool_run_id, span)
 
         except Exception as e:
             logger.error("Error creating tool span from action: %s", e)
 
-    def _complete_tool_spans_from_finish(self, finish: "AgentFinish") -> None:
+    def _complete_tool_spans_from_finish(
+        self, finish: "AgentFinish", agent_run_id: UUID
+    ) -> None:
         """Complete any pending tool spans when agent finishes."""
         try:
-            # Look for tool spans and complete them
+            # Look for tool spans in runs dict that belong to this specific agent
             tool_spans_to_complete = []
-            for i in range(len(self._span_stack) - 1, -1, -1):
-                span = self._span_stack[i]
-                span_name = getattr(span, "name", "")
-                if span_name.startswith("tool:"):
-                    tool_spans_to_complete.append(self._span_stack.pop(i))
+            with self._runs_lock:
+                for run_id, span in list(self.runs.items()):
+                    # Only complete tool spans that belong to this agent (prefixed with agent_run_id)
+                    if str(run_id).startswith(f"{agent_run_id}_tool_"):
+                        tool_spans_to_complete.append((run_id, span))
 
             # Complete tool spans with the final result
-            for tool_span in tool_spans_to_complete:
+            for run_id, tool_span in tool_spans_to_complete:
+                # Remove from runs dict
+                self._pop_run(run_id)
+
                 # Extract result from the finish log
                 result = "Tool execution completed"
                 if hasattr(finish, "log") and finish.log:
@@ -246,12 +279,27 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 return False
         return True
 
+    def _finish_trace_if_needed(self) -> None:
+        """Finish the trace if we're managing it and no active spans remain."""
+        if (
+            self._trace_managed_by_langchain and self._active_runs() == 0
+        ):  # No more active spans
+            self._client.finish_trace(self._trace_managed_by_langchain)
+            from noveum_trace.core.context import set_current_trace
+
+            set_current_trace(None)
+            self._trace_managed_by_langchain = None
+
     # LLM Events
     def on_llm_start(
         self,
         serialized: dict[str, Any],
         prompts: list[str],
+        *,
         run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Handle LLM start event."""
@@ -261,19 +309,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         operation_name = self._get_operation_name("llm_start", serialized)
 
         try:
-            if self._should_create_trace("llm_start", serialized):
-                # Standalone LLM call - create new trace
-                self._current_trace = self._client.start_trace(operation_name)
-                self._trace_stack.append(self._current_trace)
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
-            # Create span (either in new trace or existing trace)
+            # Create span
             span = self._client.start_span(
                 name=operation_name,
                 attributes={
                     "langchain.run_id": str(run_id),
-                    "llm.model": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
-                    ),
+                    "llm.model": self._extract_model_name(serialized),
                     "llm.provider": (
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
@@ -293,19 +337,35 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     },
                 },
             )
-            self._span_stack.append(span)
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
 
         except Exception as e:
             logger.error("Error handling LLM start event: %s", e)
 
-    def on_llm_end(self, response: "LLMResult", run_id: UUID, **kwargs: Any) -> None:
+    def on_llm_end(
+        self,
+        response: "LLMResult",
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
         """Handle LLM end event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return
 
         try:
-            span = self._span_stack.pop()
-
             # Add response data
             generations = []
             token_usage = {}
@@ -351,12 +411,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
 
-            # Finish trace if this was a standalone LLM call
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling LLM end event: %s", e)
@@ -370,21 +426,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Handle LLM error event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return None
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return None
 
         try:
-            span = self._span_stack.pop()
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
             self._client.finish_span(span)
 
-            # Finish trace if this was a standalone LLM call
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling LLM error event: %s", e)
@@ -396,7 +452,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self,
         serialized: dict[str, Any],
         inputs: dict[str, Any],
+        *,
         run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Handle chain start event."""
@@ -406,10 +466,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         operation_name = self._get_operation_name("chain_start", serialized)
 
         try:
-            if self._should_create_trace("chain_start", serialized):
-                # Create new trace for chain
-                self._current_trace = self._client.start_trace(operation_name)
-                self._trace_stack.append(self._current_trace)
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span for chain
             span = self._client.start_span(
@@ -430,21 +488,35 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     },
                 },
             )
-            self._span_stack.append(span)
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
 
         except Exception as e:
             logger.error("Error handling chain start event: %s", e)
 
     def on_chain_end(
-        self, outputs: dict[str, Any], run_id: UUID, **kwargs: Any
+        self,
+        outputs: dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
     ) -> None:
         """Handle chain end event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return
 
         try:
-            span = self._span_stack.pop()
-
             span.set_attributes(
                 {
                     # Output attributes
@@ -455,12 +527,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
 
-            # Finish trace if this was the top-level chain
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling chain end event: %s", e)
@@ -474,21 +542,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Handle chain error event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return None
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return None
 
         try:
-            span = self._span_stack.pop()
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
             self._client.finish_span(span)
 
-            # Finish trace if this was the top-level chain
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling chain error event: %s", e)
@@ -500,7 +568,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self,
         serialized: dict[str, Any],
         input_str: str,
+        *,
         run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         inputs: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
@@ -511,11 +583,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         operation_name = self._get_operation_name("tool_start", serialized)
 
         try:
-            # Check if we should create a new trace for this tool call
-            if self._should_create_trace("tool_start", serialized):
-                # Standalone tool call - create new trace
-                self._current_trace = self._client.start_trace(operation_name)
-                self._trace_stack.append(self._current_trace)
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
@@ -552,43 +621,41 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     },
                 },
             )
-            self._span_stack.append(span)
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
 
         except Exception as e:
             logger.error("Error handling tool start event: %s", e)
 
-    def on_tool_end(self, output: str, run_id: UUID, **kwargs: Any) -> None:
+    def on_tool_end(
+        self,
+        output: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
         """Handle tool end event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return
 
         try:
-            # Find and finish the most recent tool span
-            # Look for tool spans (both "tool:" and "tool_call:" patterns)
-            tool_span = None
-            for i in range(len(self._span_stack) - 1, -1, -1):
-                span_name = getattr(self._span_stack[i], "name", "")
-                if span_name.startswith("tool:") or span_name.startswith("tool_call:"):
-                    tool_span = self._span_stack.pop(i)
-                    break
+            span.set_attributes({"tool.output.output": output})
+            span.set_status(SpanStatus.OK)
+            self._client.finish_span(span)
 
-            if tool_span:
-                tool_span.set_attributes({"tool.output.output": output})
-                tool_span.set_status(SpanStatus.OK)
-                self._client.finish_span(tool_span)
-            else:
-                # Fallback to the last span if no tool span found
-                span = self._span_stack.pop()
-                span.set_attributes({"tool.output.output": output})
-                span.set_status(SpanStatus.OK)
-                self._client.finish_span(span)
-
-            # Finish trace if this was a standalone tool call
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
@@ -602,14 +669,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Handle tool error event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return None
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return None
 
         try:
-            span = self._span_stack.pop()
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
             self._client.finish_span(span)
+
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling tool error event: %s", e)
@@ -621,7 +695,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self,
         serialized: dict[str, Any],
         inputs: dict[str, Any],
+        *,
         run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """Handle agent start event."""
@@ -631,10 +709,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         operation_name = self._get_operation_name("agent_start", serialized)
 
         try:
-            if self._should_create_trace("agent_start", serialized):
-                # Create new trace for agent
-                self._current_trace = self._client.start_trace(operation_name)
-                self._trace_stack.append(self._current_trace)
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span for agent
             agent_name = serialized.get("name", "unknown") if serialized else "unknown"
@@ -661,20 +737,34 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     },
                 },
             )
-            self._span_stack.append(span)
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
 
         except Exception as e:
             logger.error("Error handling agent start event: %s", e)
 
     def on_agent_action(
-        self, action: "AgentAction", run_id: UUID, **kwargs: Any
+        self,
+        action: "AgentAction",
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
     ) -> None:
         """Handle agent action event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
             return
 
         try:
-            span = self._span_stack[-1]  # Add to current span
+            # Get the current agent span
+            span = self._get_run(run_id)
+            if span is None:
+                return
 
             # Add agent output attributes
             span.set_attributes(
@@ -703,17 +793,25 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error("Error handling agent action event: %s", e)
 
     def on_agent_finish(
-        self, finish: "AgentFinish", run_id: UUID, **kwargs: Any
+        self,
+        finish: "AgentFinish",
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
     ) -> None:
         """Handle agent finish event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return
 
         try:
             # Complete any pending tool spans first
-            self._complete_tool_spans_from_finish(finish)
-
-            span = self._span_stack.pop()  # Pop the agent span
+            self._complete_tool_spans_from_finish(finish, run_id)
 
             # Add agent output attributes
             span.set_attributes(
@@ -739,19 +837,23 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
 
-            # Finish trace if this was the top-level agent
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling agent finish event: %s", e)
 
     # Retrieval Events
     def on_retriever_start(
-        self, serialized: dict[str, Any], query: str, run_id: UUID, **kwargs: Any
+        self,
+        serialized: dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Handle retriever start event."""
         if not self._ensure_client():
@@ -760,10 +862,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         operation_name = self._get_operation_name("retriever_start", serialized)
 
         try:
-            if self._should_create_trace("retriever_start", serialized):
-                # Standalone retrieval - create new trace
-                self._current_trace = self._client.start_trace(operation_name)
-                self._trace_stack.append(self._current_trace)
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(operation_name)
 
             # Create span
             span = self._client.start_span(
@@ -784,7 +884,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     },
                 },
             )
-            self._span_stack.append(span)
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
 
         except Exception as e:
             logger.error("Error handling retriever start event: %s", e)
@@ -798,12 +904,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Handle retriever end event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return None
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return None
 
         try:
-            span = self._span_stack.pop()
-
             # Extract document content safely
             doc_previews = []
             for doc in documents[:10]:  # Limit to first 10 documents
@@ -822,12 +931,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.set_status(SpanStatus.OK)
             self._client.finish_span(span)
 
-            # Finish trace if this was a standalone retrieval
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling retriever end event: %s", e)
@@ -843,35 +948,43 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Handle retriever error event."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
+            return None
+
+        # Get and remove span from runs dict
+        span = self._pop_run(run_id)
+        if span is None:
             return None
 
         try:
-            span = self._span_stack.pop()
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
             self._client.finish_span(span)
 
-            # Finish trace if this was a standalone retrieval
-            if self._current_trace and len(self._span_stack) == 0:
-                self._client.finish_trace(self._current_trace)
-                if self._trace_stack:
-                    self._trace_stack.pop()
-                self._current_trace = None
+            # Check if we should finish the trace
+            self._finish_trace_if_needed()
 
         except Exception as e:
             logger.error("Error handling retriever error event: %s", e)
 
         return None
 
-    def on_text(self, text: str, run_id: UUID, **kwargs: Any) -> None:
+    def on_text(
+        self,
+        text: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
         """Handle text event (optional, for debugging)."""
-        if not self._ensure_client() or not self._span_stack:
+        if not self._ensure_client():
             return
 
         try:
-            span = self._span_stack[-1]
-            span.add_event("text_output", {"text": text})
+            span = self._get_run(run_id)
+            if span is not None:
+                span.add_event("text_output", {"text": text})
         except Exception as e:
             logger.error("Error handling text event: %s", e)
 
@@ -879,8 +992,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """String representation of the callback handler."""
         return (
             f"NoveumTraceCallbackHandler("
-            f"active_traces={len(self._trace_stack)}, "
-            f"active_spans={len(self._span_stack)})"
+            f"active_runs={self._active_runs()}, "
+            f"managing_trace={self._trace_managed_by_langchain is not None})"
         )
 
 
