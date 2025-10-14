@@ -23,18 +23,17 @@ gathered is insufficient to answer the question.
 import os
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-# Import Noveum Trace
-from noveum_trace import configure, get_client
-from noveum_trace.integrations import NoveumTraceCallbackHandler
 import noveum_trace
 
-from dotenv import load_dotenv
+# Import Noveum Trace
+from noveum_trace.integrations import NoveumTraceCallbackHandler
 
 # At the start of the file or in setup_noveum_trace()
 load_dotenv()
@@ -55,6 +54,7 @@ def setup_noveum_trace():
 # =============================================================================
 # STATE DEFINITION
 # =============================================================================
+
 
 class ResearchState(TypedDict):
     """State for the research agent."""
@@ -87,6 +87,7 @@ class ResearchState(TypedDict):
 # =============================================================================
 # TOOLS
 # =============================================================================
+
 
 @tool
 def web_search(query: str) -> str:
@@ -127,7 +128,7 @@ def web_search(query: str) -> str:
         General information about AI, machine learning, and natural language processing.
         Large language models like GPT can understand and generate human-like text.
         They are trained on vast amounts of data and can perform various tasks.
-        """
+        """,
     }
 
     # Find best matching result
@@ -140,7 +141,9 @@ def web_search(query: str) -> str:
 
 
 @tool
-def check_information_quality(question: str, gathered_info: str, min_iterations: int = 0) -> dict:
+def check_information_quality(
+    question: str, gathered_info: str, min_iterations: int = 0
+) -> dict:
     """
     Evaluate if gathered information is sufficient to answer the question.
 
@@ -155,39 +158,40 @@ def check_information_quality(question: str, gathered_info: str, min_iterations:
     # Simulated quality check - normal difficulty
     info_length = len(gathered_info)
     num_sources = gathered_info.count("Search results for")
-    
+
     # Check if minimum iterations requirement is met
     if num_sources < min_iterations:
         return {
             "quality": "insufficient",
             "reason": f"Only {num_sources} iterations completed, need at least {min_iterations}",
-            "suggestion": "Continue research to meet minimum iteration requirement"
+            "suggestion": "Continue research to meet minimum iteration requirement",
         }
-    
+
     # Normal quality thresholds
     if info_length < 100:
         return {
             "quality": "insufficient",
             "reason": "Not enough information gathered",
-            "suggestion": "Need more comprehensive search"
+            "suggestion": "Need more comprehensive search",
         }
     elif info_length < 500:
         return {
             "quality": "sufficient",
             "reason": "Basic information available",
-            "suggestion": "Could benefit from more details"
+            "suggestion": "Could benefit from more details",
         }
     else:
         return {
             "quality": "excellent",
             "reason": "Comprehensive information gathered",
-            "suggestion": "Ready to synthesize answer"
+            "suggestion": "Ready to synthesize answer",
         }
 
 
 # =============================================================================
 # AGENT NODES
 # =============================================================================
+
 
 def research_node(state: ResearchState) -> ResearchState:
     """
@@ -209,7 +213,8 @@ def research_node(state: ResearchState) -> ResearchState:
     # Add to message history
     state["messages"].append(
         AIMessage(
-            content=f"Searched for: {state['current_query']}\n\nFound: {search_result}")
+            content=f"Searched for: {state['current_query']}\n\nFound: {search_result}"
+        )
     )
 
     print(f"✓ Found {len(search_result)} characters of information")
@@ -231,14 +236,21 @@ def evaluate_node(state: ResearchState) -> ResearchState:
 
     # Determine minimum iterations based on question complexity
     # For complex questions (example 2), require at least 3 iterations
-    min_iterations = 3 if "blockchain" in state["question"].lower() or "consensus" in state["question"].lower() else 0
+    min_iterations = (
+        3
+        if "blockchain" in state["question"].lower()
+        or "consensus" in state["question"].lower()
+        else 0
+    )
 
     # Check quality
-    quality_check = check_information_quality.invoke({
-        "question": state["question"],
-        "gathered_info": all_info,
-        "min_iterations": min_iterations
-    })
+    quality_check = check_information_quality.invoke(
+        {
+            "question": state["question"],
+            "gathered_info": all_info,
+            "min_iterations": min_iterations,
+        }
+    )
 
     state["information_quality"] = quality_check["quality"]
 
@@ -248,7 +260,8 @@ def evaluate_node(state: ResearchState) -> ResearchState:
     # Add evaluation to messages
     state["messages"].append(
         AIMessage(
-            content=f"Evaluation: {quality_check['quality']} - {quality_check['reason']}")
+            content=f"Evaluation: {quality_check['quality']} - {quality_check['reason']}"
+        )
     )
 
     return state
@@ -268,13 +281,13 @@ def refine_query_node(state: ResearchState) -> ResearchState:
 
     refine_prompt = f"""
     Original question: {state['question']}
-    
+
     Previous searches:
     {chr(10).join(f"- {result[:100]}..." for result in state['search_results'])}
-    
+
     The information gathered is insufficient. Suggest a more specific
     search query to find missing information. Be concise.
-    
+
     Return ONLY the refined query, nothing else.
     """
 
@@ -309,10 +322,10 @@ def synthesize_node(state: ResearchState) -> ResearchState:
 
     synthesis_prompt = f"""
     Question: {state['question']}
-    
+
     Gathered Information:
     {all_info}
-    
+
     Synthesize a comprehensive answer to the question based on the gathered information.
     Be clear, concise, and cite the information sources when relevant.
     """
@@ -325,9 +338,7 @@ def synthesize_node(state: ResearchState) -> ResearchState:
     print(f"✓ Generated answer ({len(final_answer)} characters)")
 
     # Add to messages
-    state["messages"].append(
-        AIMessage(content=f"Final Answer:\n{final_answer}")
-    )
+    state["messages"].append(AIMessage(content=f"Final Answer:\n{final_answer}"))
 
     return state
 
@@ -335,6 +346,7 @@ def synthesize_node(state: ResearchState) -> ResearchState:
 # =============================================================================
 # ROUTING LOGIC
 # =============================================================================
+
 
 def should_continue_research(state: ResearchState) -> Literal["refine", "synthesize"]:
     """
@@ -355,13 +367,15 @@ def should_continue_research(state: ResearchState) -> Literal["refine", "synthes
         return "synthesize"
     else:
         print(
-            f"\n🔄 Information quality is {quality}, refining query for another iteration")
+            f"\n🔄 Information quality is {quality}, refining query for another iteration"
+        )
         return "refine"
 
 
 # =============================================================================
 # GRAPH CONSTRUCTION
 # =============================================================================
+
 
 def create_research_agent() -> StateGraph:
     """
@@ -394,9 +408,9 @@ def create_research_agent() -> StateGraph:
         "evaluate",
         should_continue_research,
         {
-            "refine": "refine",        # Loop back via refine
-            "synthesize": "synthesize"  # Exit loop
-        }
+            "refine": "refine",  # Loop back via refine
+            "synthesize": "synthesize",  # Exit loop
+        },
     )
 
     # Edge from refine back to research (completes the self-loop)
@@ -411,6 +425,7 @@ def create_research_agent() -> StateGraph:
 # =============================================================================
 # MAIN EXECUTION
 # =============================================================================
+
 
 def run_research_agent(question: str, max_iterations: int = 3):
     """
@@ -445,7 +460,7 @@ def run_research_agent(question: str, max_iterations: int = 3):
         "iteration_count": 0,
         "max_iterations": max_iterations,
         "information_quality": "insufficient",
-        "final_answer": ""
+        "final_answer": "",
     }
 
     print(f"\n📋 Research Question: {question}")
@@ -460,10 +475,10 @@ def run_research_agent(question: str, max_iterations: int = 3):
         "metadata": {
             "agent_type": "research",
             "question": question,
-            "max_iterations": max_iterations
+            "max_iterations": max_iterations,
         },
         "tags": ["research_agent", "langgraph", "noveum_trace"],
-        "recursion_limit": 200
+        "recursion_limit": 200,
     }
 
     try:
@@ -475,17 +490,15 @@ def run_research_agent(question: str, max_iterations: int = 3):
         print("=" * 80)
 
         # Print summary
-        print(f"\n📊 EXECUTION SUMMARY:")
+        print("\n📊 EXECUTION SUMMARY:")
         print(f"   • Iterations performed: {final_state['iteration_count']}")
-        print(
-            f"   • Search results gathered: {len(final_state['search_results'])}")
+        print(f"   • Search results gathered: {len(final_state['search_results'])}")
         print(f"   • Final quality: {final_state['information_quality']}")
-        print(
-            f"   • Answer length: {len(final_state['final_answer'])} characters")
+        print(f"   • Answer length: {len(final_state['final_answer'])} characters")
 
-        print(f"\n📝 FINAL ANSWER:")
+        print("\n📝 FINAL ANSWER:")
         print("─" * 80)
-        print(final_state['final_answer'])
+        print(final_state["final_answer"])
         print("─" * 80)
 
         return final_state
@@ -507,11 +520,12 @@ if __name__ == "__main__":
 
     run_research_agent(
         question="Explain the theoretical foundations of attention mechanisms in transformer architectures, including the mathematical formulation of scaled dot-product attention, multi-head attention, and how positional encodings enable sequence-order awareness in a permutation-invariant architecture. Compare this with RNN-based sequential processing and analyze the computational complexity trade-offs.",
-        max_iterations=5
+        max_iterations=5,
     )
 
     # Wait a bit between examples
     import time
+
     time.sleep(2)
 
     # Example 2: Complex question (should need multiple iterations)
@@ -521,7 +535,7 @@ if __name__ == "__main__":
 
     run_research_agent(
         question="Analyze the distributed consensus algorithms used in blockchain networks, specifically comparing Byzantine Fault Tolerance (BFT) variants like PBFT, Tendermint, and HotStuff with Nakamoto consensus. Discuss the CAP theorem implications, finality guarantees, performance characteristics under adversarial conditions, and how these relate to the scalability trilemma. Include mathematical proofs of safety and liveness properties.",
-        max_iterations=10
+        max_iterations=10,
     )
 
     print("\n\n" + "=" * 80)

@@ -11,12 +11,12 @@ is explicitly made a child of the first using custom naming.
 
 import os
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from noveum_trace import init as noveum_init
 from noveum_trace.integrations import NoveumTraceCallbackHandler
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -58,19 +58,15 @@ def main():
     # We assign it a custom name "weather_query"
     config_parent = {
         "callbacks": [handler],
-        "metadata": {
-            "noveum": {
-                "name": "weather_query"  # Custom name for this span
-            }
-        }
+        "metadata": {"noveum": {"name": "weather_query"}},  # Custom name for this span
     }
 
     response1 = llm.invoke(
         [HumanMessage(content="What's the weather like in Tokyo?")],
-        config=config_parent
+        config=config_parent,
     )
 
-    print(f"✅ First call completed")
+    print("✅ First call completed")
     print(f"Response: {response1.content[:100]}...")
 
     print("\n" + "=" * 80)
@@ -83,18 +79,18 @@ def main():
         "callbacks": [handler],
         "metadata": {
             "noveum": {
-                "name": "recipe_query",        # Custom name for this span
-                "parent_name": "weather_query"  # Reference to parent span
+                "name": "recipe_query",  # Custom name for this span
+                "parent_name": "weather_query",  # Reference to parent span
             }
-        }
+        },
     }
 
     response2 = llm.invoke(
         [HumanMessage(content="Give me a recipe for chocolate chip cookies")],
-        config=config_child
+        config=config_child,
     )
 
-    print(f"✅ Second call completed")
+    print("✅ Second call completed")
     print(f"Response: {response2.content[:100]}...")
 
     # Manually end the trace
@@ -113,7 +109,9 @@ def main():
     print("💡 Key Points:")
     print("   1. handler.start_trace() creates a trace and disables auto-finishing")
     print("   2. Both LLM calls stay within the same manually controlled trace")
-    print("   3. metadata.noveum.parent_name creates explicit parent-child relationship")
+    print(
+        "   3. metadata.noveum.parent_name creates explicit parent-child relationship"
+    )
     print("   4. handler.end_trace() manually finishes the trace")
     print()
     print(f"Handler state: {handler}")
@@ -121,4 +119,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

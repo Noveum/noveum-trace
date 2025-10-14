@@ -11,18 +11,18 @@ Flow:
 - Call 2: name="geography_question", parent_name="math_question" (child of Call 1)
 - Call 3: name="math_question", parent_name="math_question" (child of Call 1, REUSES name)
 
-Note: Call 3 overwrites the "math_question" mapping, so after Call 3, 
+Note: Call 3 overwrites the "math_question" mapping, so after Call 3,
 self.names["math_question"] points to Call 3's span_id, not Call 1's.
 """
 
 import os
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from noveum_trace import init as noveum_init
 from noveum_trace.integrations import NoveumTraceCallbackHandler
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -64,22 +64,15 @@ def main():
 
     config_1 = {
         "callbacks": [handler],
-        "metadata": {
-            "noveum": {
-                "name": "math_question"
-            }
-        }
+        "metadata": {"noveum": {"name": "math_question"}},
     }
 
-    response1 = llm.invoke(
-        [HumanMessage(content="What is 2 + 2?")],
-        config=config_1
-    )
+    response1 = llm.invoke([HumanMessage(content="What is 2 + 2?")], config=config_1)
 
-    print(f"✅ Call 1 completed")
-    print(f"   Name: 'math_question'")
+    print("✅ Call 1 completed")
+    print("   Name: 'math_question'")
     print(f"   Response: {response1.content[:50]}...")
-    print(f"   Mapping: self.names['math_question'] → span_id_1")
+    print("   Mapping: self.names['math_question'] → span_id_1")
 
     # ==========================================================================
     # CALL 2: name="geography_question", parent_name="math_question" (Child of Call 1)
@@ -93,21 +86,20 @@ def main():
         "metadata": {
             "noveum": {
                 "name": "geography_question",
-                "parent_name": "math_question"  # References Call 1
+                "parent_name": "math_question",  # References Call 1
             }
-        }
+        },
     }
 
     response2 = llm.invoke(
-        [HumanMessage(content="What is the capital of France?")],
-        config=config_2
+        [HumanMessage(content="What is the capital of France?")], config=config_2
     )
 
-    print(f"✅ Call 2 completed")
-    print(f"   Name: 'geography_question'")
-    print(f"   Parent: 'math_question' (Call 1)")
+    print("✅ Call 2 completed")
+    print("   Name: 'geography_question'")
+    print("   Parent: 'math_question' (Call 1)")
     print(f"   Response: {response2.content[:50]}...")
-    print(f"   Mapping: self.names['geography_question'] → span_id_2")
+    print("   Mapping: self.names['geography_question'] → span_id_2")
 
     # ==========================================================================
     # CALL 3: name="math_question", parent_name="math_question" (REUSES name!)
@@ -120,22 +112,21 @@ def main():
         "callbacks": [handler],
         "metadata": {
             "noveum": {
-                "name": "math_question",          # SAME NAME as Call 1!
-                "parent_name": "math_question"    # References Call 1 (before overwrite)
+                "name": "math_question",  # SAME NAME as Call 1!
+                "parent_name": "math_question",  # References Call 1 (before overwrite)
             }
-        }
+        },
     }
 
     response3 = llm.invoke(
-        [HumanMessage(content="What is 10 multiplied by 5?")],
-        config=config_3
+        [HumanMessage(content="What is 10 multiplied by 5?")], config=config_3
     )
 
-    print(f"✅ Call 3 completed")
-    print(f"   Name: 'math_question' (OVERWRITES Call 1's mapping)")
-    print(f"   Parent: 'math_question' (Call 1 - looked up BEFORE overwrite)")
+    print("✅ Call 3 completed")
+    print("   Name: 'math_question' (OVERWRITES Call 1's mapping)")
+    print("   Parent: 'math_question' (Call 1 - looked up BEFORE overwrite)")
     print(f"   Response: {response3.content[:50]}...")
-    print(f"   Mapping: self.names['math_question'] → span_id_3 (was span_id_1)")
+    print("   Mapping: self.names['math_question'] → span_id_3 (was span_id_1)")
 
     # Manually end the trace
     handler.end_trace()
@@ -152,10 +143,14 @@ def main():
     print("      └── Span: math_question (Call 3 - span_id_3) ← SAME NAME!")
     print()
     print("💡 Key Points:")
-    print("   1. Call 3 looks up parent_name='math_question' FIRST → finds Call 1's span_id")
+    print(
+        "   1. Call 3 looks up parent_name='math_question' FIRST → finds Call 1's span_id"
+    )
     print("   2. Call 3 creates span with Call 1 as parent ✓")
     print("   3. Call 3 THEN stores name='math_question' → overwrites mapping")
-    print("   4. After Call 3: self.names['math_question'] points to Call 3, not Call 1")
+    print(
+        "   4. After Call 3: self.names['math_question'] points to Call 3, not Call 1"
+    )
     print()
     print("⚠️  Name Collision Behavior:")
     print("   - Lookups happen BEFORE storing new mappings")
@@ -168,4 +163,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

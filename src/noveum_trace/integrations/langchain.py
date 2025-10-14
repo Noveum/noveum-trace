@@ -27,7 +27,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
     def __init__(self, use_langchain_assigned_parent: bool = False) -> None:
         """Initialize the callback handler.
-        
+
         Args:
             use_langchain_assigned_parent: If True, use LangChain's parent_run_id
                 to determine parent span relationships instead of context-based
@@ -48,7 +48,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Track if we're managing a trace lifecycle
         self._trace_managed_by_langchain: Optional[Any] = None
-        
+
         # Track if trace is manually controlled (started via start_trace())
         self._manual_trace_control: bool = False
 
@@ -94,7 +94,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._names_lock:
             return self.names.get(name)
 
-    def _extract_noveum_metadata(self, metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
+    def _extract_noveum_metadata(
+        self, metadata: Optional[dict[str, Any]]
+    ) -> dict[str, Any]:
         """
         Extract metadata.noveum configuration.
 
@@ -141,26 +143,24 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return span_id
 
     def _resolve_parent_span_id(
-        self, 
-        parent_run_id: Optional[UUID],
-        parent_name: Optional[str]
+        self, parent_run_id: Optional[UUID], parent_name: Optional[str]
     ) -> Optional[str]:
         """
         Resolve parent span ID based on mode.
-        
+
         When use_langchain_assigned_parent=True:
         - Use parent_run_id to look up parent span
         - Fallback to parent_name if parent_run_id lookup fails
         - Fallback to context-based parent with WARNING if both fail
-        
+
         When use_langchain_assigned_parent=False:
         - Use parent_name if provided
         - Otherwise return None (uses context-based parent normally)
-        
+
         Args:
             parent_run_id: LangChain's parent run ID
             parent_name: Custom parent name from metadata
-            
+
         Returns:
             Parent span ID if resolved, None otherwise
         """
@@ -170,15 +170,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 parent_span = self._get_run(parent_run_id)
                 if parent_span:
                     return parent_span.span_id
-            
+
             # Fallback to parent_name
             if parent_name:
                 span_id = self._get_parent_span_id_from_name(parent_name)
                 if span_id:
                     return span_id
-            
+
             # Final fallback: context-based parent with WARNING
             from noveum_trace.core.context import get_current_span
+
             current_span = get_current_span()
             if current_span:
                 logger.warning(
@@ -187,7 +188,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     f"from context: {current_span.span_id}"
                 )
                 return current_span.span_id
-            
+
             # No parent found at all
             return None
         else:
@@ -223,26 +224,26 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "Manual trace control enabled but no trace found. "
                     "Call start_trace() first."
                 )
-            
+
             # Create new trace in global context
             new_trace = self._client.start_trace(operation_name)
             set_current_trace(new_trace)
             return new_trace, True
 
     def _get_operation_name(
-        self, 
-        event_type: str, 
+        self,
+        event_type: str,
         serialized: Optional[dict[str, Any]],
-        langgraph_metadata: Optional[dict[str, Any]] = None
+        langgraph_metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         """
         Generate standardized operation names with LangGraph support.
-        
+
         Args:
             event_type: Type of event (llm_start, chain_start, etc.)
             serialized: Serialized object dict (may be None for LangGraph)
             langgraph_metadata: Optional LangGraph metadata dict
-            
+
         Returns:
             Operation name string (e.g., "graph.node.research" or "chain.unknown")
         """
@@ -250,11 +251,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if event_type == "chain_start":
             if langgraph_metadata and langgraph_metadata.get("is_langgraph"):
                 return self._get_langgraph_operation_name(langgraph_metadata, "unknown")
-        
+
         # For other event types or non-LangGraph chains, need serialized
         if serialized is None:
             return f"{event_type}.unknown"
-        
+
         name = serialized.get("name", "unknown")
 
         if event_type == "llm_start":
@@ -274,17 +275,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return f"{event_type}.{name}"
 
     def _get_langgraph_operation_name(
-        self,
-        langgraph_metadata: dict[str, Any],
-        fallback_name: str
+        self, langgraph_metadata: dict[str, Any], fallback_name: str
     ) -> str:
         """
         Generate LangGraph-aware operation names.
-        
+
         Args:
             langgraph_metadata: LangGraph metadata dict
             fallback_name: Fallback name if no LangGraph info available
-            
+
         Returns:
             Operation name string (e.g., "graph.node.research")
         """
@@ -292,21 +291,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         node_name = langgraph_metadata.get("node_name")
         if node_name:
             return f"graph.node.{node_name}"
-        
+
         # Check if we have a graph name
         graph_name = langgraph_metadata.get("graph_name")
         if graph_name:
             return f"graph.{graph_name}"
-        
+
         # Check if we have a step number
         step = langgraph_metadata.get("step")
         if step is not None:
             return f"graph.node.step_{step}"
-        
+
         # Fallback to generic graph naming
         if fallback_name and fallback_name != "unknown":
             return f"graph.{fallback_name}"
-        
+
         # Ultimate fallback
         return "graph.unknown"
 
@@ -370,8 +369,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         tool_types.add("api_calls")
                     else:
                         tool_types.add(
-                            tool.get("name", "other") if tool.get(
-                                "name") else "other"
+                            tool.get("name", "other") if tool.get("name") else "other"
                         )
 
             if tool_types:
@@ -400,23 +398,23 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self,
         metadata: Optional[dict[str, Any]],
         tags: Optional[list[str]],
-        serialized: Optional[dict[str, Any]]
+        serialized: Optional[dict[str, Any]],
     ) -> dict[str, Any]:
         """
         Extract LangGraph-specific metadata from callback parameters.
-        
+
         This method safely extracts LangGraph metadata from various sources
         with comprehensive fallbacks to ensure it never breaks regular LangChain usage.
-        
+
         Args:
             metadata: LangChain metadata dict (may contain LangGraph keys)
             tags: List of tags (may contain graph indicators)
             serialized: Serialized object dict (contains type info, may be None)
-            
+
         Returns:
             Dict with LangGraph metadata, all fields are optional and safe
         """
-        result = {
+        result: dict[str, Any] = {
             "is_langgraph": False,
             "node_name": None,
             "step": None,
@@ -424,7 +422,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             "checkpoint_ns": None,
             "execution_type": None,
         }
-        
+
         # 1. Try to extract from metadata (primary source)
         try:
             if metadata and isinstance(metadata, dict):
@@ -433,7 +431,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 result["step"] = metadata.get("langgraph_step")
                 result["graph_name"] = metadata.get("langgraph_graph_name")
                 result["checkpoint_ns"] = metadata.get("langgraph_checkpoint_ns")
-                
+
                 # Extract path information if available
                 langgraph_path = metadata.get("langgraph_path")
                 if langgraph_path and isinstance(langgraph_path, (list, tuple)):
@@ -447,7 +445,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception:
             # Silent fallback - metadata extraction failed
             pass
-        
+
         # 2. Try to extract from tags (secondary source)
         try:
             if tags and isinstance(tags, list):
@@ -462,7 +460,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception:
             # Silent fallback - tag extraction failed
             pass
-        
+
         # 3. Try to extract from serialized dict (tertiary source)
         # Note: LangGraph often passes None for serialized, so this is optional
         try:
@@ -473,7 +471,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     # Look for langgraph in the ID path
                     if any("langgraph" in str(part).lower() for part in id_path):
                         result["is_langgraph"] = True
-                        
+
                         # Try to extract graph name from serialized name
                         if not result["graph_name"]:
                             name = serialized.get("name", "")
@@ -482,16 +480,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception:
             # Silent fallback - serialized extraction failed
             pass
-        
+
         # 4. Determine if this is LangGraph execution
         # Only mark as LangGraph if we found clear indicators
         result["is_langgraph"] = bool(
-            result["node_name"] or
-            result["step"] is not None or
-            result["checkpoint_ns"] or
-            result["is_langgraph"]  # Set by serialized check
+            result["node_name"]
+            or result["step"] is not None
+            or result["checkpoint_ns"]
+            or result["is_langgraph"]  # Set by serialized check
         )
-        
+
         # 5. Determine execution type
         if result["is_langgraph"]:
             if result["node_name"]:
@@ -500,54 +498,55 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 result["execution_type"] = "graph"
             else:
                 result["execution_type"] = "unknown"
-        
+
         return result
 
     def _build_langgraph_attributes(
-        self,
-        langgraph_metadata: dict[str, Any]
+        self, langgraph_metadata: dict[str, Any]
     ) -> dict[str, Any]:
         """
         Build span attributes from LangGraph metadata.
-        
+
         Only includes attributes that have actual values to avoid
         cluttering spans with None values.
-        
+
         Args:
             langgraph_metadata: Dict from _extract_langgraph_metadata()
-            
+
         Returns:
             Dict of span attributes to add (may be empty)
         """
-        attributes = {}
-        
+        attributes: dict[str, Any] = {}
+
         # Only add attributes if we have LangGraph data
         if not langgraph_metadata.get("is_langgraph"):
             return attributes
-        
+
         # Add LangGraph indicator
         attributes["langgraph.is_graph"] = True
-        
+
         # Add node name if available
         if langgraph_metadata.get("node_name"):
             attributes["langgraph.node_name"] = langgraph_metadata["node_name"]
-        
+
         # Add step number if available
         if langgraph_metadata.get("step") is not None:
             attributes["langgraph.step"] = langgraph_metadata["step"]
-        
+
         # Add graph name if available
         if langgraph_metadata.get("graph_name"):
             attributes["langgraph.graph_name"] = langgraph_metadata["graph_name"]
-        
+
         # Add checkpoint namespace if available
         if langgraph_metadata.get("checkpoint_ns"):
             attributes["langgraph.checkpoint_ns"] = langgraph_metadata["checkpoint_ns"]
-        
+
         # Add execution type if available
         if langgraph_metadata.get("execution_type"):
-            attributes["langgraph.execution_type"] = langgraph_metadata["execution_type"]
-        
+            attributes["langgraph.execution_type"] = langgraph_metadata[
+                "execution_type"
+            ]
+
         return attributes
 
     def _create_tool_span_from_action(
@@ -624,21 +623,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
     def start_trace(self, name: str) -> None:
         """
         Manually start a trace.
-        
-        This disables auto-finishing behavior - you must call end_trace() 
+
+        This disables auto-finishing behavior - you must call end_trace()
         to finish the trace.
-        
+
         Args:
             name: Name for the trace
-            
+
         Raises:
             RuntimeError: If a trace is already active
         """
         if not self._ensure_client():
             raise RuntimeError("Noveum Trace client not available")
-        
+
         from noveum_trace.core.context import get_current_trace, set_current_trace
-        
+
         # Check if trace already exists
         existing_trace = get_current_trace()
         if existing_trace is not None:
@@ -646,46 +645,46 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 f"A trace is already active: {existing_trace.trace_id}. "
                 "Call end_trace() first before starting a new trace."
             )
-        
+
         # Create new trace
         trace = self._client.start_trace(name)
         set_current_trace(trace)
-        
+
         # Enable manual control - disables auto-finishing
         self._manual_trace_control = True
         self._trace_managed_by_langchain = trace
-        
+
         logger.debug(f"Manually started trace: {trace.trace_id}")
-    
+
     def end_trace(self) -> None:
         """
         Manually end the current trace.
-        
+
         This replicates the auto-finishing behavior but is called explicitly.
-        Clears the trace from context and re-enables auto-management for 
+        Clears the trace from context and re-enables auto-management for
         future traces.
-        
+
         Raises:
             RuntimeError: If no trace is active
         """
         if not self._ensure_client():
             raise RuntimeError("Noveum Trace client not available")
-        
+
         from noveum_trace.core.context import get_current_trace, set_current_trace
-        
+
         # Get current trace
         trace = get_current_trace()
         if trace is None:
             raise RuntimeError("No active trace to end")
-        
+
         # Finish the trace
         self._client.finish_trace(trace)
-        
+
         # Clear context
         set_current_trace(None)
         self._trace_managed_by_langchain = None
         self._manual_trace_control = False
-        
+
         logger.debug(f"Manually ended trace: {trace.trace_id}")
 
     def _ensure_client(self) -> bool:
@@ -706,7 +705,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         # Don't auto-finish manually controlled traces
         if self._manual_trace_control:
             return
-            
+
         if (
             self._trace_managed_by_langchain and self._active_runs() == 0
         ):  # No more active spans
@@ -760,8 +759,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
                         else (
-                            serialized.get(
-                                "id", "unknown") if serialized else "unknown"
+                            serialized.get("id", "unknown") if serialized else "unknown"
                         )
                     ),
                     "llm.operation": "completion",
@@ -909,16 +907,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             # Extract LangGraph-specific metadata (with safe fallbacks)
             langgraph_metadata = self._extract_langgraph_metadata(
-                metadata=metadata,
-                tags=tags,
-                serialized=serialized
+                metadata=metadata, tags=tags, serialized=serialized
             )
 
             # Generate operation name with LangGraph support
             operation_name = self._get_operation_name(
-                "chain_start",
-                serialized,
-                langgraph_metadata=langgraph_metadata
+                "chain_start", serialized, langgraph_metadata=langgraph_metadata
             )
 
             # Extract Noveum-specific metadata
@@ -939,8 +933,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             attributes = {
                 "langchain.run_id": str(run_id),
                 "chain.name": (
-                    serialized.get(
-                        "name", "unknown") if serialized else "unknown"
+                    serialized.get("name", "unknown") if serialized else "unknown"
                 ),
                 "chain.operation": "execution",
                 # Input attributes
@@ -1063,7 +1056,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """
         Handle custom events including routing decisions.
-        
+
         Args:
             name: Event name (e.g., "langgraph.routing_decision")
             data: Event data/payload
@@ -1081,111 +1074,114 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """
         Handle routing decision by creating a separate span.
-        
+
         Routing spans follow the same structure as LLM/Chain/Tool spans:
         1. Create span with create_span()
         2. Set attributes
         3. Set status
         4. Finish span with finish_span()
-        
+
         Note: The run_id parameter is the PARENT's run_id (source node).
         The routing span is created and finished immediately without being
         stored in self.runs since it has no lifecycle to manage.
-        
+
         Args:
             payload: Routing decision data from user
             run_id: Parent node's run_id (used to find parent span)
         """
         if not self._ensure_client():
             return
-        
+
         try:
             # Extract routing information
             source_node = payload.get("source_node", "unknown")
             target_node = payload.get("target_node", "unknown")
-            
+
             # Create span name following pattern: routing.{source}_to_{target}
             span_name = f"routing.{source_node}_to_{target_node}"
-            
+
             # Get current trace
             from noveum_trace.core.context import get_current_trace
+
             trace = get_current_trace()
-            
+
             if not trace:
                 logger.warning("No trace context for routing decision")
                 return
-            
+
             # Determine parent span
             # run_id is the PARENT's run_id (the node making the routing decision)
             parent_span = self._get_run(run_id)
             parent_span_id = parent_span.span_id if parent_span else None
-            
+
             # If no parent span, routing span becomes root-level span under trace
             if not parent_span_id:
                 logger.debug(
-                    f"No parent span for routing decision, creating as root-level span"
+                    "No parent span for routing decision, creating as root-level span"
                 )
-            
+
             # Create routing span (same method as LLM/Chain/Tool spans)
             routing_span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,  # None if no parent = root span
             )
-            
+
             # Build attributes from payload
             attributes = self._build_routing_attributes(payload)
-            
+
             # Set all attributes
             routing_span.set_attributes(attributes)
-            
+
             # Set status to OK (routing decisions are successful operations)
             routing_span.set_status(SpanStatus.OK)
-            
+
             # Finish span immediately (routing is instant operation)
             self._client.finish_span(routing_span)
-            
+
             # Note: We do NOT store routing_span in self.runs because:
             # 1. It's already finished
             # 2. It has no lifecycle events to track
             # 3. It won't receive any future callbacks
             # 4. The run_id we have is the parent's, not this span's
-            
+
             logger.debug(
                 f"Created routing span: {span_name} "
                 f"(parent: {parent_span_id or 'root'})"
             )
-            
+
         except Exception as e:
             logger.error(f"Error handling routing decision: {e}", exc_info=True)
 
     def _build_routing_attributes(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Build routing span attributes from payload.
-        
+
         Captures all fields provided by the user, with special handling
         for known routing fields.
-        
+
         Args:
             payload: Routing decision data from user
-            
+
         Returns:
             Dictionary of span attributes
         """
         attributes = {}
-        
+
         # Core routing attributes (always present)
         attributes["routing.source_node"] = payload.get("source_node", "unknown")
         attributes["routing.target_node"] = payload.get("target_node", "unknown")
-        attributes["routing.decision"] = payload.get("decision", payload.get("target_node", "unknown"))
+        attributes["routing.decision"] = payload.get(
+            "decision", payload.get("target_node", "unknown")
+        )
         attributes["routing.type"] = "conditional_edge"
-        
+
         # Optional but common attributes
         if "reason" in payload:
             attributes["routing.reason"] = str(payload["reason"])
-        
+
         if "confidence" in payload:
             attributes["routing.confidence"] = float(payload["confidence"])
-        
+
         # Tool/option scores (expanded into individual attributes)
         if "tool_scores" in payload:
             tool_scores = payload["tool_scores"]
@@ -1195,32 +1191,38 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             if isinstance(tool_scores, dict):
                 for tool, score in tool_scores.items():
                     attributes[f"routing.score.{tool}"] = float(score)
-        
+
         # Alternatives
         if "alternatives" in payload:
             alternatives = payload["alternatives"]
             attributes["routing.alternatives"] = str(alternatives)
             if isinstance(alternatives, list):
                 attributes["routing.alternatives_count"] = len(alternatives)
-        
+
         # State snapshot (if provided)
         if "state_snapshot" in payload:
             state_snapshot = payload["state_snapshot"]
             attributes["routing.state_snapshot"] = str(state_snapshot)
-        
+
         # Capture ANY other fields provided by the user
         # This ensures we don't lose any custom data
         known_fields = {
-            "source_node", "target_node", "decision", "reason", 
-            "confidence", "tool_scores", "alternatives", "state_snapshot"
+            "source_node",
+            "target_node",
+            "decision",
+            "reason",
+            "confidence",
+            "tool_scores",
+            "alternatives",
+            "state_snapshot",
         }
-        
+
         for key, value in payload.items():
             if key not in known_fields:
                 # Prefix with "routing." and convert to string
                 attr_key = f"routing.{key}"
                 attributes[attr_key] = str(value)
-        
+
         return attributes
 
     # Tool Events
@@ -1240,7 +1242,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name("tool_start", serialized)
+        self._get_operation_name("tool_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
@@ -1248,8 +1250,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
-            tool_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = self._extract_tool_function_name(serialized)
@@ -1401,8 +1402,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             trace, should_manage = self._get_or_create_trace_context(span_name)
 
             # Create span for agent
-            agent_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
             agent_type = self._extract_agent_type(serialized)
@@ -1553,8 +1553,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = self._get_operation_name(
-            "retriever_start", serialized)
+        operation_name = self._get_operation_name("retriever_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
@@ -1579,8 +1578,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "langchain.run_id": str(run_id),
                     "retrieval.type": "search",
                     "retrieval.operation": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     # Input attributes
                     "retrieval.query": query,
