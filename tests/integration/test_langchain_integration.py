@@ -90,7 +90,7 @@ class TestLangChainIntegration:
                     )
 
                     assert trace == mock_trace
-                    assert should_manage is False
+                    assert should_manage is True  # Changed behavior: should_manage is True when not manually controlled
                     mock_client.start_trace.assert_not_called()
                     mock_set_current.assert_not_called()
 
@@ -1521,3 +1521,1259 @@ class TestLangChainIntegration:
 
             # No exceptions should be raised
             assert True
+
+    # ===== NEW FEATURE TESTS =====
+
+    # Custom Name Mapping Tests
+    def test_custom_name_mapping_thread_safety(self):
+        """Test thread-safe custom name mapping operations."""
+        import threading
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            results = []
+
+            def set_names():
+                for i in range(10):
+                    handler._set_name(f"name_{i}", f"span_{i}")
+
+            def get_names():
+                for i in range(10):
+                    span_id = handler._get_span_id_by_name(f"name_{i}")
+                    results.append(span_id)
+
+            # Test concurrent access
+            thread1 = threading.Thread(target=set_names)
+            thread2 = threading.Thread(target=get_names)
+
+            thread1.start()
+            thread2.start()
+
+            thread1.join()
+            thread2.join()
+
+            # Verify thread safety - no exceptions should be raised
+            assert True
+
+    def test_custom_name_in_llm_span(self):
+        """Test LLM span with custom name from metadata."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_span.span_id = "test_span_id"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_llm_start(
+                        serialized={"name": "gpt-4"},
+                        prompts=["Hello"],
+                        run_id=run_id,
+                        metadata={"noveum": {"name": "custom_llm_name"}},
+                    )
+
+                    # Verify custom name was used
+                    call_args = mock_client.start_span.call_args
+                    assert call_args[1]["name"] == "custom_llm_name"
+
+                    # Verify name was stored in names dict
+                    assert handler._get_span_id_by_name("custom_llm_name") == "test_span_id"
+
+    def test_custom_name_in_chain_span(self):
+        """Test chain span with custom name from metadata."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_span.span_id = "chain_span_id"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chain_start(
+                        serialized={"name": "my_chain"},
+                        inputs={"input": "test"},
+                        run_id=run_id,
+                        metadata={"noveum": {"name": "custom_chain_name"}},
+                    )
+
+                    # Verify custom name was used
+                    call_args = mock_client.start_span.call_args
+                    assert call_args[1]["name"] == "custom_chain_name"
+
+                    # Verify name was stored
+                    assert handler._get_span_id_by_name("custom_chain_name") == "chain_span_id"
+
+    def test_custom_name_in_tool_span(self):
+        """Test tool span with custom name from metadata."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+            mock_span.span_id = "tool_span_id"
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_tool_start(
+                serialized={"name": "calculator"},
+                input_str="2+2",
+                run_id=run_id,
+                metadata={"noveum": {"name": "custom_tool_name"}},
+            )
+
+            # Verify custom name was used
+            call_args = mock_client.start_span.call_args
+            assert call_args[1]["name"] == "custom_tool_name"
+
+            # Verify name was stored
+            assert handler._get_span_id_by_name("custom_tool_name") == "tool_span_id"
+
+    def test_parent_name_resolution(self):
+        """Test parent span resolution by custom name."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            
+            # Set up a parent span with custom name
+            handler._set_name("parent_span", "parent_span_id")
+
+            # Test resolution
+            parent_id = handler._get_parent_span_id_from_name("parent_span")
+            assert parent_id == "parent_span_id"
+
+    def test_parent_name_not_found_warning(self):
+        """Test warning when parent name not found."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                parent_id = handler._get_parent_span_id_from_name("nonexistent_parent")
+                
+                assert parent_id is None
+                mock_logger.warning.assert_called_once()
+                assert "Parent span with name 'nonexistent_parent' not found" in str(mock_logger.warning.call_args)
+
+    # Noveum Metadata Extraction Tests
+    def test_extract_noveum_metadata_valid(self):
+        """Test valid noveum metadata extraction."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            metadata = {
+                "noveum": {
+                    "name": "custom_name",
+                    "parent_name": "parent_span"
+                }
+            }
+
+            result = handler._extract_noveum_metadata(metadata)
+            assert result == {"name": "custom_name", "parent_name": "parent_span"}
+
+    def test_extract_noveum_metadata_missing(self):
+        """Test noveum metadata extraction with missing data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test None metadata
+            result = handler._extract_noveum_metadata(None)
+            assert result == {}
+
+            # Test missing noveum key
+            result = handler._extract_noveum_metadata({})
+            assert result == {}
+
+            # Test empty noveum dict
+            result = handler._extract_noveum_metadata({"noveum": {}})
+            assert result == {}
+
+    def test_extract_noveum_metadata_invalid_type(self):
+        """Test noveum metadata extraction with invalid type."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test non-dict noveum config
+            metadata = {"noveum": "not_a_dict"}
+            result = handler._extract_noveum_metadata(metadata)
+            assert result == {}
+
+    def test_noveum_metadata_in_all_handlers(self):
+        """Test noveum metadata extraction in all event handlers."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_span.span_id = "test_span_id"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            metadata = {"noveum": {"name": "test_name", "parent_name": "parent"}}
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    # Test LLM handler
+                    handler.on_llm_start(
+                        serialized={"name": "gpt-4"},
+                        prompts=["test"],
+                        run_id=run_id,
+                        metadata=metadata,
+                    )
+
+                    # Test chain handler
+                    handler.on_chain_start(
+                        serialized={"name": "chain"},
+                        inputs={},
+                        run_id=run_id,
+                        metadata=metadata,
+                    )
+
+                    # Test tool handler
+                    handler.on_tool_start(
+                        serialized={"name": "tool"},
+                        input_str="test",
+                        run_id=run_id,
+                        metadata=metadata,
+                    )
+
+                    # Test agent handler
+                    handler.on_agent_start(
+                        serialized={"name": "agent"},
+                        inputs={},
+                        run_id=run_id,
+                        metadata=metadata,
+                    )
+
+                    # Test retriever handler
+                    handler.on_retriever_start(
+                        serialized={"name": "retriever"},
+                        query="test",
+                        run_id=run_id,
+                        metadata=metadata,
+                    )
+
+                    # Verify all handlers used custom name
+                    assert mock_client.start_span.call_count == 5
+                    for call in mock_client.start_span.call_args_list:
+                        assert call[1]["name"] == "test_name"
+
+    def test_custom_name_stored_in_names_dict(self):
+        """Test that custom names are stored in names dictionary."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_span.span_id = "stored_span_id"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_llm_start(
+                        serialized={"name": "gpt-4"},
+                        prompts=["test"],
+                        run_id=run_id,
+                        metadata={"noveum": {"name": "stored_name"}},
+                    )
+
+                    # Verify name was stored
+                    assert handler._get_span_id_by_name("stored_name") == "stored_span_id"
+                    assert "stored_name" in handler.names
+
+    # Parent Span Resolution Tests
+    def test_resolve_parent_legacy_mode(self):
+        """Test parent resolution in legacy mode (use_langchain_assigned_parent=False)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
+            
+            # Set up parent span with custom name
+            handler._set_name("parent_span", "parent_span_id")
+            
+            # Test with parent_name only
+            parent_id = handler._resolve_parent_span_id(None, "parent_span")
+            assert parent_id == "parent_span_id"
+            
+            # Test with no parent_name
+            parent_id = handler._resolve_parent_span_id(None, None)
+            assert parent_id is None
+
+    def test_resolve_parent_langchain_mode(self):
+        """Test parent resolution in langchain mode (use_langchain_assigned_parent=True)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            
+            # Set up parent span
+            mock_parent_span = Mock()
+            mock_parent_span.span_id = "parent_span_id"
+            handler._set_run(uuid4(), mock_parent_span)
+            
+            parent_run_id = uuid4()
+            handler._set_run(parent_run_id, mock_parent_span)
+            
+            # Test with parent_run_id
+            parent_id = handler._resolve_parent_span_id(parent_run_id, None)
+            assert parent_id == "parent_span_id"
+
+    def test_resolve_parent_via_parent_run_id(self):
+        """Test parent resolution via parent_run_id lookup."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            
+            # Set up parent span
+            mock_parent_span = Mock()
+            mock_parent_span.span_id = "parent_span_id"
+            parent_run_id = uuid4()
+            handler._set_run(parent_run_id, mock_parent_span)
+            
+            # Test resolution
+            parent_id = handler._resolve_parent_span_id(parent_run_id, None)
+            assert parent_id == "parent_span_id"
+
+    def test_resolve_parent_via_parent_name(self):
+        """Test parent resolution via parent_name fallback."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            
+            # Set up parent span with custom name
+            handler._set_name("parent_span", "parent_span_id")
+            
+            # Test resolution with parent_name fallback
+            parent_id = handler._resolve_parent_span_id(None, "parent_span")
+            assert parent_id == "parent_span_id"
+
+    def test_resolve_parent_fallback_to_context(self):
+        """Test parent resolution fallback to context with warning."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            
+            # Mock current span in context
+            mock_current_span = Mock()
+            mock_current_span.span_id = "context_span_id"
+            
+            with patch("noveum_trace.core.context.get_current_span") as mock_get_current:
+                mock_get_current.return_value = mock_current_span
+                
+                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                    parent_id = handler._resolve_parent_span_id(None, None)
+                    
+                    assert parent_id == "context_span_id"
+                    mock_logger.warning.assert_called_once()
+                    assert "Could not resolve parent from parent_run_id" in str(mock_logger.warning.call_args)
+
+    def test_resolve_parent_no_parent_found(self):
+        """Test parent resolution when no parent found at all."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            
+            with patch("noveum_trace.core.context.get_current_span") as mock_get_current:
+                mock_get_current.return_value = None
+                
+                parent_id = handler._resolve_parent_span_id(None, None)
+                assert parent_id is None
+
+    def test_parent_span_id_in_llm_start(self):
+        """Test that parent_span_id is passed to start_span in LLM start."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_llm_start(
+                        serialized={"name": "gpt-4"},
+                        prompts=["test"],
+                        run_id=run_id,
+                        metadata={"noveum": {"parent_name": "parent_span"}},
+                    )
+
+                    # Verify parent_span_id was passed
+                    call_args = mock_client.start_span.call_args
+                    assert "parent_span_id" in call_args[1]
+
+    def test_parent_span_id_in_chain_start(self):
+        """Test that parent_span_id is passed to start_span in chain start."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chain_start(
+                        serialized={"name": "chain"},
+                        inputs={},
+                        run_id=run_id,
+                        metadata={"noveum": {"parent_name": "parent_span"}},
+                    )
+
+                    # Verify parent_span_id was passed
+                    call_args = mock_client.start_span.call_args
+                    assert "parent_span_id" in call_args[1]
+
+    # LangGraph Support Tests
+    def test_extract_langgraph_metadata_from_metadata(self):
+        """Test LangGraph metadata extraction from metadata dict."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            metadata = {
+                "langgraph_node": "research_node",
+                "langgraph_step": 3,
+                "langgraph_graph_name": "research_graph",
+                "langgraph_checkpoint_ns": "checkpoint_1",
+                "langgraph_path": ["__pregel_pull", "research_node", "other"]
+            }
+
+            result = handler._extract_langgraph_metadata(metadata, None, None)
+            
+            assert result["is_langgraph"] is True
+            assert result["node_name"] == "research_node"
+            assert result["step"] == 3
+            assert result["graph_name"] == "research_graph"
+            assert result["checkpoint_ns"] == "checkpoint_1"
+            assert result["execution_type"] == "node"
+
+    def test_extract_langgraph_metadata_from_tags(self):
+        """Test LangGraph metadata extraction from tags."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            tags = ["langgraph:analysis_node", "other_tag"]
+
+            result = handler._extract_langgraph_metadata(None, tags, None)
+            
+            assert result["is_langgraph"] is True
+            assert result["node_name"] == "analysis_node"
+
+    def test_extract_langgraph_metadata_from_serialized(self):
+        """Test LangGraph metadata extraction from serialized dict."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            serialized = {
+                "id": ["langgraph", "graphs", "research_graph"],
+                "name": "ResearchGraph"
+            }
+
+            result = handler._extract_langgraph_metadata(None, None, serialized)
+            
+            assert result["is_langgraph"] is True
+            assert result["graph_name"] == "ResearchGraph"
+
+    def test_extract_langgraph_metadata_none_serialized(self):
+        """Test LangGraph metadata extraction with None serialized."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            result = handler._extract_langgraph_metadata(None, None, None)
+            
+            assert result["is_langgraph"] is False
+            assert result["node_name"] is None
+            assert result["step"] is None
+            assert result["graph_name"] is None
+
+    def test_extract_langgraph_metadata_safe_fallback(self):
+        """Test LangGraph metadata extraction never breaks with invalid data."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with invalid data types
+            result = handler._extract_langgraph_metadata("invalid", "invalid", "invalid")
+            
+            # Should return safe defaults
+            assert result["is_langgraph"] is False
+            assert result["node_name"] is None
+
+    def test_langgraph_operation_name_node(self):
+        """Test LangGraph operation name generation with node name."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            langgraph_metadata = {"node_name": "research_node"}
+            result = handler._get_langgraph_operation_name(langgraph_metadata, "unknown")
+            
+            assert result == "graph.node.research_node"
+
+    def test_langgraph_operation_name_graph(self):
+        """Test LangGraph operation name generation with graph name."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            langgraph_metadata = {"graph_name": "research_graph"}
+            result = handler._get_langgraph_operation_name(langgraph_metadata, "unknown")
+            
+            assert result == "graph.research_graph"
+
+    def test_langgraph_operation_name_step(self):
+        """Test LangGraph operation name generation with step number."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            langgraph_metadata = {"step": 5}
+            result = handler._get_langgraph_operation_name(langgraph_metadata, "unknown")
+            
+            assert result == "graph.node.step_5"
+
+    def test_build_langgraph_attributes(self):
+        """Test building LangGraph span attributes."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            langgraph_metadata = {
+                "is_langgraph": True,
+                "node_name": "research_node",
+                "step": 3,
+                "graph_name": "research_graph",
+                "checkpoint_ns": "checkpoint_1",
+                "execution_type": "node"
+            }
+
+            result = handler._build_langgraph_attributes(langgraph_metadata)
+            
+            assert result["langgraph.is_graph"] is True
+            assert result["langgraph.node_name"] == "research_node"
+            assert result["langgraph.step"] == 3
+            assert result["langgraph.graph_name"] == "research_graph"
+            assert result["langgraph.checkpoint_ns"] == "checkpoint_1"
+            assert result["langgraph.execution_type"] == "node"
+
+    def test_chain_start_with_langgraph_metadata(self):
+        """Test chain start with LangGraph metadata."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chain_start(
+                        serialized=None,  # LangGraph often passes None
+                        inputs={},
+                        run_id=run_id,
+                        metadata={
+                            "langgraph_node": "research_node",
+                            "langgraph_step": 3
+                        },
+                        tags=["langgraph:research_node"]
+                    )
+
+                    # Verify LangGraph operation name was used
+                    call_args = mock_client.start_span.call_args
+                    assert call_args[1]["name"] == "graph.node.research_node"
+
+                    # Verify LangGraph attributes were added
+                    attributes = call_args[1]["attributes"]
+                    assert attributes["langgraph.is_graph"] is True
+                    assert attributes["langgraph.node_name"] == "research_node"
+                    assert attributes["langgraph.step"] == 3
+
+    # Manual Trace Control Tests
+    def test_manual_start_trace(self):
+        """Test manual trace start functionality."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_trace.trace_id = "test_trace_id"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace") as mock_set_current:
+                    mock_get_current.return_value = None
+
+                    handler.start_trace("test_trace")
+
+                    # Verify trace was created and set in context
+                    mock_client.start_trace.assert_called_once_with("test_trace")
+                    mock_set_current.assert_called_once_with(mock_trace)
+                    
+                    # Verify manual control flags
+                    assert handler._manual_trace_control is True
+                    assert handler._trace_managed_by_langchain == mock_trace
+
+    def test_manual_end_trace(self):
+        """Test manual trace end functionality."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_trace.trace_id = "test_trace_id"
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace") as mock_set_current:
+                    mock_get_current.return_value = mock_trace
+
+                    handler.end_trace()
+
+                    # Verify trace was finished and cleared from context
+                    mock_client.finish_trace.assert_called_once_with(mock_trace)
+                    mock_set_current.assert_called_once_with(None)
+                    
+                    # Verify manual control flags reset
+                    assert handler._manual_trace_control is False
+                    assert handler._trace_managed_by_langchain is None
+
+    def test_manual_trace_error_already_exists(self):
+        """Test error when trying to start trace when one already exists."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_trace.trace_id = "existing_trace_id"
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = mock_trace
+
+                with pytest.raises(RuntimeError) as exc_info:
+                    handler.start_trace("new_trace")
+
+                assert "A trace is already active" in str(exc_info.value)
+                assert "existing_trace_id" in str(exc_info.value)
+
+    def test_manual_trace_error_no_trace(self):
+        """Test error when trying to end trace when none exists."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = None
+
+                with pytest.raises(RuntimeError) as exc_info:
+                    handler.end_trace()
+
+                assert "No active trace to end" in str(exc_info.value)
+
+    def test_manual_trace_disables_auto_finish(self):
+        """Test that manual trace control disables auto-finish."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Start manual trace
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+                    handler.start_trace("manual_trace")
+
+            # Add a span
+            handler.runs[run_id] = mock_span
+            handler._trace_managed_by_langchain = mock_trace
+
+            # End the span - should NOT auto-finish trace
+            handler.on_llm_end(response=Mock(), run_id=run_id)
+
+            # Verify trace was NOT finished
+            mock_client.finish_trace.assert_not_called()
+
+    def test_manual_trace_reenables_auto_management(self):
+        """Test that manual trace end re-enables auto-management."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Set up manual control
+            handler._manual_trace_control = True
+            handler._trace_managed_by_langchain = mock_trace
+
+            # End manual trace
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = mock_trace
+                    handler.end_trace()
+
+            # Verify flags were reset
+            assert handler._manual_trace_control is False
+            assert handler._trace_managed_by_langchain is None
+
+    def test_manual_trace_control_flag_in_repr(self):
+        """Test that __repr__ shows manual trace control state."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # Test with manual control enabled
+            handler = NoveumTraceCallbackHandler()
+            handler._manual_trace_control = True
+
+            repr_str = repr(handler)
+            assert "manual_control=True" in repr_str
+
+            # Test with manual control disabled
+            handler._manual_trace_control = False
+            repr_str = repr(handler)
+            assert "manual_control=False" in repr_str
+
+    # Routing Decision Handling Tests
+    def test_on_custom_event_routing_decision(self):
+        """Test custom event handling for routing decisions."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch.object(handler, '_handle_routing_decision') as mock_handle:
+                payload = {
+                    "source_node": "research",
+                    "target_node": "analysis"
+                }
+
+                handler.on_custom_event(
+                    name="langgraph.routing_decision",
+                    data=payload,
+                    run_id=run_id
+                )
+
+                mock_handle.assert_called_once_with(payload, run_id)
+
+    def test_handle_routing_decision_creates_span(self):
+        """Test that routing decision creates a routing span."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = mock_trace
+
+                payload = {
+                    "source_node": "research",
+                    "target_node": "analysis"
+                }
+
+                handler._handle_routing_decision(payload, run_id)
+
+                # Verify span was created
+                mock_client.start_span.assert_called_once()
+                call_args = mock_client.start_span.call_args
+                assert call_args[1]["name"] == "routing.research_to_analysis"
+
+                # Verify span was finished immediately
+                mock_span.set_attributes.assert_called_once()
+                mock_span.set_status.assert_called_once()
+                mock_client.finish_span.assert_called_once_with(mock_span)
+
+    def test_routing_span_name_format(self):
+        """Test routing span name format."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = mock_trace
+
+                payload = {
+                    "source_node": "node_a",
+                    "target_node": "node_b"
+                }
+
+                handler._handle_routing_decision(payload, run_id)
+
+                call_args = mock_client.start_span.call_args
+                assert call_args[1]["name"] == "routing.node_a_to_node_b"
+
+    def test_build_routing_attributes_core(self):
+        """Test building core routing attributes."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            payload = {
+                "source_node": "research",
+                "target_node": "analysis",
+                "decision": "analysis"
+            }
+
+            result = handler._build_routing_attributes(payload)
+
+            assert result["routing.source_node"] == "research"
+            assert result["routing.target_node"] == "analysis"
+            assert result["routing.decision"] == "analysis"
+            assert result["routing.type"] == "conditional_edge"
+
+    def test_build_routing_attributes_optional(self):
+        """Test building optional routing attributes."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            payload = {
+                "source_node": "research",
+                "target_node": "analysis",
+                "reason": "Data is ready for analysis",
+                "confidence": 0.95,
+                "tool_scores": {"analyzer": 0.9, "classifier": 0.7},
+                "alternatives": ["research", "review"],
+                "state_snapshot": {"data": "processed"}
+            }
+
+            result = handler._build_routing_attributes(payload)
+
+            assert result["routing.reason"] == "Data is ready for analysis"
+            assert result["routing.confidence"] == 0.95
+            assert result["routing.tool_scores"] == str(payload["tool_scores"])
+            assert result["routing.score.analyzer"] == 0.9
+            assert result["routing.score.classifier"] == 0.7
+            assert result["routing.alternatives"] == str(payload["alternatives"])
+            assert result["routing.alternatives_count"] == 2
+            assert result["routing.state_snapshot"] == str(payload["state_snapshot"])
+
+    def test_routing_span_with_parent(self):
+        """Test routing span creation with parent span."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_parent_span = Mock()
+            mock_parent_span.span_id = "parent_span_id"
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Set up parent span
+            handler._set_run(run_id, mock_parent_span)
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = mock_trace
+
+                payload = {
+                    "source_node": "research",
+                    "target_node": "analysis"
+                }
+
+                handler._handle_routing_decision(payload, run_id)
+
+                # Verify parent_span_id was passed
+                call_args = mock_client.start_span.call_args
+                assert call_args[1]["parent_span_id"] == "parent_span_id"
+
+    def test_routing_span_without_parent(self):
+        """Test routing span creation without parent (root-level)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch("noveum_trace.core.context.get_current_trace") as mock_get_current:
+                mock_get_current.return_value = mock_trace
+
+                payload = {
+                    "source_node": "research",
+                    "target_node": "analysis"
+                }
+
+                handler._handle_routing_decision(payload, run_id)
+
+                # Verify no parent_span_id was passed (root-level span)
+                call_args = mock_client.start_span.call_args
+                assert call_args[1]["parent_span_id"] is None
+
+    # Enhanced Initialization Tests
+    def test_init_with_use_langchain_assigned_parent_false(self):
+        """Test initialization with use_langchain_assigned_parent=False (default)."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
+
+            assert handler._use_langchain_assigned_parent is False
+            assert handler._manual_trace_control is False
+            assert handler._trace_managed_by_langchain is None
+            assert handler.runs == {}
+            assert handler.names == {}
+
+    def test_init_with_use_langchain_assigned_parent_true(self):
+        """Test initialization with use_langchain_assigned_parent=True."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+
+            assert handler._use_langchain_assigned_parent is True
+            assert handler._manual_trace_control is False
+            assert handler._trace_managed_by_langchain is None
+            assert handler.runs == {}
+            assert handler.names == {}
+
+    def test_repr_shows_use_langchain_parent_flag(self):
+        """Test that __repr__ shows use_langchain_assigned_parent flag."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # Test with use_langchain_assigned_parent=True
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
+            repr_str = repr(handler)
+            assert "use_langchain_parent=True" in repr_str
+
+            # Test with use_langchain_assigned_parent=False
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
+            repr_str = repr(handler)
+            assert "use_langchain_parent=False" in repr_str
+
+    # Additional Edge Case Tests
+    def test_chain_end_with_non_dict_outputs(self):
+        """Test chain end with non-dict outputs (string)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+            handler.runs[run_id] = mock_span
+
+            # Test with string output
+            handler.on_chain_end(outputs="Simple string output", run_id=run_id)
+
+            # Verify attributes were set correctly
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["chain.output.outputs"] == "Simple string output"
+
+    def test_tool_start_with_inputs_dict(self):
+        """Test tool start with structured inputs dictionary."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            handler.on_tool_start(
+                serialized={"name": "calculator", "kwargs": {"name": "calculate"}},
+                input_str="2+2",
+                run_id=run_id,
+                inputs={"expression": "2+2", "precision": 2}
+            )
+
+            # Verify structured inputs were captured
+            call_args = mock_client.start_span.call_args
+            attributes = call_args[1]["attributes"]
+            assert attributes["tool.input.expression"] == "2+2"
+            assert attributes["tool.input.precision"] == "2"
+            assert attributes["tool.input.argument_count"] == "2"
+
+    def test_llm_end_without_token_usage(self):
+        """Test LLM end without token usage data."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+            handler.runs[run_id] = mock_span
+
+            # Mock LLM response without token usage
+            mock_response = Mock()
+            mock_generation = Mock()
+            mock_generation.text = "Test response"
+            mock_response.generations = [[mock_generation]]
+            mock_response.llm_output = {}  # No token_usage
+
+            handler.on_llm_end(response=mock_response, run_id=run_id)
+
+            # Verify attributes were set without token usage
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == ["Test response"]
+            assert attributes["llm.output.response_count"] == 1
+            # Token usage should be 0 or missing
+            assert "llm.input_tokens" not in attributes or attributes["llm.input_tokens"] == 0
+
+    def test_retriever_end_truncation(self):
+        """Test retriever end with >10 documents (truncation)."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+            handler.runs[run_id] = mock_span
+
+            # Create 15 mock documents
+            documents = []
+            for i in range(15):
+                mock_doc = Mock()
+                mock_doc.page_content = f"Document {i} content"
+                documents.append(mock_doc)
+
+            handler.on_retriever_end(documents=documents, run_id=run_id)
+
+            # Verify truncation occurred
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["retrieval.result_count"] == 15
+            assert len(attributes["retrieval.sample_results"]) == 10  # Truncated to 10
+            assert attributes["retrieval.results_truncated"] is True
+
+    def test_agent_action_creates_tool_span(self):
+        """Test that agent action creates tool span."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_span = Mock()
+            mock_tool_span = Mock()
+
+            mock_client.start_span.return_value = mock_tool_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+            handler.runs[run_id] = mock_span
+
+            # Mock agent action
+            mock_action = Mock()
+            mock_action.tool = "calculator"
+            mock_action.tool_input = "2+2"
+            mock_action.log = "I need to calculate 2+2"
+
+            handler.on_agent_action(action=mock_action, run_id=run_id)
+
+            # Verify tool span was created
+            mock_client.start_span.assert_called_once()
+            call_args = mock_client.start_span.call_args
+            assert "tool:calculator:calculator" in call_args[1]["name"]
+            assert call_args[1]["attributes"]["tool.name"] == "calculator"
+            assert call_args[1]["attributes"]["tool.operation"] == "calculator"
