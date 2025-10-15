@@ -147,91 +147,6 @@ noveum_trace.init(
 )
 ```
 
-## 🎯 Available Decorators
-
-### @trace - General Purpose Tracing
-
-```python
-@noveum_trace.trace
-def my_function(arg1: str, arg2: int) -> dict:
-    return {"result": f"{arg1}_{arg2}"}
-
-# With options
-@noveum_trace.trace(capture_performance=True, capture_args=True)
-def expensive_function(data: list) -> dict:
-    # Function implementation
-    return {"processed": len(data)}
-```
-
-### @trace_llm - LLM Call Tracing
-
-```python
-@noveum_trace.trace_llm
-def call_llm(prompt: str) -> str:
-    # LLM call implementation
-    return response
-
-# With provider specification
-@noveum_trace.trace_llm(provider="openai", capture_tokens=True)
-def call_openai(prompt: str) -> str:
-    # OpenAI specific implementation
-    return response
-```
-
-### @trace_agent - Agent Workflow Tracing
-
-```python
-# Required: agent_id parameter
-@noveum_trace.trace_agent(agent_id="my_agent")
-def agent_function(task: str) -> dict:
-    # Agent implementation
-    return result
-
-# With full configuration
-@noveum_trace.trace_agent(
-    agent_id="researcher",
-    role="information_gatherer",
-    capabilities=["web_search", "document_analysis"]
-)
-def research_agent(query: str) -> dict:
-    # Research implementation
-    return {"findings": "...", "sources": [...]}
-```
-
-### @trace_tool - Tool Usage Tracing
-
-```python
-@noveum_trace.trace_tool
-def search_web(query: str) -> list:
-    # Tool implementation
-    return results
-
-# With tool specification
-@noveum_trace.trace_tool(tool_name="web_search", tool_type="api")
-def search_api(query: str) -> list:
-    # API search implementation
-    return search_results
-```
-
-### @trace_retrieval - Retrieval Operation Tracing
-
-```python
-@noveum_trace.trace_retrieval
-def retrieve_documents(query: str) -> list:
-    # Retrieval implementation
-    return documents
-
-# With retrieval configuration
-@noveum_trace.trace_retrieval(
-    retrieval_type="vector_search",
-    index_name="documents",
-    capture_scores=True
-)
-def vector_search(query: str, top_k: int = 5) -> list:
-    # Vector search implementation
-    return results
-```
-
 ## 🔄 Context Managers - Inline Tracing
 
 For scenarios where you need granular control or can't modify function signatures:
@@ -324,6 +239,90 @@ def stream_openai_response(prompt: str):
         # Streaming metrics are automatically captured
 ```
 
+## 🔗 LangChain Integration
+
+Noveum Trace provides seamless integration with LangChain and LangGraph applications through a simple callback handler.
+
+### Quick Setup
+
+```python
+from noveum_trace.integrations import NoveumTraceCallbackHandler
+from langchain_openai import ChatOpenAI
+
+# Initialize Noveum Trace
+import noveum_trace
+noveum_trace.init(project="my-langchain-app", api_key="your-api-key")
+
+# Create callback handler
+handler = NoveumTraceCallbackHandler()
+
+# Add to your LangChain components
+llm = ChatOpenAI(callbacks=[handler])
+response = llm.invoke("What is the capital of France?")
+```
+
+### Advanced Features
+
+**Manual Trace Control**: For complex workflows, manually control trace lifecycle:
+
+```python
+# Start trace manually
+handler.start_trace("my-workflow")
+
+# Your LangChain operations
+llm = ChatOpenAI(callbacks=[handler])
+chain = LLMChain(llm=llm, prompt=prompt, callbacks=[handler])
+
+# End trace manually
+handler.end_trace()
+```
+
+**Custom Parent Relationships**: Use `parent_name` to create explicit span hierarchies:
+
+```python
+# Parent span with custom name
+llm = ChatOpenAI(
+    callbacks=[handler],
+    metadata={"noveum": {"name": "parent_llm"}}
+)
+
+# Child span that references parent
+chain = LLMChain(
+    llm=llm,
+    callbacks=[handler],
+    metadata={"noveum": {"parent_name": "parent_llm"}}
+)
+```
+
+**LangGraph Routing Tracking**: Track routing decisions in LangGraph workflows:
+
+```python
+def route_function(state, config):
+    decision = "next_node" if state["count"] < 5 else "finish"
+    
+    # Emit routing event
+    if config and config.get("callbacks"):
+        callbacks = config["callbacks"]
+        callbacks.on_custom_event("langgraph.routing_decision", {
+            "source_node": "current_node",
+            "target_node": decision,
+            "reason": f"Count {state['count']} {'< 5' if state['count'] < 5 else '>= 5'}"
+        })
+    
+    return decision
+```
+
+### What Gets Traced
+
+- **LLM Calls**: Model, prompts, responses, token usage
+- **Chains**: Input/output flow, execution steps  
+- **Agents**: Decision-making, tool usage, reasoning
+- **Tools**: Function calls, inputs, outputs
+- **LangGraph Nodes**: Graph execution, node transitions
+- **Routing Decisions**: Conditional routing logic and decisions
+
+For complete integration details, see the [LangChain Integration Guide](docs/LANGCHAIN_INTEGRATION.md).
+
 ## 🧪 Testing
 
 Run the test suite:
@@ -373,6 +372,7 @@ Check out the [examples](docs/examples/) directory for complete working examples
 - [Flexible Tracing](docs/examples/flexible_tracing_example.py) - Context managers and inline tracing
 - [Streaming Example](docs/examples/streaming_example.py) - Real-time streaming support
 - [Multimodal Examples](docs/examples/multimodal_examples.py) - Image, audio, and video tracing
+- [LangGraph Routing](docs/examples/langgraph_routing_example.py) - LangGraph routing decision tracking
 
 ## 🚀 Advanced Usage
 
