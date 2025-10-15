@@ -278,7 +278,9 @@ def extract_langgraph_metadata(
         if serialized and isinstance(serialized, dict):
             # Check if this is a LangGraph type
             id_path = serialized.get("id", [])
-            if isinstance(id_path, list) and any("langgraph" in str(part).lower() for part in id_path):
+            if isinstance(id_path, list) and any(
+                "langgraph" in str(part).lower() for part in id_path
+            ):
                 # Look for langgraph in the ID path
                 result["is_langgraph"] = True
 
@@ -351,9 +353,7 @@ def build_langgraph_attributes(langgraph_metadata: dict[str, Any]) -> dict[str, 
 
     # Add execution type if available
     if langgraph_metadata.get("execution_type"):
-        attributes["langgraph.execution_type"] = langgraph_metadata[
-            "execution_type"
-        ]
+        attributes["langgraph.execution_type"] = langgraph_metadata["execution_type"]
 
     return attributes
 
@@ -430,4 +430,3 @@ def build_routing_attributes(payload: dict[str, Any]) -> dict[str, Any]:
             attributes[attr_key] = str(value)
 
     return attributes
-

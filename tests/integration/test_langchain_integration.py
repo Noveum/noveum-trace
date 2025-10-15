@@ -14,6 +14,18 @@ pytest_plugins = []
 
 try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+    from noveum_trace.integrations.langchain_utils import (
+        build_langgraph_attributes,
+        build_routing_attributes,
+        extract_agent_capabilities,
+        extract_agent_type,
+        extract_langgraph_metadata,
+        extract_model_name,
+        extract_noveum_metadata,
+        extract_tool_function_name,
+        get_langgraph_operation_name,
+        get_operation_name,
+    )
 
     LANGCHAIN_AVAILABLE = True
 except ImportError:
@@ -90,9 +102,7 @@ class TestLangChainIntegration:
                     )
 
                     assert trace == mock_trace
-                    assert (
-                        should_manage is True
-                    )  # Changed behavior: should_manage is True when not manually controlled
+                    assert should_manage is False  # Don't manage existing trace
                     mock_client.start_trace.assert_not_called()
                     mock_set_current.assert_not_called()
 
@@ -102,36 +112,33 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test various operation types
+            assert get_operation_name("llm_start", {"name": "gpt-4"}) == "llm.gpt-4"
             assert (
-                handler._get_operation_name("llm_start", {"name": "gpt-4"})
-                == "llm.gpt-4"
-            )
-            assert (
-                handler._get_operation_name("chain_start", {"name": "my_chain"})
+                get_operation_name("chain_start", {"name": "my_chain"})
                 == "chain.my_chain"
             )
             assert (
-                handler._get_operation_name("agent_start", {"name": "my_agent"})
+                get_operation_name("agent_start", {"name": "my_agent"})
                 == "agent.my_agent"
             )
             assert (
-                handler._get_operation_name("retriever_start", {"name": "vector_store"})
+                get_operation_name("retriever_start", {"name": "vector_store"})
                 == "retrieval.vector_store"
             )
             assert (
-                handler._get_operation_name("tool_start", {"name": "calculator"})
+                get_operation_name("tool_start", {"name": "calculator"})
                 == "tool.calculator"
             )
 
             # Test with unknown name
-            assert handler._get_operation_name("llm_start", {}) == "llm.unknown"
+            assert get_operation_name("llm_start", {}) == "llm.unknown"
 
             # Test with unknown event type
             assert (
-                handler._get_operation_name("custom_start", {"name": "test"})
+                get_operation_name("custom_start", {"name": "test"})
                 == "custom_start.test"
             )
 
@@ -325,31 +332,31 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with model in kwargs
             serialized = {"kwargs": {"model": "gpt-4-turbo"}}
-            assert handler._extract_model_name(serialized) == "gpt-4-turbo"
+            assert extract_model_name(serialized) == "gpt-4-turbo"
 
             # Test with provider from id path
             serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
-            assert handler._extract_model_name(serialized) == "openai"
+            assert extract_model_name(serialized) == "openai"
 
             # Test fallback to class name
             serialized = {"name": "GPT4"}
-            assert handler._extract_model_name(serialized) == "GPT4"
+            assert extract_model_name(serialized) == "GPT4"
 
             # Test empty/None serialized
-            assert handler._extract_model_name({}) == "unknown"
-            assert handler._extract_model_name(None) == "unknown"
+            assert extract_model_name({}) == "unknown"
+            assert extract_model_name(None) == "unknown"
 
             # Test with short id path (edge case)
             serialized = {"id": ["openai"]}
-            assert handler._extract_model_name(serialized) == "unknown"
+            assert extract_model_name(serialized) == "unknown"
 
             # Test with no name in serialized
             serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
-            assert handler._extract_model_name(serialized) == "openai"
+            assert extract_model_name(serialized) == "openai"
 
     def test_extract_agent_type(self):
         """Test agent type extraction from serialized agent data."""
@@ -357,19 +364,19 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with agent type from id path
             serialized = {"id": ["langchain", "agents", "react", "ReActAgent"]}
-            assert handler._extract_agent_type(serialized) == "react"
+            assert extract_agent_type(serialized) == "react"
 
             # Test with different agent type
             serialized = {"id": ["langchain", "agents", "zero_shot", "ZeroShotAgent"]}
-            assert handler._extract_agent_type(serialized) == "zero_shot"
+            assert extract_agent_type(serialized) == "zero_shot"
 
             # Test empty/None serialized
-            assert handler._extract_agent_type({}) == "unknown"
-            assert handler._extract_agent_type(None) == "unknown"
+            assert extract_agent_type({}) == "unknown"
+            assert extract_agent_type(None) == "unknown"
 
     def test_extract_agent_capabilities(self):
         """Test agent capabilities extraction from tools in serialized data."""
@@ -377,7 +384,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with various tool types
             serialized = {
@@ -390,7 +397,7 @@ class TestLangChainIntegration:
                     ]
                 }
             }
-            capabilities = handler._extract_agent_capabilities(serialized)
+            capabilities = extract_agent_capabilities(serialized)
             assert "tool_usage" in capabilities
             assert "web_search" in capabilities
             assert "calculation" in capabilities
@@ -399,11 +406,11 @@ class TestLangChainIntegration:
 
             # Test with no tools (default reasoning)
             serialized = {"kwargs": {"tools": []}}
-            assert handler._extract_agent_capabilities(serialized) == "reasoning"
+            assert extract_agent_capabilities(serialized) == "reasoning"
 
             # Test empty/None serialized
-            assert handler._extract_agent_capabilities({}) == "unknown"
-            assert handler._extract_agent_capabilities(None) == "unknown"
+            assert extract_agent_capabilities({}) == "unknown"
+            assert extract_agent_capabilities(None) == "unknown"
 
     def test_extract_tool_function_name(self):
         """Test tool function name extraction from serialized tool data."""
@@ -411,19 +418,19 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with function name in kwargs
             serialized = {"kwargs": {"name": "search_web"}}
-            assert handler._extract_tool_function_name(serialized) == "search_web"
+            assert extract_tool_function_name(serialized) == "search_web"
 
             # Test fallback to class name
             serialized = {"name": "WebSearchTool"}
-            assert handler._extract_tool_function_name(serialized) == "WebSearchTool"
+            assert extract_tool_function_name(serialized) == "WebSearchTool"
 
             # Test empty/None serialized
-            assert handler._extract_tool_function_name({}) == "unknown"
-            assert handler._extract_tool_function_name(None) == "unknown"
+            assert extract_tool_function_name({}) == "unknown"
+            assert extract_tool_function_name(None) == "unknown"
 
     def test_llm_start_with_new_attributes(self):
         """Test LLM start event with new attribute structure."""
@@ -780,21 +787,18 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test LLM operation name with model extraction
             serialized = {"name": "ChatOpenAI", "kwargs": {"model": "gpt-4-turbo"}}
-            assert (
-                handler._get_operation_name("llm_start", serialized)
-                == "llm.gpt-4-turbo"
-            )
+            assert get_operation_name("llm_start", serialized) == "llm.gpt-4-turbo"
 
             # Test fallback to provider
             serialized = {
                 "name": "ChatOpenAI",
                 "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
             }
-            assert handler._get_operation_name("llm_start", serialized) == "llm.openai"
+            assert get_operation_name("llm_start", serialized) == "llm.openai"
 
     def test_repr(self):
         """Test string representation of callback handler."""
@@ -1375,19 +1379,19 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with None serialized
-            name = handler._get_operation_name("llm_start", None)
+            name = get_operation_name("llm_start", None)
             assert name == "llm_start.unknown"
 
             # Test with empty serialized
-            name = handler._get_operation_name("chain_start", {})
+            name = get_operation_name("chain_start", {})
             assert name == "chain.unknown"
 
             # Test with missing name
             serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
-            name = handler._get_operation_name("llm_start", serialized)
+            name = get_operation_name("llm_start", serialized)
             assert name == "llm.openai"
 
     def test_agent_capabilities_extraction_edge_cases(self):
@@ -1396,23 +1400,23 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with no tools
             serialized = {"name": "test_agent"}
-            capabilities = handler._extract_agent_capabilities(serialized)
+            capabilities = extract_agent_capabilities(serialized)
             assert capabilities == "reasoning"
 
             # Test with empty tools
             serialized = {"name": "test_agent", "kwargs": {"tools": []}}
-            capabilities = handler._extract_agent_capabilities(serialized)
+            capabilities = extract_agent_capabilities(serialized)
             assert capabilities == "reasoning"
 
             # Test with tools that have no name
             mock_tool = Mock()
             mock_tool.name = None
             serialized = {"name": "test_agent", "kwargs": {"tools": [mock_tool]}}
-            capabilities = handler._extract_agent_capabilities(serialized)
+            capabilities = extract_agent_capabilities(serialized)
             assert "tool_usage" in capabilities
 
     def test_llm_end_with_missing_span(self):
@@ -1710,11 +1714,11 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             metadata = {"noveum": {"name": "custom_name", "parent_name": "parent_span"}}
 
-            result = handler._extract_noveum_metadata(metadata)
+            result = extract_noveum_metadata(metadata)
             assert result == {"name": "custom_name", "parent_name": "parent_span"}
 
     def test_extract_noveum_metadata_missing(self):
@@ -1723,18 +1727,18 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test None metadata
-            result = handler._extract_noveum_metadata(None)
+            result = extract_noveum_metadata(None)
             assert result == {}
 
             # Test missing noveum key
-            result = handler._extract_noveum_metadata({})
+            result = extract_noveum_metadata({})
             assert result == {}
 
             # Test empty noveum dict
-            result = handler._extract_noveum_metadata({"noveum": {}})
+            result = extract_noveum_metadata({"noveum": {}})
             assert result == {}
 
     def test_extract_noveum_metadata_invalid_type(self):
@@ -1743,11 +1747,11 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test non-dict noveum config
             metadata = {"noveum": "not_a_dict"}
-            result = handler._extract_noveum_metadata(metadata)
+            result = extract_noveum_metadata(metadata)
             assert result == {}
 
     def test_noveum_metadata_in_all_handlers(self):
@@ -2052,7 +2056,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             metadata = {
                 "langgraph_node": "research_node",
@@ -2062,7 +2066,7 @@ class TestLangChainIntegration:
                 "langgraph_path": ["__pregel_pull", "research_node", "other"],
             }
 
-            result = handler._extract_langgraph_metadata(metadata, None, None)
+            result = extract_langgraph_metadata(metadata, None, None)
 
             assert result["is_langgraph"] is True
             assert result["node_name"] == "research_node"
@@ -2077,11 +2081,11 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             tags = ["langgraph:analysis_node", "other_tag"]
 
-            result = handler._extract_langgraph_metadata(None, tags, None)
+            result = extract_langgraph_metadata(None, tags, None)
 
             assert result["is_langgraph"] is True
             assert result["node_name"] == "analysis_node"
@@ -2092,14 +2096,14 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             serialized = {
                 "id": ["langgraph", "graphs", "research_graph"],
                 "name": "ResearchGraph",
             }
 
-            result = handler._extract_langgraph_metadata(None, None, serialized)
+            result = extract_langgraph_metadata(None, None, serialized)
 
             assert result["is_langgraph"] is True
             assert result["graph_name"] == "ResearchGraph"
@@ -2110,9 +2114,9 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
-            result = handler._extract_langgraph_metadata(None, None, None)
+            result = extract_langgraph_metadata(None, None, None)
 
             assert result["is_langgraph"] is False
             assert result["node_name"] is None
@@ -2125,12 +2129,10 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             # Test with invalid data types
-            result = handler._extract_langgraph_metadata(
-                "invalid", "invalid", "invalid"
-            )
+            result = extract_langgraph_metadata("invalid", "invalid", "invalid")
 
             # Should return safe defaults
             assert result["is_langgraph"] is False
@@ -2142,12 +2144,10 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"node_name": "research_node"}
-            result = handler._get_langgraph_operation_name(
-                langgraph_metadata, "unknown"
-            )
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.node.research_node"
 
@@ -2157,12 +2157,10 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"graph_name": "research_graph"}
-            result = handler._get_langgraph_operation_name(
-                langgraph_metadata, "unknown"
-            )
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.research_graph"
 
@@ -2172,12 +2170,10 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"step": 5}
-            result = handler._get_langgraph_operation_name(
-                langgraph_metadata, "unknown"
-            )
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.node.step_5"
 
@@ -2187,7 +2183,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             langgraph_metadata = {
                 "is_langgraph": True,
@@ -2198,7 +2194,7 @@ class TestLangChainIntegration:
                 "execution_type": "node",
             }
 
-            result = handler._build_langgraph_attributes(langgraph_metadata)
+            result = build_langgraph_attributes(langgraph_metadata)
 
             assert result["langgraph.is_graph"] is True
             assert result["langgraph.node_name"] == "research_node"
@@ -2311,11 +2307,15 @@ class TestLangChainIntegration:
                     assert handler._trace_managed_by_langchain is None
 
     def test_manual_trace_error_already_exists(self):
-        """Test error when trying to start trace when one already exists."""
+        """Test warning when trying to start trace when one already exists."""
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
             mock_trace = Mock()
             mock_trace.trace_id = "existing_trace_id"
+
+            new_trace = Mock()
+            new_trace.trace_id = "new_trace_id"
+            mock_client.start_trace.return_value = new_trace
 
             mock_get_client.return_value = mock_client
 
@@ -2324,13 +2324,21 @@ class TestLangChainIntegration:
             with patch(
                 "noveum_trace.core.context.get_current_trace"
             ) as mock_get_current:
-                mock_get_current.return_value = mock_trace
+                with patch(
+                    "noveum_trace.core.context.set_current_trace"
+                ) as mock_set_current:
+                    mock_get_current.return_value = mock_trace
 
-                with pytest.raises(RuntimeError) as exc_info:
+                    # Should log warning but still create new trace
                     handler.start_trace("new_trace")
 
-                assert "A trace is already active" in str(exc_info.value)
-                assert "existing_trace_id" in str(exc_info.value)
+                    # Verify new trace was created and set
+                    mock_client.start_trace.assert_called_once_with("new_trace")
+                    mock_set_current.assert_called_once_with(new_trace)
+
+                    # Verify manual control flags are set
+                    assert handler._manual_trace_control is True
+                    assert handler._trace_managed_by_langchain == new_trace
 
     def test_manual_trace_error_no_trace(self):
         """Test error when trying to end trace when none exists."""
@@ -2520,7 +2528,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             payload = {
                 "source_node": "research",
@@ -2528,7 +2536,7 @@ class TestLangChainIntegration:
                 "decision": "analysis",
             }
 
-            result = handler._build_routing_attributes(payload)
+            result = build_routing_attributes(payload)
 
             assert result["routing.source_node"] == "research"
             assert result["routing.target_node"] == "analysis"
@@ -2541,7 +2549,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler()
+            NoveumTraceCallbackHandler()
 
             payload = {
                 "source_node": "research",
@@ -2553,7 +2561,7 @@ class TestLangChainIntegration:
                 "state_snapshot": {"data": "processed"},
             }
 
-            result = handler._build_routing_attributes(payload)
+            result = build_routing_attributes(payload)
 
             assert result["routing.reason"] == "Data is ready for analysis"
             assert result["routing.confidence"] == 0.95

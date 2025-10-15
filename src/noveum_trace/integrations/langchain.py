@@ -27,7 +27,6 @@ from noveum_trace.integrations.langchain_utils import (
     extract_model_name,
     extract_noveum_metadata,
     extract_tool_function_name,
-    get_langgraph_operation_name,
     get_operation_name,
 )
 
@@ -105,7 +104,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Thread-safe method to get a span_id by custom name."""
         with self._names_lock:
             return self.names.get(name)
-
 
     def _get_parent_span_id_from_name(self, parent_name: str) -> Optional[str]:
         """
@@ -215,7 +213,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             set_current_trace(new_trace)
             return new_trace, True
 
-
     def _create_tool_span_from_action(
         self, action: "AgentAction", run_id: UUID
     ) -> None:
@@ -301,7 +298,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             RuntimeError: If a trace is already active
         """
         if not self._ensure_client():
-            logger.error("Noveum Trace client is not available. Tracing functionality will be disabled.")
+            logger.error(
+                "Noveum Trace client is not available. Tracing functionality will be disabled."
+            )
 
         from noveum_trace.core.context import get_current_trace, set_current_trace
 
@@ -818,7 +817,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         except Exception as e:
             logger.error(f"Error handling routing decision: {e}", exc_info=True)
-
 
     # Tool Events
     def on_tool_start(
