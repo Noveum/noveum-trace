@@ -18,18 +18,6 @@ from langchain_core.documents import Document
 from langchain_core.outputs import LLMResult
 
 from noveum_trace.core.span import SpanStatus
-from noveum_trace.integrations.langchain_utils import (
-    build_langgraph_attributes,
-    build_routing_attributes,
-    extract_agent_capabilities,
-    extract_agent_type,
-    extract_langgraph_metadata,
-    extract_model_name,
-    extract_noveum_metadata,
-    extract_tool_function_name,
-    get_langgraph_operation_name,
-    get_operation_name,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +94,33 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._names_lock:
             return self.names.get(name)
 
+    def _extract_noveum_metadata(
+        self, metadata: Optional[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """
+        Extract metadata.noveum configuration.
+
+        Args:
+            metadata: LangChain metadata dict
+
+        Returns:
+            Dict with 'name' and 'parent_name' keys if present
+        """
+        if not metadata:
+            return {}
+
+        noveum_config = metadata.get("noveum", {})
+        if not isinstance(noveum_config, dict):
+            return {}
+
+        # Only extract 'name' and 'parent_name'
+        result = {}
+        if "name" in noveum_config:
+            result["name"] = noveum_config["name"]
+        if "parent_name" in noveum_config:
+            result["parent_name"] = noveum_config["parent_name"]
+
+        return result
 
     def _get_parent_span_id_from_name(self, parent_name: str) -> Optional[str]:
         """
@@ -215,6 +230,321 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             set_current_trace(new_trace)
             return new_trace, True
 
+    def _get_operation_name(
+        self,
+        event_type: str,
+        serialized: Optional[dict[str, Any]],
+        langgraph_metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """
+        Generate standardized operation names with LangGraph support.
+
+        Args:
+            event_type: Type of event (llm_start, chain_start, etc.)
+            serialized: Serialized object dict (may be None for LangGraph)
+            langgraph_metadata: Optional LangGraph metadata dict
+
+        Returns:
+            Operation name string (e.g., "graph.node.research" or "chain.unknown")
+        """
+        # For chain_start, check LangGraph first (works even with None serialized)
+        if event_type == "chain_start":
+            if langgraph_metadata and langgraph_metadata.get("is_langgraph"):
+                return self._get_langgraph_operation_name(langgraph_metadata, "unknown")
+
+        # For other event types or non-LangGraph chains, need serialized
+        if serialized is None:
+            return f"{event_type}.unknown"
+
+        name = serialized.get("name", "unknown")
+
+        if event_type == "llm_start":
+            # Use model name instead of class name for better readability
+            model_name = self._extract_model_name(serialized)
+            return f"llm.{model_name}"
+        elif event_type == "chain_start":
+            # Regular chain naming (LangGraph case handled above)
+            return f"chain.{name}"
+        elif event_type == "agent_start":
+            return f"agent.{name}"
+        elif event_type == "retriever_start":
+            return f"retrieval.{name}"
+        elif event_type == "tool_start":
+            return f"tool.{name}"
+
+        return f"{event_type}.{name}"
+
+    def _get_langgraph_operation_name(
+        self, langgraph_metadata: dict[str, Any], fallback_name: str
+    ) -> str:
+        """
+        Generate LangGraph-aware operation names.
+
+        Args:
+            langgraph_metadata: LangGraph metadata dict
+            fallback_name: Fallback name if no LangGraph info available
+
+        Returns:
+            Operation name string (e.g., "graph.node.research")
+        """
+        # Check if we have a node name (most specific)
+        node_name = langgraph_metadata.get("node_name")
+        if node_name:
+            return f"graph.node.{node_name}"
+
+        # Check if we have a graph name
+        graph_name = langgraph_metadata.get("graph_name")
+        if graph_name:
+            return f"graph.{graph_name}"
+
+        # Check if we have a step number
+        step = langgraph_metadata.get("step")
+        if step is not None:
+            return f"graph.node.step_{step}"
+
+        # Fallback to generic graph naming
+        if fallback_name and fallback_name != "unknown":
+            return f"graph.{fallback_name}"
+
+        # Ultimate fallback
+        return "graph.unknown"
+
+    def _extract_model_name(self, serialized: dict[str, Any]) -> str:
+        """Extract model name from serialized LLM data."""
+        if not serialized:
+            return "unknown"
+
+        # Try to get model name from kwargs
+        kwargs = serialized.get("kwargs", {})
+        model = kwargs.get("model")
+        if model:
+            return model
+
+        # Fallback to provider name
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "openai" from ["langchain", "chat_models", "openai", "ChatOpenAI"]
+            return id_path[-2]
+
+        # Final fallback to class name
+        return serialized.get("name", "unknown")
+
+    def _extract_agent_type(self, serialized: dict[str, Any]) -> str:
+        """Extract agent type from serialized agent data."""
+        if not serialized:
+            return "unknown"
+
+        # Get agent category from ID path
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "react" from ["langchain", "agents", "react", "ReActAgent"]
+            return id_path[-2]
+
+        return "unknown"
+
+    def _extract_agent_capabilities(self, serialized: dict[str, Any]) -> str:
+        """Extract agent capabilities from tools in serialized data."""
+        if not serialized:
+            return "unknown"
+
+        capabilities = []
+        kwargs = serialized.get("kwargs", {})
+        tools = kwargs.get("tools", [])
+
+        if tools:
+            capabilities.append("tool_usage")
+
+            # Extract specific tool types
+            tool_types = set()
+            for tool in tools:
+                if isinstance(tool, dict):
+                    tool_name = tool.get("name", "").lower()
+                    if "search" in tool_name or "web" in tool_name:
+                        tool_types.add("web_search")
+                    elif "calc" in tool_name or "math" in tool_name:
+                        tool_types.add("calculation")
+                    elif "file" in tool_name or "read" in tool_name:
+                        tool_types.add("file_operations")
+                    elif "api" in tool_name or "request" in tool_name:
+                        tool_types.add("api_calls")
+                    else:
+                        tool_types.add(
+                            tool.get("name", "other") if tool.get("name") else "other"
+                        )
+
+            if tool_types:
+                capabilities.extend(tool_types)
+
+        # Add default capabilities
+        if not capabilities:
+            capabilities = ["reasoning"]
+
+        return ",".join(capabilities)
+
+    def _extract_tool_function_name(self, serialized: dict[str, Any]) -> str:
+        """Extract function name from serialized tool data."""
+        if not serialized:
+            return "unknown"
+
+        kwargs = serialized.get("kwargs", {})
+        func_name = kwargs.get("name")
+        if func_name:
+            return func_name
+
+        # Fallback to class name
+        return serialized.get("name", "unknown")
+
+    def _extract_langgraph_metadata(
+        self,
+        metadata: Optional[dict[str, Any]],
+        tags: Optional[list[str]],
+        serialized: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Extract LangGraph-specific metadata from callback parameters.
+
+        This method safely extracts LangGraph metadata from various sources
+        with comprehensive fallbacks to ensure it never breaks regular LangChain usage.
+
+        Args:
+            metadata: LangChain metadata dict (may contain LangGraph keys)
+            tags: List of tags (may contain graph indicators)
+            serialized: Serialized object dict (contains type info, may be None)
+
+        Returns:
+            Dict with LangGraph metadata, all fields are optional and safe
+        """
+        result: dict[str, Any] = {
+            "is_langgraph": False,
+            "node_name": None,
+            "step": None,
+            "graph_name": None,
+            "checkpoint_ns": None,
+            "execution_type": None,
+        }
+
+        # 1. Try to extract from metadata (primary source)
+        try:
+            if metadata and isinstance(metadata, dict):
+                # LangGraph-specific metadata keys
+                result["node_name"] = metadata.get("langgraph_node")
+                result["step"] = metadata.get("langgraph_step")
+                result["graph_name"] = metadata.get("langgraph_graph_name")
+                result["checkpoint_ns"] = metadata.get("langgraph_checkpoint_ns")
+
+                # Extract path information if available
+                langgraph_path = metadata.get("langgraph_path")
+                if langgraph_path and isinstance(langgraph_path, (list, tuple)):
+                    # Path format: ('__pregel_pull', 'node_name', ...)
+                    # Extract the actual node name (skip internal nodes)
+                    for part in langgraph_path:
+                        if isinstance(part, str) and not part.startswith("__"):
+                            if not result["node_name"]:
+                                result["node_name"] = part
+                            break
+        except Exception:
+            # Silent fallback - metadata extraction failed
+            pass
+
+        # 2. Try to extract from tags (secondary source)
+        try:
+            if tags and isinstance(tags, list):
+                # Look for LangGraph indicators in tags
+                for tag in tags:
+                    if isinstance(tag, str) and tag.startswith("langgraph:"):
+                        # Extract node name from tag like "langgraph:node_name"
+                        parts = tag.split(":", 1)
+                        if len(parts) == 2 and not result["node_name"]:
+                            result["node_name"] = parts[1]
+        except Exception:
+            # Silent fallback - tag extraction failed
+            pass
+
+        # 3. Try to extract from serialized dict (tertiary source)
+        # Note: LangGraph often passes None for serialized, so this is optional
+        try:
+            if serialized and isinstance(serialized, dict):
+                # Check if this is a LangGraph type
+                id_path = serialized.get("id", [])
+                if isinstance(id_path, list) and any("langgraph" in str(part).lower() for part in id_path):
+                    # Look for langgraph in the ID path
+                    result["is_langgraph"] = True
+
+                    # Try to extract graph name from serialized name
+                    name = serialized.get("name", "")
+                    if not result["graph_name"] and name and isinstance(name, str):
+                        result["graph_name"] = name
+        except Exception:
+            # Silent fallback - serialized extraction failed
+            pass
+
+        # 4. Determine if this is LangGraph execution
+        # Only mark as LangGraph if we found clear indicators
+        result["is_langgraph"] = bool(
+            result["node_name"]
+            or result["step"] is not None
+            or result["checkpoint_ns"]
+            or result["is_langgraph"]  # Set by serialized check
+        )
+
+        # 5. Determine execution type
+        if result["is_langgraph"]:
+            if result["node_name"]:
+                result["execution_type"] = "node"
+            elif result["graph_name"]:
+                result["execution_type"] = "graph"
+            else:
+                result["execution_type"] = "unknown"
+
+        return result
+
+    def _build_langgraph_attributes(
+        self, langgraph_metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Build span attributes from LangGraph metadata.
+
+        Only includes attributes that have actual values to avoid
+        cluttering spans with None values.
+
+        Args:
+            langgraph_metadata: Dict from _extract_langgraph_metadata()
+
+        Returns:
+            Dict of span attributes to add (may be empty)
+        """
+        attributes: dict[str, Any] = {}
+
+        # Only add attributes if we have LangGraph data
+        if not langgraph_metadata.get("is_langgraph"):
+            return attributes
+
+        # Add LangGraph indicator
+        attributes["langgraph.is_graph"] = True
+
+        # Add node name if available
+        if langgraph_metadata.get("node_name"):
+            attributes["langgraph.node_name"] = langgraph_metadata["node_name"]
+
+        # Add step number if available
+        if langgraph_metadata.get("step") is not None:
+            attributes["langgraph.step"] = langgraph_metadata["step"]
+
+        # Add graph name if available
+        if langgraph_metadata.get("graph_name"):
+            attributes["langgraph.graph_name"] = langgraph_metadata["graph_name"]
+
+        # Add checkpoint namespace if available
+        if langgraph_metadata.get("checkpoint_ns"):
+            attributes["langgraph.checkpoint_ns"] = langgraph_metadata["checkpoint_ns"]
+
+        # Add execution type if available
+        if langgraph_metadata.get("execution_type"):
+            attributes["langgraph.execution_type"] = langgraph_metadata[
+                "execution_type"
+            ]
+
+        return attributes
 
     def _create_tool_span_from_action(
         self, action: "AgentAction", run_id: UUID
@@ -398,11 +728,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = get_operation_name("llm_start", serialized)
+        operation_name = self._get_operation_name("llm_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
-            noveum_config = extract_noveum_metadata(metadata)
+            noveum_config = self._extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
@@ -421,7 +751,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 parent_span_id=parent_span_id,
                 attributes={
                     "langchain.run_id": str(run_id),
-                    "llm.model": extract_model_name(serialized),
+                    "llm.model": self._extract_model_name(serialized),
                     "llm.provider": (
                         serialized.get("id", ["unknown"])[-1]
                         if serialized and isinstance(serialized.get("id"), list)
@@ -573,17 +903,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Extract LangGraph-specific metadata (with safe fallbacks)
-            langgraph_metadata = extract_langgraph_metadata(
+            langgraph_metadata = self._extract_langgraph_metadata(
                 metadata=metadata, tags=tags, serialized=serialized
             )
 
             # Generate operation name with LangGraph support
-            operation_name = get_operation_name(
+            operation_name = self._get_operation_name(
                 "chain_start", serialized, langgraph_metadata=langgraph_metadata
             )
 
             # Extract Noveum-specific metadata
-            noveum_config = extract_noveum_metadata(metadata)
+            noveum_config = self._extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
@@ -614,7 +944,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             }
 
             # Add LangGraph-specific attributes if available
-            langgraph_attrs = build_langgraph_attributes(langgraph_metadata)
+            langgraph_attrs = self._build_langgraph_attributes(langgraph_metadata)
             if langgraph_attrs:
                 attributes.update(langgraph_attrs)
 
@@ -794,7 +1124,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Build attributes from payload
-            attributes = build_routing_attributes(payload)
+            attributes = self._build_routing_attributes(payload)
 
             # Set all attributes
             routing_span.set_attributes(attributes)
@@ -819,6 +1149,78 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error(f"Error handling routing decision: {e}", exc_info=True)
 
+    def _build_routing_attributes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """
+        Build routing span attributes from payload.
+
+        Captures all fields provided by the user, with special handling
+        for known routing fields.
+
+        Args:
+            payload: Routing decision data from user
+
+        Returns:
+            Dictionary of span attributes
+        """
+        attributes = {}
+
+        # Core routing attributes (always present)
+        attributes["routing.source_node"] = payload.get("source_node", "unknown")
+        attributes["routing.target_node"] = payload.get("target_node", "unknown")
+        attributes["routing.decision"] = payload.get(
+            "decision", payload.get("target_node", "unknown")
+        )
+        attributes["routing.type"] = "conditional_edge"
+
+        # Optional but common attributes
+        if "reason" in payload:
+            attributes["routing.reason"] = str(payload["reason"])
+
+        if "confidence" in payload:
+            attributes["routing.confidence"] = float(payload["confidence"])
+
+        # Tool/option scores (expanded into individual attributes)
+        if "tool_scores" in payload:
+            tool_scores = payload["tool_scores"]
+            # Store as JSON string for full data
+            attributes["routing.tool_scores"] = str(tool_scores)
+            # Also store individual scores as separate attributes
+            if isinstance(tool_scores, dict):
+                for tool, score in tool_scores.items():
+                    attributes[f"routing.score.{tool}"] = float(score)
+
+        # Alternatives
+        if "alternatives" in payload:
+            alternatives = payload["alternatives"]
+            attributes["routing.alternatives"] = str(alternatives)
+            if isinstance(alternatives, list):
+                attributes["routing.alternatives_count"] = len(alternatives)
+
+        # State snapshot (if provided)
+        if "state_snapshot" in payload:
+            state_snapshot = payload["state_snapshot"]
+            attributes["routing.state_snapshot"] = str(state_snapshot)
+
+        # Capture ANY other fields provided by the user
+        # This ensures we don't lose any custom data
+        known_fields = {
+            "source_node",
+            "target_node",
+            "decision",
+            "reason",
+            "confidence",
+            "tool_scores",
+            "alternatives",
+            "state_snapshot",
+        }
+
+        for key, value in payload.items():
+            if key not in known_fields:
+                # Prefix with "routing." and convert to string
+                attr_key = f"routing.{key}"
+                attributes[attr_key] = str(value)
+
+        return attributes
 
     # Tool Events
     def on_tool_start(
@@ -837,18 +1239,18 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        get_operation_name("tool_start", serialized)
+        self._get_operation_name("tool_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
-            noveum_config = extract_noveum_metadata(metadata)
+            noveum_config = self._extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
             tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
-            func_name = extract_tool_function_name(serialized)
+            func_name = self._extract_tool_function_name(serialized)
 
             # Use custom name if provided, otherwise use standard format
             span_name = custom_name if custom_name else f"tool:{tool_name}:{func_name}"
@@ -979,11 +1381,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = get_operation_name("agent_start", serialized)
+        operation_name = self._get_operation_name("agent_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
-            noveum_config = extract_noveum_metadata(metadata)
+            noveum_config = self._extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
@@ -1000,8 +1402,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             agent_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
-            agent_type = extract_agent_type(serialized)
-            agent_capabilities = extract_agent_capabilities(serialized)
+            agent_type = self._extract_agent_type(serialized)
+            agent_capabilities = self._extract_agent_capabilities(serialized)
 
             span = self._client.start_span(
                 name=span_name,
@@ -1148,11 +1550,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
-        operation_name = get_operation_name("retriever_start", serialized)
+        operation_name = self._get_operation_name("retriever_start", serialized)
 
         try:
             # Extract Noveum-specific metadata
-            noveum_config = extract_noveum_metadata(metadata)
+            noveum_config = self._extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 

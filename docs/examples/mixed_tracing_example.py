@@ -44,7 +44,6 @@ def mixed_tracing_example():
 
         # Initialize Noveum Trace with batch size 1 for immediate sending
         noveum_trace.init(
-            endpoint="https://noveum.free.beeceptor.com",
             transport_config={"batch_size": 1, "batch_timeout": 5.0},
         )
 
