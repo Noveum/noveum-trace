@@ -294,8 +294,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         Args:
             name: Name for the trace
 
-        Raises:
-            RuntimeError: If a trace is already active
         """
         if not self._ensure_client():
             logger.error(
@@ -330,11 +328,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         Clears the trace from context and re-enables auto-management for
         future traces.
 
-        Raises:
-            RuntimeError: If no trace is active
         """
         if not self._ensure_client():
-            raise RuntimeError("Noveum Trace client not available")
+            logger.warning(
+                "Noveum Trace client is not available; unable to end the trace."
+            )
+            return
 
         from noveum_trace.core.context import get_current_trace, set_current_trace
 
