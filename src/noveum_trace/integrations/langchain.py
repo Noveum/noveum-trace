@@ -340,7 +340,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         # Get current trace
         trace = get_current_trace()
         if trace is None:
-            raise RuntimeError("No active trace to end")
+            logger.error("No active trace to end")
+            return
 
         # Finish the trace
         self._client.finish_trace(trace)

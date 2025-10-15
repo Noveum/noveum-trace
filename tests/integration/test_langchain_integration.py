@@ -2353,10 +2353,11 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = None
 
-                with pytest.raises(RuntimeError) as exc_info:
+                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
                     handler.end_trace()
 
-                assert "No active trace to end" in str(exc_info.value)
+                    # Should log an error instead of raising
+                    mock_logger.error.assert_called_once_with("No active trace to end")
 
     def test_manual_trace_disables_auto_finish(self):
         """Test that manual trace control disables auto-finish."""
