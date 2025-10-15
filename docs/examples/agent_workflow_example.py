@@ -8,6 +8,7 @@ including multi-agent systems, agent workflows, and agent graphs.
 import os
 import random
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 # Load environment variables (install python-dotenv if needed)
@@ -32,12 +33,13 @@ noveum_trace.init(
 
 
 # Data structures for agent communication
+@dataclass
 class AgentMessage:
     sender: str
     recipient: str
     content: str
     message_type: str = "text"
-    metadata: dict[str, Any] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ResearchAgent:
