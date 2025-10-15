@@ -192,18 +192,25 @@ def route_function(state, config):
     # Emit routing event (if callbacks available)
     if config and config.get("callbacks"):
         callbacks = config["callbacks"]
-        if hasattr(callbacks, 'on_custom_event'):
-            callbacks.on_custom_event(
-                "langgraph.routing_decision",
-                {
-                    "source_node": "current_node",
-                    "target_node": decision,
-                    "decision": decision,
-                    "reason": f"Count {state['count']} {'< 5' if state['count'] < 5 else '>= 5'}",
-                    "confidence": 0.9,
-                    "state_snapshot": state,
-                }
-            )
+        
+        # Normalize callbacks into an iterable
+        if not isinstance(callbacks, (list, tuple)):
+            callbacks = [callbacks]
+        
+        # Iterate over each callback handler
+        for handler in callbacks:
+            if hasattr(handler, 'on_custom_event'):
+                handler.on_custom_event(
+                    "langgraph.routing_decision",
+                    {
+                        "source_node": "current_node",
+                        "target_node": decision,
+                        "decision": decision,
+                        "reason": f"Count {state['count']} {'< 5' if state['count'] < 5 else '>= 5'}",
+                        "confidence": 0.9,
+                        "state_snapshot": state,
+                    }
+                )
     
     return decision
 
