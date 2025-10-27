@@ -602,8 +602,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     serialized.get("name", "unknown") if serialized else "unknown"
                 ),
                 "chain.operation": "execution",
-                # Input attributes
-                "chain.inputs": {k: str(v) for k, v in inputs.items()},
                 **{
                     k: v
                     for k, v in kwargs.items()
@@ -611,6 +609,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     and isinstance(v, (str, int, float, bool))
                 },
             }
+            
+            # Handle inputs based on type
+            if isinstance(inputs, list):
+                # LangGraph prebuilt agents send list of tool calls
+                for index, input_dict in enumerate(inputs):
+                    if isinstance(input_dict, dict):
+                        attributes[f"chain.inputs.{index}"] = {k: str(v) for k, v in input_dict.items()}
+                    else:
+                        attributes[f"chain.inputs.{index}"] = str(input_dict)
+            elif isinstance(inputs, dict):
+                # Standard dict inputs
+                attributes["chain.inputs"] = {k: str(v) for k, v in inputs.items()}
+            else:
+                # Fallback for other types
+                attributes["chain.inputs"] = str(inputs)
 
             # Add LangGraph-specific attributes if available
             langgraph_attrs = build_langgraph_attributes(langgraph_metadata)
@@ -709,7 +722,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return None
 
-    # Custom Events
+    # Custom Events, primarily used for routing decisions
     def on_custom_event(
         self,
         name: str,
@@ -862,12 +875,38 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "tool.input.input_str": input_str,  # String representation for compatibility
             }
 
-            # Add structured inputs if available
-            if inputs:
-                for key, value in inputs.items():
-                    # Convert values to strings for attribute storage
-                    input_attrs[f"tool.input.{key}"] = str(value)
-                input_attrs["tool.input.argument_count"] = str(len(inputs))
+            # Add structured inputs if available - handle different input types
+            if inputs is not None:
+                if isinstance(inputs, dict):
+                    # Case 1: Dict input (current/standard behavior)
+                    for key, value in inputs.items():
+                        # Convert values to strings for attribute storage
+                        input_attrs[f"tool.input.{key}"] = str(value)
+                    input_attrs["tool.input.argument_count"] = str(len(inputs))
+                    
+                elif isinstance(inputs, list):
+                    # Check if all elements are dicts
+                    if inputs and all(isinstance(item, dict) for item in inputs):
+                        # Case 2: List of dicts (similar to chain handling)
+                        for index, input_dict in enumerate(inputs):
+                            input_attrs[f"tool.input.{index}"] = {k: str(v) for k, v in input_dict.items()}
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
+                    else:
+                        # Case 3: List but not all elements are dicts
+                        for index, item in enumerate(inputs):
+                            input_attrs[f"tool.input.{index}"] = str(item)
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
+                        
+                elif isinstance(inputs, tuple):
+                    # Case 4: Tuple input (treat like list case 3)
+                    for index, item in enumerate(inputs):
+                        input_attrs[f"tool.input.{index}"] = str(item)
+                    input_attrs["tool.input.argument_count"] = str(len(inputs))
+                    
+                else:
+                    # Case 5: Single value (str, int, etc.)
+                    input_attrs["tool.input.arg"] = str(inputs)
+                    input_attrs["tool.input.argument_count"] = "1"
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
