@@ -609,13 +609,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     and isinstance(v, (str, int, float, bool))
                 },
             }
-            
+
             # Handle inputs based on type
             if isinstance(inputs, list):
                 # LangGraph prebuilt agents send list of tool calls
                 for index, input_dict in enumerate(inputs):
                     if isinstance(input_dict, dict):
-                        attributes[f"chain.inputs.{index}"] = {k: str(v) for k, v in input_dict.items()}
+                        attributes[f"chain.inputs.{index}"] = {
+                            k: str(v) for k, v in input_dict.items()
+                        }
                     else:
                         attributes[f"chain.inputs.{index}"] = str(input_dict)
             elif isinstance(inputs, dict):
@@ -883,26 +885,28 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         # Convert values to strings for attribute storage
                         input_attrs[f"tool.input.{key}"] = str(value)
                     input_attrs["tool.input.argument_count"] = str(len(inputs))
-                    
+
                 elif isinstance(inputs, list):
                     # Check if all elements are dicts
                     if inputs and all(isinstance(item, dict) for item in inputs):
                         # Case 2: List of dicts (similar to chain handling)
                         for index, input_dict in enumerate(inputs):
-                            input_attrs[f"tool.input.{index}"] = {k: str(v) for k, v in input_dict.items()}
+                            input_attrs[f"tool.input.{index}"] = {
+                                k: str(v) for k, v in input_dict.items()
+                            }
                         input_attrs["tool.input.argument_count"] = str(len(inputs))
                     else:
                         # Case 3: List but not all elements are dicts
                         for index, item in enumerate(inputs):
                             input_attrs[f"tool.input.{index}"] = str(item)
                         input_attrs["tool.input.argument_count"] = str(len(inputs))
-                        
+
                 elif isinstance(inputs, tuple):
                     # Case 4: Tuple input (treat like list case 3)
                     for index, item in enumerate(inputs):
                         input_attrs[f"tool.input.{index}"] = str(item)
                     input_attrs["tool.input.argument_count"] = str(len(inputs))
-                    
+
                 else:
                     # Case 5: Single value (str, int, etc.)
                     input_attrs["tool.input.arg"] = str(inputs)
