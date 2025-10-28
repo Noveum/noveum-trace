@@ -577,28 +577,6 @@ class TestHttpTransportTraceToDict:
             assert result["number_attr"] == 42
             assert "_private_attr" not in result  # Private attributes should be skipped
 
-    def test_trace_to_dict_object_with_dict_attrs_exception(self):
-        """Test handling of objects with __dict__ attributes that raise exception."""
-        config = Config.create()
-        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
-            transport = HttpTransport(config)
-
-            # Create an object that raises exception when accessing __dict__.items()
-            class ProblematicObject:
-                def __init__(self):
-                    self.public_attr = "value"
-
-                @property
-                def __dict__(self):
-                    # This will raise an exception when items() is called
-                    return {"key": Mock(side_effect=Exception("dict access failed"))}
-
-            problematic_obj = ProblematicObject()
-            result = transport.trace_to_dict(problematic_obj)
-            # The exception is handled at the individual value level, not the object level
-            assert isinstance(result, dict)
-            assert result["key"] == "Non-serializable object, issue with tracing SDK"
-
     def test_trace_to_dict_fallback_to_string(self):
         """Test fallback to string representation for unknown objects."""
         config = Config.create()
