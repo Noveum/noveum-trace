@@ -93,11 +93,13 @@ class TestOnChainStartInputHandling:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
 
-            # Should use "chain.inputs.0", "chain.inputs.1" keys
-            assert "chain.inputs.0" in attributes
-            assert "chain.inputs.1" in attributes
-            assert attributes["chain.inputs.0"]["name"] == "WebSearch"
-            assert attributes["chain.inputs.1"]["name"] == "Calculator"
+            # Should use flattened "chain.inputs.0.{key}" format for dict items
+            assert "chain.inputs.0.name" in attributes
+            assert "chain.inputs.0.args" in attributes
+            assert "chain.inputs.1.name" in attributes
+            assert "chain.inputs.1.args" in attributes
+            assert attributes["chain.inputs.0.name"] == "WebSearch"
+            assert attributes["chain.inputs.1.name"] == "Calculator"
 
     def test_chain_start_with_list_of_mixed_types(self):
         """Test on_chain_start with list containing non-dict elements."""
@@ -125,10 +127,11 @@ class TestOnChainStartInputHandling:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
 
-            # Should convert non-dict elements to strings
-            assert "chain.inputs.0" in attributes
-            assert "chain.inputs.1" in attributes
-            assert "chain.inputs.2" in attributes
+            # Should use flattened format for dict items and direct format for non-dict items
+            assert "chain.inputs.0.name" in attributes  # First item is dict
+            assert "chain.inputs.1" in attributes  # Second item is string
+            assert "chain.inputs.2" in attributes  # Third item is int
+            assert attributes["chain.inputs.0.name"] == "tool1"
             assert attributes["chain.inputs.1"] == "string_element"
             assert attributes["chain.inputs.2"] == "123"
 
@@ -251,11 +254,15 @@ class TestOnToolStartInputHandling:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
 
-            # Should create tool.input.{index} attributes with dict values
-            assert "tool.input.0" in attributes
-            assert "tool.input.1" in attributes
-            assert attributes["tool.input.0"]["name"] == "tool1"
-            assert attributes["tool.input.1"]["name"] == "tool2"
+            # Should create flattened tool.input.{index}.{key} attributes for list of dicts
+            assert "tool.input.0.name" in attributes
+            assert "tool.input.0.arg" in attributes
+            assert "tool.input.1.name" in attributes
+            assert "tool.input.1.arg" in attributes
+            assert attributes["tool.input.0.name"] == "tool1"
+            assert attributes["tool.input.0.arg"] == "val1"
+            assert attributes["tool.input.1.name"] == "tool2"
+            assert attributes["tool.input.1.arg"] == "val2"
             assert attributes["tool.input.argument_count"] == "2"
 
     def test_tool_start_with_list_of_mixed_types(self):

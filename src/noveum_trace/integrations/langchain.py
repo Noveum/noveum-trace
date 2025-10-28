@@ -5,7 +5,6 @@ This module provides a callback handler that automatically traces LangChain
 operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
-import inspect
 import logging
 import threading
 from collections.abc import Sequence
@@ -45,36 +44,6 @@ def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
         return {prefix: str(inputs)}
 
 
-# Helper function to extract code location
-def get_code_location(skip_frames: int = 2) -> dict[str, Any]:
-    """Extract file name, function name, and line number from call stack.
-
-    Args:
-        skip_frames: Number of frames to skip (default 2: this function + immediate caller)
-
-    Returns:
-        Dict with code.filepath, code.function, code.lineno
-    """
-    try:
-        frame = inspect.currentframe()
-        # Skip frames: get_code_location -> caller -> actual source
-        for _ in range(skip_frames):
-            if frame is not None:
-                frame = frame.f_back
-
-        if frame is not None:
-            frame_info = inspect.getframeinfo(frame)
-            return {
-                "code.filepath": frame_info.filename,
-                "code.function": frame_info.function,
-                "code.lineno": frame_info.lineno,
-            }
-    except Exception as e:
-        logger.debug(f"Failed to extract code location: {e}")
-
-    return {}
-
-
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler for Noveum Trace integration."""
 
@@ -100,7 +69,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self._root_traces_lock = threading.Lock()
 
         # Track parent relationships
-        # Maps run_id -> parent_run_id
+        # Maps run_id -> parent_run_id (self.parent_map)
         self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = {}
         self._parent_map_lock = threading.Lock()
 
@@ -178,6 +147,71 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Thread-safe method to get parent run_id."""
         with self._parent_map_lock:
             return self.parent_map.get(run_id)
+
+    def _find_root_run_id_for_trace(
+        self, target_trace: Any
+    ) -> Optional[Union[UUID, str]]:
+        """Find the root_run_id associated with a specific trace object."""
+        with self._root_traces_lock:
+            for root_run_id, trace in self.root_traces.items():
+                if trace is target_trace:
+                    return root_run_id
+        return None
+
+    def _is_descendant_of(
+        self, run_id: Union[UUID, str], potential_ancestor: Union[UUID, str]
+    ) -> bool:
+        """Check if run_id is a descendant of potential_ancestor in the parent chain."""
+        current = self._get_parent(run_id)
+        visited = {run_id}  # Avoid cycles
+
+        while current is not None and current not in visited:
+            if current == potential_ancestor:
+                return True
+            visited.add(current)
+            current = self._get_parent(current)
+
+        return False
+
+    def _cleanup_trace_tracking(self, root_run_id: Union[UUID, str]) -> None:
+        """
+        Clean up tracking data for a finished trace.
+
+        This prevents memory leaks by removing entries from root_traces and parent_map
+        when traces complete.
+
+        Args:
+            root_run_id: The root run ID of the finished trace
+        """
+        try:
+            # Remove from root_traces
+            with self._root_traces_lock:
+                removed_trace = self.root_traces.pop(root_run_id, None)
+
+            # Clean up all parent_map entries associated with this trace
+            # This includes the root_run_id itself and all its descendants
+            with self._parent_map_lock:
+                to_remove = []
+
+                # Find all run_ids that are descendants of this root
+                for run_id in self.parent_map.keys():
+                    if run_id == root_run_id or self._is_descendant_of(
+                        run_id, root_run_id
+                    ):
+                        to_remove.append(run_id)
+
+                # Remove all identified entries
+                for run_id in to_remove:
+                    self.parent_map.pop(run_id, None)
+
+            if removed_trace:
+                logger.debug(
+                    f"Cleaned up tracking data for trace {getattr(removed_trace, 'trace_id', 'unknown')} "
+                    f"(root_run_id: {root_run_id}, cleaned {len(to_remove)} parent_map entries)"
+                )
+
+        except Exception as e:
+            logger.error(f"Error cleaning up trace tracking data: {e}")
 
     def _find_root_run_id(
         self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
@@ -293,7 +327,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
     def _get_or_create_trace_context(
-        self, operation_name: str, run_id: UUID, parent_run_id: Optional[UUID] = None
+        self,
+        operation_name: str,
+        run_id: Optional[UUID] = None,
+        parent_run_id: Optional[UUID] = None,
     ) -> tuple[Any, bool]:
         """
         Get existing trace from global context or create new one.
@@ -311,6 +348,18 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             (trace, should_manage_lifecycle) tuple
         """
         from noveum_trace.core.context import get_current_trace, set_current_trace
+
+        # Handle case where run_id is None (for testing)
+        if run_id is None:
+            # Check global context for existing trace
+            existing_trace = get_current_trace()
+            if existing_trace is not None:
+                return existing_trace, False
+
+            # Create new trace
+            new_trace = self._client.start_trace(operation_name)
+            set_current_trace(new_trace)
+            return new_trace, True
 
         # Find the root run_id for this operation
         root_run_id = self._find_root_run_id(run_id, parent_run_id)
@@ -504,6 +553,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error("No active trace to end")
             return
 
+        # Find the root_run_id for cleanup before finishing
+        root_run_id = self._find_root_run_id_for_trace(trace)
+
         # Finish the trace
         self._client.finish_trace(trace)
 
@@ -511,6 +563,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         set_current_trace(None)
         self._trace_managed_by_langchain = None
         self._manual_trace_control = False
+
+        # Clean up tracking dictionaries to prevent memory leaks
+        if root_run_id is not None:
+            self._cleanup_trace_tracking(root_run_id)
 
         logger.debug(f"Manually ended trace: {trace.trace_id}")
 
@@ -536,11 +592,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if (
             self._trace_managed_by_langchain and self._active_runs() == 0
         ):  # No more active spans
+            # Find the root_run_id for cleanup before finishing
+            root_run_id = self._find_root_run_id_for_trace(
+                self._trace_managed_by_langchain
+            )
+
+            # Finish the trace
             self._client.finish_trace(self._trace_managed_by_langchain)
             from noveum_trace.core.context import set_current_trace
 
             set_current_trace(None)
             self._trace_managed_by_langchain = None
+
+            # Clean up tracking dictionaries to prevent memory leaks
+            if root_run_id is not None:
+                self._cleanup_trace_tracking(root_run_id)
 
     # LLM Events
     def on_llm_start(
@@ -776,8 +842,20 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             }
 
             # Handle inputs based on type
-            # Use safe input conversion
-            attributes["chain.inputs"] = safe_inputs_to_dict(inputs, "input")
+            if isinstance(inputs, dict):
+                # Standard dict input - use as-is
+                attributes["chain.inputs"] = {k: str(v) for k, v in inputs.items()}
+            elif isinstance(inputs, list):
+                # List input - use chain.inputs.0, chain.inputs.1 format
+                for i, item in enumerate(inputs):
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            attributes[f"chain.inputs.{i}.{k}"] = v
+                    else:
+                        attributes[f"chain.inputs.{i}"] = str(item)
+            else:
+                # Non-dict, non-list input (e.g., string) - store as raw value
+                attributes["chain.inputs"] = inputs
 
             # Add LangGraph-specific attributes if available
             langgraph_attrs = build_langgraph_attributes(langgraph_metadata)
@@ -824,12 +902,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         try:
             # Handle both dict and non-dict outputs
-            output_attrs = safe_inputs_to_dict(outputs, "output")
+            if isinstance(outputs, dict):
+                # Dict outputs - convert values to strings
+                chain_outputs = {k: str(v) for k, v in outputs.items()}
+            else:
+                # Non-dict outputs (e.g., string) - store as raw value
+                chain_outputs = outputs
 
             span.set_attributes(
                 {
                     # Output attributes
-                    "chain.output.outputs": output_attrs
+                    "chain.output.outputs": chain_outputs
                 }
             )
 
@@ -1041,9 +1124,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     if inputs and all(isinstance(item, dict) for item in inputs):
                         # Case 2: List of dicts (similar to chain handling)
                         for index, input_dict in enumerate(inputs):
-                            input_attrs[f"tool.input.{index}"] = {
-                                k: str(v) for k, v in input_dict.items()
-                            }
+                            for k, v in input_dict.items():
+                                input_attrs[f"tool.input.{index}.{k}"] = v
                         input_attrs["tool.input.argument_count"] = str(len(inputs))
                     else:
                         # Case 3: List but not all elements are dicts

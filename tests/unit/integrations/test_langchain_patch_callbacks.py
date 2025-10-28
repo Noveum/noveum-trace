@@ -259,7 +259,7 @@ class TestSafeInputsConversion:
             return NoveumTraceCallbackHandler()
 
     def test_chain_start_uses_safe_inputs_conversion(self, handler):
-        """Test on_chain_start uses safe_inputs_to_dict for input conversion."""
+        """Test on_chain_start handles inputs properly without using safe_inputs_to_dict."""
         run_id = uuid4()
         serialized = {"name": "test_chain"}
 
@@ -289,27 +289,25 @@ class TestSafeInputsConversion:
                     "noveum_trace.integrations.langchain_utils.build_langgraph_attributes",
                     return_value={},
                 ),
-                patch(
-                    "noveum_trace.integrations.langchain.safe_inputs_to_dict"
-                ) as mock_safe_convert,
             ):
 
                 # Mock span creation
                 mock_span = Mock()
                 handler._client.start_span.return_value = mock_span
-                mock_safe_convert.return_value = {"converted": "input"}
 
-                # Call method
+                # Call method - should not raise exception
                 handler.on_chain_start(
                     serialized=serialized, inputs=inputs, run_id=run_id
                 )
 
-                # Should have called safe_inputs_to_dict
-                mock_safe_convert.assert_called_once_with(inputs, "input")
-                mock_safe_convert.reset_mock()
+                # Verify span was created and stored correctly
+                assert handler._get_run(run_id) == mock_span
+
+                # Clean up for next iteration
+                handler._pop_run(run_id)
 
     def test_chain_end_uses_safe_inputs_conversion(self, handler):
-        """Test on_chain_end uses safe_inputs_to_dict for output conversion."""
+        """Test on_chain_end handles outputs properly without using safe_inputs_to_dict."""
         run_id = uuid4()
 
         # Test with different output types
@@ -324,16 +322,17 @@ class TestSafeInputsConversion:
             mock_span = Mock()
             handler._set_run(run_id, mock_span)
 
-            with patch(
-                "noveum_trace.integrations.langchain.safe_inputs_to_dict"
-            ) as mock_safe_convert:
-                mock_safe_convert.return_value = {"converted": "output"}
+            # Call method - should not raise exception
+            handler.on_chain_end(outputs=outputs, run_id=run_id)
 
-                # Call method
-                handler.on_chain_end(outputs=outputs, run_id=run_id)
+            # Verify span was handled correctly (attributes were set and finished)
+            mock_span.set_attributes.assert_called_once()
+            mock_span.set_status.assert_called_once()
+            handler._client.finish_span.assert_called_with(mock_span)
 
-                # Should have called safe_inputs_to_dict
-                mock_safe_convert.assert_called_once_with(outputs, "output")
+            # Reset mocks for next iteration
+            mock_span.reset_mock()
+            handler._client.reset_mock()
 
     def test_agent_start_uses_safe_inputs_conversion(self, handler):
         """Test on_agent_start uses safe_inputs_to_dict for input conversion."""
