@@ -543,4 +543,3 @@ class TestInputHandlingEdgeCases:
 
             # Verify span was created without errors
             mock_client.start_span.assert_called_once()
-
