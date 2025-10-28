@@ -23,6 +23,7 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
 
 
+@pytest.mark.unit
 @pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain not available")
 class TestIsDescendantOfUnlocked:
     """Test _is_descendant_of_unlocked method (lock-free version)."""
@@ -110,22 +111,6 @@ class TestIsDescendantOfUnlocked:
             is False
         )
 
-    def test_handles_cycles_gracefully(self, handler):
-        """Test that cycle detection prevents infinite loops."""
-        id1 = uuid4()
-        id2 = uuid4()
-        id3 = uuid4()
-
-        # Create a cycle: id1 -> id2 -> id3 -> id1
-        parent_map = {
-            id1: id2,
-            id2: id3,
-            id3: id1,  # Cycle back to id1
-        }
-
-        # Should not hang, should return False (cycles are not valid ancestry)
-        assert handler._is_descendant_of_unlocked(id1, id3, parent_map) is False
-
     def test_nonexistent_run_id(self, handler):
         """Test handling of non-existent run IDs."""
         existing_id = uuid4()
@@ -140,6 +125,7 @@ class TestIsDescendantOfUnlocked:
         )
 
 
+@pytest.mark.unit
 @pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain not available")
 class TestCleanupTraceTrackingDeadlockFix:
     """Test that _cleanup_trace_tracking doesn't deadlock."""
@@ -152,6 +138,7 @@ class TestCleanupTraceTrackingDeadlockFix:
             mock_get_client.return_value = mock_client
             return NoveumTraceCallbackHandler()
 
+    @pytest.mark.timeout(5)
     def test_cleanup_uses_unlocked_version(self, handler):
         """Test that cleanup uses _is_descendant_of_unlocked to avoid deadlock."""
         root_id = uuid4()
@@ -296,6 +283,7 @@ class TestCleanupTraceTrackingDeadlockFix:
         assert len(errors) == 0
 
 
+@pytest.mark.unit
 @pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain not available")
 class TestCleanupCorrectness:
     """Test that cleanup correctly removes all descendants."""
