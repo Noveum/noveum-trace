@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 # Helper function for safe input conversion
-def safe_inputs_to_dict(inputs, prefix="item"):
+def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
     """Safely convert inputs to dict for span attributes."""
     if isinstance(inputs, dict):
         return {k: str(v) for k, v in inputs.items()}
@@ -46,7 +46,7 @@ def safe_inputs_to_dict(inputs, prefix="item"):
 
 
 # Helper function to extract code location
-def get_code_location(skip_frames=2):
+def get_code_location(skip_frames: int = 2) -> dict[str, Any]:
     """Extract file name, function name, and line number from call stack.
 
     Args:
@@ -179,7 +179,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._parent_map_lock:
             return self.parent_map.get(run_id)
 
-    def _find_root_run_id(self, run_id: UUID, parent_run_id: Optional[UUID]) -> UUID:
+    def _find_root_run_id(
+        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
+    ) -> Union[UUID, str]:
         """Find the root run_id by traversing parent relationships."""
         # Store this parent relationship
         self._set_parent(run_id, parent_run_id)
@@ -189,8 +191,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return run_id
 
         # Traverse up the parent chain to find the root
-        current = parent_run_id
-        visited = {run_id}  # Avoid cycles
+        current: Optional[Union[UUID, str]] = parent_run_id
+        visited: set[Union[UUID, str]] = {run_id}  # Avoid cycles
 
         while current is not None and current not in visited:
             visited.add(current)
@@ -211,6 +213,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             current = parent
 
         # If we exit the loop, current is the root
+        # Here, parent_run_id cannot be None because of the early return above
+        assert parent_run_id is not None
         return current if current is not None else parent_run_id
 
     def _get_parent_span_id_from_name(self, parent_name: str) -> Optional[str]:
