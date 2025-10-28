@@ -173,6 +173,33 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return False
 
+    def _is_descendant_of_unlocked(
+        self,
+        run_id: Union[UUID, str],
+        potential_ancestor: Union[UUID, str],
+        parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]],
+    ) -> bool:
+        """
+        Check if run_id is a descendant of potential_ancestor (without acquiring locks).
+
+        This version is called from within locked sections and operates directly on the parent_map.
+
+        Args:
+            run_id: The run ID to check
+            potential_ancestor: The potential ancestor run ID
+            parent_map: The parent_map dictionary (already locked by caller)
+        """
+        current = parent_map.get(run_id)
+        visited = {run_id}  # Avoid cycles
+
+        while current is not None and current not in visited:
+            if current == potential_ancestor:
+                return True
+            visited.add(current)
+            current = parent_map.get(current)
+
+        return False
+
     def _cleanup_trace_tracking(self, root_run_id: Union[UUID, str]) -> None:
         """
         Clean up tracking data for a finished trace.
@@ -194,9 +221,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 to_remove = []
 
                 # Find all run_ids that are descendants of this root
-                for run_id in self.parent_map.keys():
-                    if run_id == root_run_id or self._is_descendant_of(
-                        run_id, root_run_id
+                # Use unlocked version since we already hold the lock
+                for run_id in list(self.parent_map.keys()):
+                    if run_id == root_run_id or self._is_descendant_of_unlocked(
+                        run_id, root_run_id, self.parent_map
                     ):
                         to_remove.append(run_id)
 
