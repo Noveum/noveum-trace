@@ -33,6 +33,17 @@ from noveum_trace.integrations.langchain_utils import (
 logger = logging.getLogger(__name__)
 
 
+# Helper function for safe input conversion
+def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
+    """Safely convert inputs to dict for span attributes."""
+    if isinstance(inputs, dict):
+        return {k: str(v) for k, v in inputs.items()}
+    elif isinstance(inputs, (list, tuple)):
+        return {f"{prefix}_{i}": str(v) for i, v in enumerate(inputs)}
+    else:
+        return {prefix: str(inputs)}
+
+
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler for Noveum Trace integration."""
 
@@ -51,6 +62,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         # Maps run_id -> span (for backward compatibility)
         self.runs: dict[Union[UUID, str], Any] = {}
         self._runs_lock = threading.Lock()
+
+        # Track root traces by root run_id
+        # Maps root_run_id -> trace (for LangGraph workflow grouping)
+        self.root_traces: dict[Union[UUID, str], Any] = {}
+        self._root_traces_lock = threading.Lock()
+
+        # Track parent relationships
+        # Maps run_id -> parent_run_id (self.parent_map)
+        self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = {}
+        self._parent_map_lock = threading.Lock()
 
         # Custom name mapping for explicit parent relationships
         # Maps custom name -> span_id (kept for handler's lifetime)
@@ -104,6 +125,131 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Thread-safe method to get a span_id by custom name."""
         with self._names_lock:
             return self.names.get(name)
+
+    def _set_root_trace(self, root_run_id: Union[UUID, str], trace: Any) -> None:
+        """Thread-safe method to set a root trace."""
+        with self._root_traces_lock:
+            self.root_traces[root_run_id] = trace
+
+    def _get_root_trace(self, root_run_id: Union[UUID, str]) -> Any:
+        """Thread-safe method to get a root trace."""
+        with self._root_traces_lock:
+            return self.root_traces.get(root_run_id)
+
+    def _set_parent(
+        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
+    ) -> None:
+        """Thread-safe method to set parent relationship."""
+        with self._parent_map_lock:
+            self.parent_map[run_id] = parent_run_id
+
+    def _get_parent(self, run_id: Union[UUID, str]) -> Optional[Union[UUID, str]]:
+        """Thread-safe method to get parent run_id."""
+        with self._parent_map_lock:
+            return self.parent_map.get(run_id)
+
+    def _find_root_run_id_for_trace(
+        self, target_trace: Any
+    ) -> Optional[Union[UUID, str]]:
+        """Find the root_run_id associated with a specific trace object."""
+        with self._root_traces_lock:
+            for root_run_id, trace in self.root_traces.items():
+                if trace is target_trace:
+                    return root_run_id
+        return None
+
+    def _is_descendant_of(
+        self, run_id: Union[UUID, str], potential_ancestor: Union[UUID, str]
+    ) -> bool:
+        """Check if run_id is a descendant of potential_ancestor in the parent chain."""
+        current = self._get_parent(run_id)
+        visited = {run_id}  # Avoid cycles
+
+        while current is not None and current not in visited:
+            if current == potential_ancestor:
+                return True
+            visited.add(current)
+            current = self._get_parent(current)
+
+        return False
+
+    def _cleanup_trace_tracking(self, root_run_id: Union[UUID, str]) -> None:
+        """
+        Clean up tracking data for a finished trace.
+
+        This prevents memory leaks by removing entries from root_traces and parent_map
+        when traces complete.
+
+        Args:
+            root_run_id: The root run ID of the finished trace
+        """
+        try:
+            # Remove from root_traces
+            with self._root_traces_lock:
+                removed_trace = self.root_traces.pop(root_run_id, None)
+
+            # Clean up all parent_map entries associated with this trace
+            # This includes the root_run_id itself and all its descendants
+            with self._parent_map_lock:
+                to_remove = []
+
+                # Find all run_ids that are descendants of this root
+                for run_id in self.parent_map.keys():
+                    if run_id == root_run_id or self._is_descendant_of(
+                        run_id, root_run_id
+                    ):
+                        to_remove.append(run_id)
+
+                # Remove all identified entries
+                for run_id in to_remove:
+                    self.parent_map.pop(run_id, None)
+
+            if removed_trace:
+                logger.debug(
+                    f"Cleaned up tracking data for trace {getattr(removed_trace, 'trace_id', 'unknown')} "
+                    f"(root_run_id: {root_run_id}, cleaned {len(to_remove)} parent_map entries)"
+                )
+
+        except Exception as e:
+            logger.error(f"Error cleaning up trace tracking data: {e}")
+
+    def _find_root_run_id(
+        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
+    ) -> Union[UUID, str]:
+        """Find the root run_id by traversing parent relationships."""
+        # Store this parent relationship
+        self._set_parent(run_id, parent_run_id)
+
+        # If no parent, this is the root
+        if parent_run_id is None:
+            return run_id
+
+        # Traverse up the parent chain to find the root
+        current: Optional[Union[UUID, str]] = parent_run_id
+        visited: set[Union[UUID, str]] = {run_id}  # Avoid cycles
+
+        while current is not None and current not in visited:
+            visited.add(current)
+
+            # Check if this run_id has a root trace stored
+            trace = self._get_root_trace(current)
+            if trace is not None:
+                # Found the root!
+                return current
+
+            # Get the parent of current
+            parent = self._get_parent(current)
+            if parent is None:
+                # current has no parent, so it's the root
+                return current
+
+            # Move up the chain
+            current = parent
+
+        # If we exit the loop, current is the root
+        # Here, parent_run_id cannot be None because of the early return above
+        assert parent_run_id is not None
+        return current if current is not None else parent_run_id
 
     def _get_parent_span_id_from_name(self, parent_name: str) -> Optional[str]:
         """
@@ -180,38 +326,102 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 return self._get_parent_span_id_from_name(parent_name)
             return None
 
-    def _get_or_create_trace_context(self, operation_name: str) -> tuple[Any, bool]:
+    def _get_or_create_trace_context(
+        self,
+        operation_name: str,
+        run_id: Optional[UUID] = None,
+        parent_run_id: Optional[UUID] = None,
+    ) -> tuple[Any, bool]:
         """
         Get existing trace from global context or create new one.
 
+        For LangGraph workflows:
+        - When parent_run_id is None (root call), create ONE trace for entire workflow
+        - When parent_run_id exists (child calls), reuse the root trace
+
         Args:
             operation_name: Name for the operation
+            run_id: Current run ID
+            parent_run_id: LangChain parent run ID (None for root calls)
 
         Returns:
             (trace, should_manage_lifecycle) tuple
         """
         from noveum_trace.core.context import get_current_trace, set_current_trace
 
-        existing_trace = get_current_trace()
+        # Handle case where run_id is None (for testing)
+        if run_id is None:
+            # Check global context for existing trace
+            existing_trace = get_current_trace()
+            if existing_trace is not None:
+                return existing_trace, False
 
+            # Create new trace
+            new_trace = self._client.start_trace(operation_name)
+            set_current_trace(new_trace)
+            return new_trace, True
+
+        # Find the root run_id for this operation
+        root_run_id = self._find_root_run_id(run_id, parent_run_id)
+
+        # Check if we already have a trace for this root
+        existing_root_trace = self._get_root_trace(root_run_id)
+        if existing_root_trace is not None:
+            # Reuse the root trace
+            set_current_trace(existing_root_trace)
+            return existing_root_trace, False
+
+        # Check global context as fallback
+        existing_trace = get_current_trace()
         if existing_trace is not None:
-            # Use existing trace - don't manage its lifecycle if manually controlled
-            should_manage = False
-            return existing_trace, should_manage
-        else:
-            # Only create auto trace if not manually controlled
+            # Use existing trace from context
+            return existing_trace, False
+
+        # Create new trace only for root calls
+        if parent_run_id is None:
+            # This is a root call - create trace and store it
             if self._manual_trace_control:
-                # Manual control but no trace - this shouldn't happen
-                # but fallback gracefully
                 logger.warning(
                     "Manual trace control enabled but no trace found. "
                     "Call start_trace() first."
                 )
 
-            # Create new trace in global context
             new_trace = self._client.start_trace(operation_name)
             set_current_trace(new_trace)
+            self._set_root_trace(root_run_id, new_trace)
             return new_trace, True
+        else:
+            # Child call with no root trace in our map
+            # Try to find the parent's trace by looking up the parent_run_id
+            parent_trace = None
+            if parent_run_id:
+                parent_span = self._get_run(parent_run_id)
+                if parent_span:
+                    # Get the trace that this parent span belongs to
+                    parent_trace = (
+                        parent_span.trace if hasattr(parent_span, "trace") else None
+                    )
+
+                # If we couldn't get trace from span, try looking up parent's root trace
+                if not parent_trace:
+                    parent_root_run_id = self._find_root_run_id(parent_run_id, None)
+                    parent_trace = self._get_root_trace(parent_root_run_id)
+
+            if parent_trace:
+                # Reuse parent's trace
+                set_current_trace(parent_trace)
+                # Store this trace under current root_run_id for future lookups
+                self._set_root_trace(root_run_id, parent_trace)
+                return parent_trace, False
+            else:
+                # Last resort: create fallback trace
+                logger.warning(
+                    f"Child operation '{operation_name}' has no parent trace. "
+                    "Creating new trace as fallback."
+                )
+                new_trace = self._client.start_trace(operation_name)
+                set_current_trace(new_trace)
+                return new_trace, True
 
     def _create_tool_span_from_action(
         self, action: "AgentAction", run_id: UUID
@@ -343,6 +553,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error("No active trace to end")
             return
 
+        # Find the root_run_id for cleanup before finishing
+        root_run_id = self._find_root_run_id_for_trace(trace)
+
         # Finish the trace
         self._client.finish_trace(trace)
 
@@ -350,6 +563,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         set_current_trace(None)
         self._trace_managed_by_langchain = None
         self._manual_trace_control = False
+
+        # Clean up tracking dictionaries to prevent memory leaks
+        if root_run_id is not None:
+            self._cleanup_trace_tracking(root_run_id)
 
         logger.debug(f"Manually ended trace: {trace.trace_id}")
 
@@ -375,11 +592,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if (
             self._trace_managed_by_langchain and self._active_runs() == 0
         ):  # No more active spans
+            # Find the root_run_id for cleanup before finishing
+            root_run_id = self._find_root_run_id_for_trace(
+                self._trace_managed_by_langchain
+            )
+
+            # Finish the trace
             self._client.finish_trace(self._trace_managed_by_langchain)
             from noveum_trace.core.context import set_current_trace
 
             set_current_trace(None)
             self._trace_managed_by_langchain = None
+
+            # Clean up tracking dictionaries to prevent memory leaks
+            if root_run_id is not None:
+                self._cleanup_trace_tracking(root_run_id)
 
     # LLM Events
     def on_llm_start(
@@ -412,7 +639,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(span_name)
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
 
             # Create span
             span = self._client.start_span(
@@ -593,7 +822,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(span_name)
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
 
             # Build base attributes
             attributes = {
@@ -602,8 +833,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     serialized.get("name", "unknown") if serialized else "unknown"
                 ),
                 "chain.operation": "execution",
-                # Input attributes
-                "chain.inputs": {k: str(v) for k, v in inputs.items()},
                 **{
                     k: v
                     for k, v in kwargs.items()
@@ -611,6 +840,22 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     and isinstance(v, (str, int, float, bool))
                 },
             }
+
+            # Handle inputs based on type
+            if isinstance(inputs, dict):
+                # Standard dict input - use as-is
+                attributes["chain.inputs"] = {k: str(v) for k, v in inputs.items()}
+            elif isinstance(inputs, list):
+                # List input - use chain.inputs.0, chain.inputs.1 format
+                for i, item in enumerate(inputs):
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            attributes[f"chain.inputs.{i}.{k}"] = v
+                    else:
+                        attributes[f"chain.inputs.{i}"] = str(item)
+            else:
+                # Non-dict, non-list input (e.g., string) - store as raw value
+                attributes["chain.inputs"] = inputs
 
             # Add LangGraph-specific attributes if available
             langgraph_attrs = build_langgraph_attributes(langgraph_metadata)
@@ -658,15 +903,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             # Handle both dict and non-dict outputs
             if isinstance(outputs, dict):
-                output_attrs = {k: str(v) for k, v in outputs.items()}
+                # Dict outputs - convert values to strings
+                chain_outputs = {k: str(v) for k, v in outputs.items()}
             else:
-                # Handle string or other primitive types
-                output_attrs = str(outputs)
+                # Non-dict outputs (e.g., string) - store as raw value
+                chain_outputs = outputs
 
             span.set_attributes(
                 {
                     # Output attributes
-                    "chain.output.outputs": output_attrs
+                    "chain.output.outputs": chain_outputs
                 }
             )
 
@@ -709,7 +955,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return None
 
-    # Custom Events
+    # Custom Events, primarily used for routing decisions
     def on_custom_event(
         self,
         name: str,
@@ -855,19 +1101,48 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(span_name)
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
 
             # Prepare input attributes
             input_attrs = {
                 "tool.input.input_str": input_str,  # String representation for compatibility
             }
 
-            # Add structured inputs if available
-            if inputs:
-                for key, value in inputs.items():
-                    # Convert values to strings for attribute storage
-                    input_attrs[f"tool.input.{key}"] = str(value)
-                input_attrs["tool.input.argument_count"] = str(len(inputs))
+            # Add structured inputs if available - handle different input types
+            if inputs is not None:
+                if isinstance(inputs, dict):
+                    # Case 1: Dict input (current/standard behavior)
+                    for key, value in inputs.items():
+                        # Convert values to strings for attribute storage
+                        input_attrs[f"tool.input.{key}"] = str(value)
+                    input_attrs["tool.input.argument_count"] = str(len(inputs))
+
+                elif isinstance(inputs, list):
+                    # Check if all elements are dicts
+                    if inputs and all(isinstance(item, dict) for item in inputs):
+                        # Case 2: List of dicts (similar to chain handling)
+                        for index, input_dict in enumerate(inputs):
+                            for k, v in input_dict.items():
+                                input_attrs[f"tool.input.{index}.{k}"] = v
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
+                    else:
+                        # Case 3: List but not all elements are dicts
+                        for index, item in enumerate(inputs):
+                            input_attrs[f"tool.input.{index}"] = str(item)
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
+
+                elif isinstance(inputs, tuple):
+                    # Case 4: Tuple input (treat like list case 3)
+                    for index, item in enumerate(inputs):
+                        input_attrs[f"tool.input.{index}"] = str(item)
+                    input_attrs["tool.input.argument_count"] = str(len(inputs))
+
+                else:
+                    # Case 5: Single value (str, int, etc.)
+                    input_attrs["tool.input.arg"] = str(inputs)
+                    input_attrs["tool.input.argument_count"] = "1"
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
@@ -992,7 +1267,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(span_name)
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
 
             # Create span for agent
             agent_name = serialized.get("name", "unknown") if serialized else "unknown"
@@ -1011,7 +1288,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "agent.operation": "execution",
                     "agent.capabilities": agent_capabilities,
                     # Input attributes
-                    "agent.input.inputs": {k: str(v) for k, v in inputs.items()},
+                    "agent.input.inputs": safe_inputs_to_dict(inputs, "input"),
                     **{
                         k: v
                         for k, v in kwargs.items()
@@ -1103,9 +1380,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Add agent output attributes
             span.set_attributes(
                 {
-                    "agent.output.finish.return_values": {
-                        k: str(v) for k, v in finish.return_values.items()
-                    },
+                    "agent.output.finish.return_values": safe_inputs_to_dict(
+                        finish.return_values, "return"
+                    ),
                     "agent.output.finish.log": finish.log,
                 }
             )
@@ -1114,9 +1391,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span.add_event(
                 "agent_finish",
                 {
-                    "finish.return_values": {
-                        k: str(v) for k, v in finish.return_values.items()
-                    },
+                    "finish.return_values": safe_inputs_to_dict(
+                        finish.return_values, "return"
+                    ),
                     "finish.log": finish.log,
                 },
             )
@@ -1161,7 +1438,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
-            trace, should_manage = self._get_or_create_trace_context(span_name)
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
 
             # Create span
             span = self._client.start_span(
