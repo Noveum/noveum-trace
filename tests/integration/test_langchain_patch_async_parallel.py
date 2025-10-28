@@ -278,9 +278,7 @@ class TestParallelWorkflowTraceGrouping:
                     patch(
                         "noveum_trace.core.context.get_current_trace", return_value=None
                     ),
-                    patch(
-                        "noveum_trace.core.context.set_current_trace"
-                    ),
+                    patch("noveum_trace.core.context.set_current_trace"),
                 ):
 
                     # Call trace context method (simulating root call)
