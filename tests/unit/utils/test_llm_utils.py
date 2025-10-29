@@ -5,6 +5,7 @@ This module tests the comprehensive model registry, token counting,
 cost estimation, and model validation functionality.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from noveum_trace.utils.llm_utils import (
@@ -176,6 +177,33 @@ def hello_world():
         count = estimate_token_count(messages)
         assert count > 20  # Should include message overhead
 
+    def test_estimate_token_count_uses_provider_tokenizer(self, monkeypatch):
+        """Ensure provider-specific tokenizers are consulted when available."""
+
+        def _mock_count(*_, **__):
+            return 42
+
+        monkeypatch.setattr(
+            "noveum_trace.utils.tokenizers.count_tokens", _mock_count
+        )
+
+        count = estimate_token_count("hello world", model="gpt-4o")
+        assert count == 42
+
+    def test_estimate_token_count_fallback_when_tokenizer_missing(self, monkeypatch):
+        """Fallback heuristics should be used when provider tokenizers return None."""
+
+        def _mock_count(*_, **__):
+            return None
+
+        monkeypatch.setattr(
+            "noveum_trace.utils.tokenizers.count_tokens", _mock_count
+        )
+
+        count = estimate_token_count("hello world", model="gpt-4o")
+        assert isinstance(count, int)
+        assert count > 0
+
 
 class TestCostEstimation:
     """Test cost estimation functionality."""
@@ -191,12 +219,12 @@ class TestCostEstimation:
 
     def test_estimate_cost_accuracy(self):
         """Test cost estimation accuracy for known pricing."""
-        # GPT-4.1: $2.00 input, $8.00 output per 1M tokens
+        # GPT-4.1: $3.00 input, $12.00 output per 1M tokens (Oct 29 2025)
         cost = estimate_cost("gpt-4.1", input_tokens=1000000, output_tokens=1000000)
 
-        assert abs(cost["input_cost"] - 2.00) < 0.01
-        assert abs(cost["output_cost"] - 8.00) < 0.01
-        assert abs(cost["total_cost"] - 10.00) < 0.01
+        assert abs(cost["input_cost"] - 3.00) < 0.01
+        assert abs(cost["output_cost"] - 12.00) < 0.01
+        assert abs(cost["total_cost"] - 15.00) < 0.01
 
     def test_estimate_cost_different_models(self):
         """Test cost estimation for different models."""
@@ -228,8 +256,8 @@ class TestCostEstimation:
 
         assert "input_cost_per_1m" in cost
         assert "output_cost_per_1m" in cost
-        assert cost["input_cost_per_1m"] == 2.00
-        assert cost["output_cost_per_1m"] == 8.00
+        assert cost["input_cost_per_1m"] == 3.00
+        assert cost["output_cost_per_1m"] == 12.00
 
 
 class TestMetadataExtraction:
@@ -257,6 +285,39 @@ class TestMetadataExtraction:
 
         metadata = extract_llm_metadata(mock_response)
         assert isinstance(metadata, dict)
+
+    def test_extract_llm_metadata_gemini_usage_metadata(self):
+        """Gemini responses expose usage via usage_metadata."""
+
+        response = SimpleNamespace(
+            model="gemini-1.5-pro",
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=12,
+                candidates_token_count=4,
+                total_token_count=16,
+            ),
+        )
+
+        metadata = extract_llm_metadata(response)
+
+        assert metadata.get("llm.usage.prompt_tokens") == 12
+        assert metadata.get("llm.usage.output_tokens") == 4
+        assert metadata.get("llm.usage.total_tokens") == 16
+        assert metadata.get("llm.provider") == "google"
+
+    def test_extract_llm_metadata_cohere_meta_tokens(self):
+        """Cohere responses surface counts inside the meta.tokens structure."""
+
+        response = SimpleNamespace(
+            model="command-r",
+            meta={"tokens": {"input_tokens": 7, "output_tokens": 3}},
+        )
+
+        metadata = extract_llm_metadata(response)
+
+        assert metadata.get("llm.usage.input_tokens") == 7
+        assert metadata.get("llm.usage.output_tokens") == 3
+        assert metadata.get("llm.usage.total_tokens") == 10
 
 
 class TestProxyServiceDetection:
