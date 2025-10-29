@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
+from noveum_trace.utils import tokenizers
+
 
 @dataclass
 class ModelInfo:
@@ -26,7 +28,8 @@ class ModelInfo:
     training_cutoff: Optional[str] = None
 
 
-# Comprehensive model definitions based on latest pricing (2024-2025)
+# Comprehensive model definitions with pricing as of October 29, 2025
+# Note: Pricing information is current as of October 29, 2025. Please verify latest pricing from official provider websites.
 MODEL_REGISTRY: dict[str, ModelInfo] = {
     # OpenAI GPT-4.1 Family
     "gpt-4.1": ModelInfo(
@@ -34,8 +37,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gpt-4.1",
         context_window=1047576,
         max_output_tokens=32768,
-        input_cost_per_1m=2.00,
-        output_cost_per_1m=8.00,
+        input_cost_per_1m=3.00,
+        output_cost_per_1m=12.00,
         supports_function_calling=True,
         training_cutoff="Jun 2024",
     ),
@@ -44,8 +47,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gpt-4.1-mini",
         context_window=1047576,
         max_output_tokens=32768,
-        input_cost_per_1m=0.40,
-        output_cost_per_1m=1.60,
+        input_cost_per_1m=0.80,
+        output_cost_per_1m=3.20,
         supports_function_calling=True,
         training_cutoff="Jun 2024",
     ),
@@ -54,8 +57,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gpt-4.1-nano",
         context_window=1047576,
         max_output_tokens=32768,
-        input_cost_per_1m=0.10,
-        output_cost_per_1m=0.40,
+        input_cost_per_1m=0.20,
+        output_cost_per_1m=0.80,
         supports_function_calling=True,
         training_cutoff="Jun 2024",
     ),
@@ -90,44 +93,14 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         supports_function_calling=False,
         training_cutoff="Oct 2023",
     ),
-    "o3": ModelInfo(
-        provider="openai",
-        name="o3",
-        context_window=200000,
-        max_output_tokens=100000,
-        input_cost_per_1m=10.00,
-        output_cost_per_1m=40.00,
-        supports_function_calling=False,
-        training_cutoff="Jun 2024",
-    ),
-    "o3-mini": ModelInfo(
-        provider="openai",
-        name="o3-mini",
-        context_window=200000,
-        max_output_tokens=100000,
-        input_cost_per_1m=1.10,
-        output_cost_per_1m=4.40,
-        supports_function_calling=False,
-        training_cutoff="Oct 2023",
-    ),
-    "o4-mini": ModelInfo(
-        provider="openai",
-        name="o4-mini",
-        context_window=200000,
-        max_output_tokens=100000,
-        input_cost_per_1m=1.10,
-        output_cost_per_1m=4.40,
-        supports_function_calling=False,
-        training_cutoff="Jun 2024",
-    ),
     # OpenAI GPT-4 Family
     "gpt-4o": ModelInfo(
         provider="openai",
         name="gpt-4o",
         context_window=128000,
         max_output_tokens=16384,
-        input_cost_per_1m=2.50,
-        output_cost_per_1m=10.00,
+        input_cost_per_1m=5.00,
+        output_cost_per_1m=20.00,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Oct 2023",
@@ -159,19 +132,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gpt-4o-mini",
         context_window=128000,
         max_output_tokens=16384,
-        input_cost_per_1m=0.15,
-        output_cost_per_1m=0.60,
-        supports_vision=True,
-        supports_function_calling=True,
-        training_cutoff="Oct 2023",
-    ),
-    "gpt-4.5-preview": ModelInfo(
-        provider="openai",
-        name="gpt-4.5-preview",
-        context_window=128000,
-        max_output_tokens=16384,
-        input_cost_per_1m=75.00,
-        output_cost_per_1m=150.00,
+        input_cost_per_1m=0.60,
+        output_cost_per_1m=2.40,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Oct 2023",
@@ -196,6 +158,51 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         output_cost_per_1m=60.00,
         supports_function_calling=True,
         training_cutoff="Sep 2021",
+    ),
+    # OpenAI GPT-5 Family
+    "gpt-5": ModelInfo(
+        provider="openai",
+        name="gpt-5",
+        context_window=128000,
+        max_output_tokens=16384,
+        input_cost_per_1m=1.25,
+        output_cost_per_1m=10.00,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
+    ),
+    "gpt-5-mini": ModelInfo(
+        provider="openai",
+        name="gpt-5-mini",
+        context_window=128000,
+        max_output_tokens=16384,
+        input_cost_per_1m=0.25,
+        output_cost_per_1m=2.00,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
+    ),
+    "gpt-5-nano": ModelInfo(
+        provider="openai",
+        name="gpt-5-nano",
+        context_window=128000,
+        max_output_tokens=16384,
+        input_cost_per_1m=0.05,
+        output_cost_per_1m=0.40,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
+    ),
+    "gpt-5-pro": ModelInfo(
+        provider="openai",
+        name="gpt-5-pro",
+        context_window=128000,
+        max_output_tokens=16384,
+        input_cost_per_1m=15.00,
+        output_cost_per_1m=120.00,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
     ),
     # OpenAI GPT-3.5 Family
     "gpt-3.5-turbo": ModelInfo(
@@ -224,8 +231,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gemini-2.5-flash",
         context_window=1000000,
         max_output_tokens=8192,
-        input_cost_per_1m=0.15,
-        output_cost_per_1m=0.60,
+        input_cost_per_1m=0.30,
+        output_cost_per_1m=2.50,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Apr 2024",
@@ -235,8 +242,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gemini-2.5-pro",
         context_window=2000000,
         max_output_tokens=8192,
-        input_cost_per_1m=2.50,
-        output_cost_per_1m=15.00,
+        input_cost_per_1m=1.25,
+        output_cost_per_1m=10.00,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Apr 2024",
@@ -246,19 +253,20 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gemini-2.0-flash",
         context_window=1000000,
         max_output_tokens=8192,
-        input_cost_per_1m=0.10,
-        output_cost_per_1m=0.40,
+        input_cost_per_1m=0.15,
+        output_cost_per_1m=0.60,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Apr 2024",
     ),
+    # Gemini 1.5 pricing published per 1K characters; converted to per 1M tokens assuming 4 characters per token.
     "gemini-1.5-pro": ModelInfo(
         provider="google",
         name="gemini-1.5-pro",
         context_window=2000000,
         max_output_tokens=8192,
-        input_cost_per_1m=2.50,
-        output_cost_per_1m=10.00,
+        input_cost_per_1m=1.25,
+        output_cost_per_1m=5.00,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Apr 2024",
@@ -268,8 +276,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="gemini-1.5-flash",
         context_window=1000000,
         max_output_tokens=8192,
-        input_cost_per_1m=0.15,
-        output_cost_per_1m=0.60,
+        input_cost_per_1m=0.075,
+        output_cost_per_1m=0.30,
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Apr 2024",
@@ -318,6 +326,29 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         supports_vision=True,
         supports_function_calling=True,
         training_cutoff="Aug 2023",
+    ),
+    # Anthropic Claude 4 Family
+    "claude-opus-4": ModelInfo(
+        provider="anthropic",
+        name="claude-opus-4",
+        context_window=200000,
+        max_output_tokens=8192,
+        input_cost_per_1m=15.00,
+        output_cost_per_1m=75.00,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
+    ),
+    "claude-sonnet-4": ModelInfo(
+        provider="anthropic",
+        name="claude-sonnet-4",
+        context_window=200000,
+        max_output_tokens=8192,
+        input_cost_per_1m=3.00,
+        output_cost_per_1m=15.00,
+        supports_vision=True,
+        supports_function_calling=True,
+        training_cutoff="2025",
     ),
     # Meta Llama Family
     "llama-3.3-70b": ModelInfo(
@@ -435,12 +466,20 @@ MODEL_ALIASES = {
     "gpt-4-0314": "gpt-4",
     "gpt-3.5-turbo-1106": "gpt-3.5-turbo",
     "gpt-3.5-turbo-16k": "gpt-3.5-turbo",
+    # OpenAI GPT-5 aliases
+    "gpt5": "gpt-5",
+    "gpt5-mini": "gpt-5-mini",
+    "gpt5-nano": "gpt-5-nano",
+    "gpt5-pro": "gpt-5-pro",
     # Anthropic aliases
     "claude-3-opus-20240229": "claude-3-opus",
     "claude-3-sonnet-20240229": "claude-3.5-sonnet",
     "claude-3-haiku-20240307": "claude-3.5-haiku",
     "claude-3.5-sonnet-20241022": "claude-3.5-sonnet",
     "claude-3.5-haiku-20241022": "claude-3.5-haiku",
+    # Anthropic Claude 4 aliases
+    "claude-4-opus": "claude-opus-4",
+    "claude-4-sonnet": "claude-sonnet-4",
     # Google aliases
     "gemini-pro": "gemini-1.5-pro",
     "gemini-flash": "gemini-1.5-flash",
@@ -551,65 +590,75 @@ def normalize_model_name(model: str) -> str:
     return model
 
 
-def estimate_token_count(text: Union[str, list[dict[str, Any]], Any]) -> int:
-    """
-    Estimate token count for text or messages.
-
-    This provides a rough estimation. For production use with OpenAI,
-    consider using tiktoken library for accurate counting.
+def estimate_token_count(
+    text: Union[str, list[dict[str, Any]], Any],
+    *,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> int:
+    """Estimate token count for text or messages.
 
     Args:
         text: Text string, list of messages, or other content
+        model: Optional model name to leverage provider-specific tokenizers
+        provider: Optional provider override (e.g., ``"openai"``)
 
     Returns:
         Estimated token count
     """
+
     if isinstance(text, list):
-        # Handle messages format
         total_tokens = 0
         for message in text:
             if isinstance(message, dict):
-                # Handle message dictionaries
                 if "content" in message:
-                    total_tokens += estimate_token_count(message["content"])
-                # Add overhead for role and structure
+                    total_tokens += estimate_token_count(
+                        message["content"], model=model, provider=provider
+                    )
                 total_tokens += 10  # Overhead for message structure
             else:
-                total_tokens += estimate_token_count(str(message))
+                total_tokens += estimate_token_count(
+                    message, model=model, provider=provider
+                )
         return max(1, total_tokens)
 
     if isinstance(text, dict):
-        # Handle dictionary content
         total_tokens = 0
         for key, value in text.items():
-            total_tokens += estimate_token_count(str(key))
-            total_tokens += estimate_token_count(value)
+            total_tokens += estimate_token_count(
+                key, model=model, provider=provider
+            )
+            total_tokens += estimate_token_count(
+                value, model=model, provider=provider
+            )
         return max(1, total_tokens)
 
     if not isinstance(text, str):
         text = str(text)
 
-    # Enhanced estimation based on content analysis
+    try:
+        provider_tokens = tokenizers.count_tokens(
+            text, model=model, provider=provider
+        )
+    except Exception:
+        provider_tokens = None
+
+    if provider_tokens is not None:
+        return provider_tokens
+
     if not text:
         return 1
 
-    # Count different types of content
     words = len(text.split())
     chars = len(text)
 
-    # Adjust for different content types
     if text.strip().startswith("{") and text.strip().endswith("}"):
-        # JSON content - typically more tokens per character
         return max(1, int(chars / 3))
-    elif text.count("\n") > 5:
-        # Multi-line content - code or structured text
+    if text.count("\n") > 5:
         return max(1, int(chars / 3.5))
-    elif len([w for w in text.split() if len(w) > 10]) > words * 0.3:
-        # Technical content with long words
+    if len([w for w in text.split() if len(w) > 10]) > words * 0.3:
         return max(1, int(chars / 3))
-    else:
-        # Regular text - approximately 4 characters per token
-        return max(1, int(chars / 4))
+    return max(1, int(chars / 4))
 
 
 def estimate_cost(
@@ -669,46 +718,113 @@ def extract_llm_metadata(response: Any) -> dict[str, Any]:
     """
     metadata = {}
 
-    # Handle OpenAI response format
-    if hasattr(response, "usage"):
-        usage = response.usage
-        if hasattr(usage, "prompt_tokens"):
-            metadata["llm.usage.prompt_tokens"] = usage.prompt_tokens
-        if hasattr(usage, "completion_tokens"):
-            metadata["llm.usage.completion_tokens"] = usage.completion_tokens
-        if hasattr(usage, "total_tokens"):
-            metadata["llm.usage.total_tokens"] = usage.total_tokens
+    def _get_value(obj: Any, name: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(name)
+        return getattr(obj, name, None)
 
-    # Handle alternative usage attribute names
-    if hasattr(response, "usage"):
-        usage = response.usage
-        if hasattr(usage, "input_tokens"):
-            metadata["llm.usage.input_tokens"] = usage.input_tokens
-        if hasattr(usage, "output_tokens"):
-            metadata["llm.usage.output_tokens"] = usage.output_tokens
+    def _update_usage(usage_obj: Any) -> None:
+        prompt = _get_value(usage_obj, "prompt_tokens")
+        if prompt is not None:
+            metadata.setdefault("llm.usage.prompt_tokens", prompt)
+            metadata.setdefault("llm.usage.input_tokens", prompt)
+
+        completion = _get_value(usage_obj, "completion_tokens")
+        if completion is not None:
+            metadata.setdefault("llm.usage.completion_tokens", completion)
+            metadata.setdefault("llm.usage.output_tokens", completion)
+
+        total = _get_value(usage_obj, "total_tokens")
+        if total is not None:
+            metadata.setdefault("llm.usage.total_tokens", total)
+
+        input_tokens = _get_value(usage_obj, "input_tokens")
+        if input_tokens is not None:
+            metadata.setdefault("llm.usage.input_tokens", input_tokens)
+
+        output_tokens = _get_value(usage_obj, "output_tokens")
+        if output_tokens is not None:
+            metadata.setdefault("llm.usage.output_tokens", output_tokens)
+
+    def _update_usage_metadata(usage_obj: Any) -> None:
+        prompt = _get_value(usage_obj, "prompt_token_count")
+        if prompt is not None:
+            metadata.setdefault("llm.usage.prompt_tokens", prompt)
+            metadata.setdefault("llm.usage.input_tokens", prompt)
+
+        completion = _get_value(usage_obj, "candidates_token_count")
+        if completion is not None:
+            metadata.setdefault("llm.usage.completion_tokens", completion)
+            metadata.setdefault("llm.usage.output_tokens", completion)
+
+        total = _get_value(usage_obj, "total_token_count")
+        if total is not None:
+            metadata.setdefault("llm.usage.total_tokens", total)
+
+    usage = _get_value(response, "usage")
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is not None:
+        _update_usage(usage)
+
+    usage_metadata = _get_value(response, "usage_metadata")
+    if usage_metadata is None and isinstance(response, dict):
+        usage_metadata = response.get("usage_metadata")
+    if usage_metadata is not None:
+        _update_usage_metadata(usage_metadata)
+
+    meta = _get_value(response, "meta")
+    if meta is not None:
+        tokens_info = _get_value(meta, "tokens")
+        if tokens_info is not None:
+            input_tokens = _get_value(tokens_info, "input_tokens")
+            if input_tokens is not None:
+                metadata.setdefault("llm.usage.input_tokens", input_tokens)
+            output_tokens = _get_value(tokens_info, "output_tokens")
+            if output_tokens is not None:
+                metadata.setdefault("llm.usage.output_tokens", output_tokens)
+            prompt_tokens = _get_value(tokens_info, "prompt_tokens")
+            if prompt_tokens is not None:
+                metadata.setdefault("llm.usage.prompt_tokens", prompt_tokens)
 
     # Extract model information
-    if hasattr(response, "model"):
-        metadata["llm.model"] = response.model
-        model_info = get_model_info(response.model)
+    model_name = _get_value(response, "model")
+    if model_name is not None:
+        metadata["llm.model"] = model_name
+        model_info = get_model_info(model_name)
         if model_info:
-            metadata["llm.provider"] = model_info.provider
-            metadata["llm.context_window"] = model_info.context_window
-            metadata["llm.max_output_tokens"] = model_info.max_output_tokens
+            metadata.setdefault("llm.provider", model_info.provider)
+            metadata.setdefault("llm.context_window", model_info.context_window)
+            metadata.setdefault("llm.max_output_tokens", model_info.max_output_tokens)
 
     # Extract system fingerprint for OpenAI
-    if hasattr(response, "system_fingerprint"):
-        metadata["llm.system_fingerprint"] = response.system_fingerprint
+    system_fingerprint = _get_value(response, "system_fingerprint")
+    if system_fingerprint is not None:
+        metadata["llm.system_fingerprint"] = system_fingerprint
 
     # Extract finish reason
-    if hasattr(response, "choices") and response.choices:
-        choice = response.choices[0]
-        if hasattr(choice, "finish_reason"):
-            metadata["llm.finish_reason"] = choice.finish_reason
+    choices = _get_value(response, "choices")
+    if choices:
+        choice = choices[0]
+        finish_reason = _get_value(choice, "finish_reason")
+        if finish_reason is not None:
+            metadata["llm.finish_reason"] = finish_reason
 
-    # Handle streaming responses
-    if hasattr(response, "created"):
-        metadata["llm.created"] = response.created
+    created = _get_value(response, "created")
+    if created is not None:
+        metadata["llm.created"] = created
+
+    if "llm.usage.total_tokens" not in metadata:
+        prompt_tokens = metadata.get("llm.usage.input_tokens") or metadata.get(
+            "llm.usage.prompt_tokens"
+        )
+        completion_tokens = metadata.get("llm.usage.output_tokens") or metadata.get(
+            "llm.usage.completion_tokens"
+        )
+        if prompt_tokens is not None and completion_tokens is not None:
+            metadata["llm.usage.total_tokens"] = prompt_tokens + completion_tokens
 
     return metadata
 
@@ -757,7 +873,9 @@ def validate_model_compatibility(model: str, messages: list[Any]) -> dict[str, A
 
     if model_info:
         # Estimate token usage
-        estimated_tokens = estimate_token_count(messages)
+        estimated_tokens = estimate_token_count(
+            messages, model=model, provider=model_info.provider
+        )
 
         if estimated_tokens > model_info.context_window * 0.9:
             result["warnings"].append(
