@@ -23,7 +23,7 @@ IMPORTANT:
 When using ainvoke (async execution), it is imperative to set:
     use_langchain_assigned_parent=True
 when creating the NoveumTraceCallbackHandler.
- 
+
 LangChain-assigned parent relationships ensure proper trace hierarchy when
 nodes are executed asynchronously.
 """
@@ -67,11 +67,7 @@ def fetch_data_node(state: DataCollectionState) -> DataCollectionState:
     # Simulate data fetching with LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
     response = llm.invoke(
-        [
-            HumanMessage(
-                content=f"Generate sample weather data for: {state['query']}"
-            )
-        ]
+        [HumanMessage(content=f"Generate sample weather data for: {state['query']}")]
     )
 
     state["raw_data"] = response.content
@@ -203,7 +199,9 @@ def generate_report_node(state: AnalysisState) -> AnalysisState:
         if "recommend" in line.lower()
     ][:2]
 
-    state["recommendations"] = recommendations if recommendations else ["No specific recommendations"]
+    state["recommendations"] = (
+        recommendations if recommendations else ["No specific recommendations"]
+    )
 
     print(f"   ✓ Report generated ({len(state['report'])} characters)")
     print(f"   ✓ Recommendations: {len(state['recommendations'])}")
@@ -252,11 +250,11 @@ class CombinedState(TypedDict):
 def data_collection_node(state: CombinedState, config) -> CombinedState:
     """Node that executes the entire data collection graph."""
     print("\n🔄 [Parent] EXECUTING DATA COLLECTION GRAPH NODE")
-    
+
     # Create and compile the data collection graph
     graph = create_data_collection_graph()
     app = graph.compile()
-    
+
     # Prepare input state for data collection
     collection_state: DataCollectionState = {
         "query": state["query"],
@@ -265,7 +263,7 @@ def data_collection_node(state: CombinedState, config) -> CombinedState:
         "stored": state.get("stored", False),
         "error": state.get("error", ""),
     }
-    
+
     # Configure with custom name for this sub-graph
     sub_config = {
         "callbacks": config.get("callbacks", []),
@@ -276,27 +274,27 @@ def data_collection_node(state: CombinedState, config) -> CombinedState:
         },
         "tags": ["graph1", "data_collection"],
     }
-    
+
     # Execute with config to enable tracing
     result = app.invoke(collection_state, config=sub_config)
-    
+
     # Update combined state with results
     state["raw_data"] = result["raw_data"]
     state["validated"] = result["validated"]
     state["stored"] = result["stored"]
     state["error"] = result["error"]
-    
+
     return state
 
 
 def analysis_node(state: CombinedState, config) -> CombinedState:
     """Node that executes the entire analysis graph."""
     print("\n🔄 [Parent] EXECUTING ANALYSIS GRAPH NODE")
-    
+
     # Create and compile the analysis graph
     graph = create_analysis_graph()
     app = graph.compile()
-    
+
     # Prepare input state for analysis
     analysis_state: AnalysisState = {
         "data": state["raw_data"],
@@ -304,7 +302,7 @@ def analysis_node(state: CombinedState, config) -> CombinedState:
         "report": state.get("report", ""),
         "recommendations": state.get("recommendations", []),
     }
-    
+
     # Configure with custom name for this sub-graph
     sub_config = {
         "callbacks": config.get("callbacks", []),
@@ -315,31 +313,31 @@ def analysis_node(state: CombinedState, config) -> CombinedState:
         },
         "tags": ["graph2", "analysis"],
     }
-    
+
     # Execute with config to enable tracing
     result = app.invoke(analysis_state, config=sub_config)
-    
+
     # Update combined state with results
     state["insights"] = result["insights"]
     state["report"] = result["report"]
     state["recommendations"] = result["recommendations"]
-    
+
     return state
 
 
 def create_parent_graph() -> StateGraph:
     """Create parent graph that orchestrates both pipelines."""
     workflow = StateGraph(CombinedState)
-    
+
     # Add nodes for both graphs
     workflow.add_node("data_collection", data_collection_node)
     workflow.add_node("analysis", analysis_node)
-    
+
     # Set entry point and edges
     workflow.set_entry_point("data_collection")
     workflow.add_edge("data_collection", "analysis")
     workflow.add_edge("analysis", END)
-    
+
     return workflow
 
 
@@ -455,6 +453,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-

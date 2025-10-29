@@ -5,16 +5,16 @@ This example demonstrates how to use metadata.noveum to:
 1. Assign custom names to graph execution spans
 2. Explicitly set parent-child relationships between two separate graphs
 
-The example shows two independent LangGraph graphs where Graph 2 
+The example shows two independent LangGraph graphs where Graph 2
 is explicitly made a child of Graph 1 using custom naming.
 
 Graph 1: Data Collection Pipeline (3 nodes)
   - fetch_data → validate_data → store_data
 
-Graph 2: Analysis Pipeline (3 nodes)  
+Graph 2: Analysis Pipeline (3 nodes)
   - load_data → analyze_data → generate_report
 
-Both graphs are executed separately but Graph 2 is explicitly 
+Both graphs are executed separately but Graph 2 is explicitly
 nested under Graph 1 in the trace hierarchy using parent_name.
 """
 
@@ -56,11 +56,7 @@ def fetch_data_node(state: DataCollectionState) -> DataCollectionState:
     # Simulate data fetching with LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
     response = llm.invoke(
-        [
-            HumanMessage(
-                content=f"Generate sample weather data for: {state['query']}"
-            )
-        ]
+        [HumanMessage(content=f"Generate sample weather data for: {state['query']}")]
     )
 
     state["raw_data"] = response.content
@@ -192,7 +188,9 @@ def generate_report_node(state: AnalysisState) -> AnalysisState:
         if "recommend" in line.lower()
     ][:2]
 
-    state["recommendations"] = recommendations if recommendations else ["No specific recommendations"]
+    state["recommendations"] = (
+        recommendations if recommendations else ["No specific recommendations"]
+    )
 
     print(f"   ✓ Report generated ({len(state['report'])} characters)")
     print(f"   ✓ Recommendations: {len(state['recommendations'])}")
@@ -240,7 +238,7 @@ def main():
     print("✅ Noveum Trace initialized")
 
     # Create callback handler
-    handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
+    handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
     print("✅ Callback handler created")
 
     # Manually start a trace
@@ -303,7 +301,7 @@ def main():
         "callbacks": [handler],
         "metadata": {
             "noveum": {
-                  # Custom name for Graph 2
+                # Custom name for Graph 2
                 "parent_name": "data_collection_graph",  # Reference to Graph 1
             }
         },
@@ -369,6 +367,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
