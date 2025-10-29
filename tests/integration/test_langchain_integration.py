@@ -1962,7 +1962,7 @@ class TestLangChainIntegration:
 
                     assert parent_id == "context_span_id"
                     mock_logger.warning.assert_called_once()
-                    assert "Could not resolve parent from parent_run_id" in str(
+                    assert "Could not resolve parent from parent_name" in str(
                         mock_logger.warning.call_args
                     )
 

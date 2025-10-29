@@ -47,7 +47,7 @@ def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler for Noveum Trace integration."""
 
-    def __init__(self, use_langchain_assigned_parent: bool = False) -> None:
+    def __init__(self, use_langchain_assigned_parent: bool = True) -> None:
         """Initialize the callback handler.
 
         Args:
@@ -276,7 +276,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # If we exit the loop, current is the root
         # Here, parent_run_id cannot be None because of the early return above
-        assert parent_run_id is not None
+        
         return current if current is not None else parent_run_id
 
     def _get_parent_span_id_from_name(self, parent_name: str) -> Optional[str]:
@@ -306,8 +306,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         Resolve parent span ID based on mode.
 
         When use_langchain_assigned_parent=True:
-        - Use parent_run_id to look up parent span
-        - Fallback to parent_name if parent_run_id lookup fails
+        - Use parent_name to look up parent span (manual override)
+        - Fallback to parent_run_id if parent_name lookup fails
         - Fallback to context-based parent with WARNING if both fail
 
         When use_langchain_assigned_parent=False:
@@ -322,17 +322,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             Parent span ID if resolved, None otherwise
         """
         if self._use_langchain_assigned_parent:
-            # Try parent_run_id first
-            if parent_run_id:
-                parent_span = self._get_run(parent_run_id)
-                if parent_span:
-                    return parent_span.span_id
-
-            # Fallback to parent_name
+            # Try parent_name first (manual override has highest priority)
             if parent_name:
                 span_id = self._get_parent_span_id_from_name(parent_name)
                 if span_id:
                     return span_id
+
+            # Fallback to parent_run_id
+            if parent_run_id:
+                parent_span = self._get_run(parent_run_id)
+                if parent_span:
+                    return parent_span.span_id
 
             # Final fallback: context-based parent with WARNING
             from noveum_trace.core.context import get_current_span
@@ -340,8 +340,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             current_span = get_current_span()
             if current_span:
                 logger.warning(
-                    f"Could not resolve parent from parent_run_id ({parent_run_id}) "
-                    f"or parent_name ({parent_name}). Auto-assigning parent span "
+                    f"Could not resolve parent from parent_name ({parent_name}) "
+                    f"or parent_run_id ({parent_run_id}). Auto-assigning parent span "
                     f"from context: {current_span.span_id}"
                 )
                 return current_span.span_id
