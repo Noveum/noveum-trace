@@ -240,7 +240,7 @@ def main():
     print("✅ Noveum Trace initialized")
 
     # Create callback handler
-    handler = NoveumTraceCallbackHandler()
+    handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
     print("✅ Callback handler created")
 
     # Manually start a trace
@@ -303,7 +303,7 @@ def main():
         "callbacks": [handler],
         "metadata": {
             "noveum": {
-                "name": "analysis_graph",  # Custom name for Graph 2
+                  # Custom name for Graph 2
                 "parent_name": "data_collection_graph",  # Reference to Graph 1
             }
         },
