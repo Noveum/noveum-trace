@@ -7,19 +7,19 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Simple, decorator-based tracing SDK for LLM applications and multi-agent systems.**
+**Simple, intuitive tracing SDK for LLM applications and multi-agent systems.**
 
-Noveum Trace provides an easy way to add observability to your LLM applications. With simple decorators, you can trace function calls, LLM interactions, agent workflows, and multi-agent coordination patterns.
+Noveum Trace provides an easy way to add observability to your LLM applications. With intuitive context managers, you can trace function calls, LLM interactions, agent workflows, and multi-agent coordination patterns.
 
 ## ✨ Key Features
 
-- **🎯 Decorator-First API** - Add tracing with a single `@trace` decorator
+- **🎯 Simple Context Manager API** - Add tracing with intuitive `with` statements
 - **🤖 Multi-Agent Support** - Built for multi-agent systems and workflows
 - **☁️ Cloud Integration** - Send traces to Noveum platform or custom endpoints
 - **🔌 Framework Agnostic** - Works with any Python LLM framework
 - **🚀 Zero Configuration** - Works out of the box with sensible defaults
 - **📊 Comprehensive Tracing** - Capture function calls, LLM interactions, and agent workflows
-- **🔄 Flexible Approaches** - Decorators, and context managers
+- **🔄 Flexible Integration** - Context managers for granular control
 
 ## 🚀 Quick Start
 
@@ -40,70 +40,41 @@ noveum_trace.init(
     project="my-llm-app"
 )
 
-# Trace any function
-@noveum_trace.trace
+# Trace any operation using context managers
 def process_document(document_id: str) -> dict:
-    # Your function logic here
-    return {"status": "processed", "id": document_id}
+    with noveum_trace.trace_operation("process_document") as span:
+        # Your function logic here
+        span.set_attribute("document_id", document_id)
+        return {"status": "processed", "id": document_id}
 
 # Trace LLM calls with automatic metadata capture
-@noveum_trace.trace_llm
 def call_openai(prompt: str) -> str:
     import openai
     client = openai.OpenAI()
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
-# Trace agent workflows
-@noveum_trace.trace_agent(agent_id="researcher")
-def research_task(query: str) -> dict:
-    # Agent logic here
-    return {"findings": "...", "confidence": 0.95}
-```
-
-### Multi-Agent Example
-
-```python
-import noveum_trace
-
-noveum_trace.init(
-    api_key="your-api-key",
-    project="multi-agent-system"
-)
-
-@noveum_trace.trace_agent(agent_id="orchestrator")
-def orchestrate_workflow(task: str) -> dict:
-    # Coordinate multiple agents
-    research_result = research_agent(task)
-    analysis_result = analysis_agent(research_result)
-    return synthesis_agent(research_result, analysis_result)
-
-@noveum_trace.trace_agent(agent_id="researcher")
-def research_agent(task: str) -> dict:
-    # Research implementation
-    return {"data": "...", "sources": [...]}
-
-@noveum_trace.trace_agent(agent_id="analyst")
-def analysis_agent(data: dict) -> dict:
-    # Analysis implementation
-    return {"insights": "...", "metrics": {...}}
+    
+    with noveum_trace.trace_llm_call(model="gpt-4", provider="openai") as span:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        span.set_attributes({
+            "llm.input_tokens": response.usage.prompt_tokens,
+            "llm.output_tokens": response.usage.completion_tokens
+        })
+        return response.choices[0].message.content
 ```
 
 ## 🏗️ Architecture
 
 ```
 noveum_trace/
-├── core/           # Core tracing primitives (Trace, Span, Context)
-├── decorators/     # Decorator-based API (@trace, @trace_llm, etc.)
-├── context_managers/ # Context managers for inline tracing
-├── transport/      # HTTP transport and batch processing
-├── agents/         # Multi-agent system support
-├── streaming/      # Streaming LLM support
-├── threads/        # Conversation thread management
-└── utils/          # Utilities (exceptions, serialization, etc.)
+├── core/              # Core tracing primitives (Trace, Span, Context)
+├── context_managers/  # Context managers for inline tracing
+├── transport/         # HTTP transport and batch processing
+├── integrations/      # Framework integrations (LangChain, etc.)
+├── streaming/         # Streaming LLM support
+├── threads/           # Conversation thread management
+└── utils/             # Utilities (exceptions, serialization, etc.)
 ```
 
 ## 🔧 Configuration
@@ -147,94 +118,9 @@ noveum_trace.init(
 )
 ```
 
-## 🎯 Available Decorators
+## 🔄 Context Manager Usage
 
-### @trace - General Purpose Tracing
-
-```python
-@noveum_trace.trace
-def my_function(arg1: str, arg2: int) -> dict:
-    return {"result": f"{arg1}_{arg2}"}
-
-# With options
-@noveum_trace.trace(capture_performance=True, capture_args=True)
-def expensive_function(data: list) -> dict:
-    # Function implementation
-    return {"processed": len(data)}
-```
-
-### @trace_llm - LLM Call Tracing
-
-```python
-@noveum_trace.trace_llm
-def call_llm(prompt: str) -> str:
-    # LLM call implementation
-    return response
-
-# With provider specification
-@noveum_trace.trace_llm(provider="openai", capture_tokens=True)
-def call_openai(prompt: str) -> str:
-    # OpenAI specific implementation
-    return response
-```
-
-### @trace_agent - Agent Workflow Tracing
-
-```python
-# Required: agent_id parameter
-@noveum_trace.trace_agent(agent_id="my_agent")
-def agent_function(task: str) -> dict:
-    # Agent implementation
-    return result
-
-# With full configuration
-@noveum_trace.trace_agent(
-    agent_id="researcher",
-    role="information_gatherer",
-    capabilities=["web_search", "document_analysis"]
-)
-def research_agent(query: str) -> dict:
-    # Research implementation
-    return {"findings": "...", "sources": [...]}
-```
-
-### @trace_tool - Tool Usage Tracing
-
-```python
-@noveum_trace.trace_tool
-def search_web(query: str) -> list:
-    # Tool implementation
-    return results
-
-# With tool specification
-@noveum_trace.trace_tool(tool_name="web_search", tool_type="api")
-def search_api(query: str) -> list:
-    # API search implementation
-    return search_results
-```
-
-### @trace_retrieval - Retrieval Operation Tracing
-
-```python
-@noveum_trace.trace_retrieval
-def retrieve_documents(query: str) -> list:
-    # Retrieval implementation
-    return documents
-
-# With retrieval configuration
-@noveum_trace.trace_retrieval(
-    retrieval_type="vector_search",
-    index_name="documents",
-    capture_scores=True
-)
-def vector_search(query: str, top_k: int = 5) -> list:
-    # Vector search implementation
-    return results
-```
-
-## 🔄 Context Managers - Inline Tracing
-
-For scenarios where you need granular control or can't modify function signatures:
+For scenarios with granular control:
 
 ```python
 import noveum_trace
@@ -282,6 +168,44 @@ def multi_step_workflow(task: str) -> dict:
 
     return results
 ```
+
+## 🔗 LangChain Integration
+
+Noveum Trace provides seamless integration with LangChain and LangGraph applications through a simple callback handler.
+
+```python
+from noveum_trace.integrations import NoveumTraceCallbackHandler
+from langchain_openai import ChatOpenAI
+
+# Initialize Noveum Trace
+import noveum_trace
+noveum_trace.init(project="my-langchain-app", api_key="your-api-key")
+
+# Create callback handler
+handler = NoveumTraceCallbackHandler()
+
+# Add to your LangChain components
+llm = ChatOpenAI(callbacks=[handler])
+response = llm.invoke("What is the capital of France?")
+```
+
+### What Gets Traced
+
+- **LLM Calls**: Model, prompts, responses, token usage
+- **Chains**: Input/output flow, execution steps  
+- **Agents**: Decision-making, tool usage, reasoning
+- **Tools**: Function calls, inputs, outputs
+- **LangGraph Nodes**: Graph execution, node transitions
+- **Routing Decisions**: Conditional routing logic and decisions
+
+### Advanced Features
+
+The integration also supports:
+- **Manual Trace Control** for complex workflows
+- **Custom Parent Relationships** for explicit span hierarchies
+- **LangGraph Routing Tracking** for routing decisions
+
+For complete details and examples, see the [LangChain Integration Guide](docs/LANGCHAIN_INTEGRATION.md).
 
 ## 🧵 Thread Management
 
@@ -373,6 +297,7 @@ Check out the [examples](docs/examples/) directory for complete working examples
 - [Flexible Tracing](docs/examples/flexible_tracing_example.py) - Context managers and inline tracing
 - [Streaming Example](docs/examples/streaming_example.py) - Real-time streaming support
 - [Multimodal Examples](docs/examples/multimodal_examples.py) - Image, audio, and video tracing
+- [LangGraph Routing](docs/examples/langgraph_routing_example.py) - LangGraph routing decision tracking
 
 ## 🚀 Advanced Usage
 
