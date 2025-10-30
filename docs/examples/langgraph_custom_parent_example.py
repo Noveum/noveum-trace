@@ -301,7 +301,7 @@ def main():
         "callbacks": [handler],
         "metadata": {
             "noveum": {
-                "name": "analysis_graph",                # Custom name for Graph 2
+                "name": "analysis_graph",  # Custom name for Graph 2
                 "parent_name": "data_collection_graph",  # Reference to Graph 1
             }
         },
