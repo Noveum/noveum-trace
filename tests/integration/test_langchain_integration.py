@@ -1962,7 +1962,8 @@ class TestLangChainIntegration:
 
                     assert parent_id == "context_span_id"
                     mock_logger.warning.assert_called_once()
-                    assert "Could not resolve parent from parent_name" in str(
+                    # Updated to match new warning message format
+                    assert "Could not resolve parent from parent_run_id" in str(
                         mock_logger.warning.call_args
                     )
 
@@ -1982,6 +1983,187 @@ class TestLangChainIntegration:
 
                 parent_id = handler._resolve_parent_span_id(None, None)
                 assert parent_id is None
+
+    # Tests for prioritize_manually_assigned_parents feature
+    def test_prioritize_manual_parents_default_false(self):
+        """Test default behavior: parent_run_id has priority over parent_name."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=False,
+            )
+
+            # Set up both parent_run_id and parent_name
+            mock_parent_span_runid = Mock()
+            mock_parent_span_runid.span_id = "parent_via_run_id"
+            parent_run_id = uuid4()
+            handler._set_run(parent_run_id, mock_parent_span_runid)
+
+            handler._set_name("manual_parent", "parent_via_name")
+
+            # When both are available, parent_run_id should win
+            parent_id = handler._resolve_parent_span_id(parent_run_id, "manual_parent")
+            assert parent_id == "parent_via_run_id"
+
+    def test_prioritize_manual_parents_enabled(self):
+        """Test prioritize_manually_assigned_parents=True: parent_name has priority."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=True,
+            )
+
+            # Set up both parent_run_id and parent_name
+            mock_parent_span_runid = Mock()
+            mock_parent_span_runid.span_id = "parent_via_run_id"
+            parent_run_id = uuid4()
+            handler._set_run(parent_run_id, mock_parent_span_runid)
+
+            handler._set_name("manual_parent", "parent_via_name")
+
+            # When both are available, parent_name should win
+            parent_id = handler._resolve_parent_span_id(parent_run_id, "manual_parent")
+            assert parent_id == "parent_via_name"
+
+    def test_prioritize_manual_parents_fallback_to_run_id(self):
+        """Test that when parent_name is not found, falls back to parent_run_id."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=True,
+            )
+
+            # Set up only parent_run_id
+            mock_parent_span_runid = Mock()
+            mock_parent_span_runid.span_id = "parent_via_run_id"
+            parent_run_id = uuid4()
+            handler._set_run(parent_run_id, mock_parent_span_runid)
+
+            # parent_name is provided but not found in names dict
+            with patch("noveum_trace.integrations.langchain.logger"):
+                parent_id = handler._resolve_parent_span_id(
+                    parent_run_id, "nonexistent_parent"
+                )
+                # Should fallback to parent_run_id
+                assert parent_id == "parent_via_run_id"
+
+    def test_prioritize_manual_parents_fallback_to_name(self):
+        """Test default mode: when parent_run_id is not found, falls back to parent_name."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=False,
+            )
+
+            # Set up only parent_name
+            handler._set_name("manual_parent", "parent_via_name")
+
+            # parent_run_id is provided but not found in runs dict
+            from uuid import uuid4
+
+            nonexistent_run_id = uuid4()
+            parent_id = handler._resolve_parent_span_id(
+                nonexistent_run_id, "manual_parent"
+            )
+            # Should fallback to parent_name
+            assert parent_id == "parent_via_name"
+
+    def test_prioritize_manual_parents_context_fallback(self):
+        """Test context fallback with manual override mode indicator in warning."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=True,
+            )
+
+            # Mock current span in context
+            mock_current_span = Mock()
+            mock_current_span.span_id = "context_span_id"
+
+            with patch(
+                "noveum_trace.core.context.get_current_span"
+            ) as mock_get_current:
+                mock_get_current.return_value = mock_current_span
+
+                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                    parent_id = handler._resolve_parent_span_id(None, None)
+
+                    assert parent_id == "context_span_id"
+                    mock_logger.warning.assert_called_once()
+                    # Should include manual override mode indicator
+                    assert "(manual override mode)" in str(
+                        mock_logger.warning.call_args
+                    )
+
+    def test_prioritize_manual_parents_ignored_in_legacy_mode(self):
+        """Test that prioritize_manually_assigned_parents is ignored in legacy mode."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # Legacy mode with prioritize_manually_assigned_parents=True (should be ignored)
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=False,
+                prioritize_manually_assigned_parents=True,
+            )
+
+            # Set up parent_name
+            handler._set_name("manual_parent", "parent_via_name")
+
+            # Should still use legacy behavior (only check parent_name)
+            parent_id = handler._resolve_parent_span_id(None, "manual_parent")
+            assert parent_id == "parent_via_name"
+
+            # Should return None when no parent_name
+            parent_id = handler._resolve_parent_span_id(None, None)
+            assert parent_id is None
+
+    def test_handler_initialization_defaults(self):
+        """Test that handler initializes with correct new defaults."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # New defaults
+            assert handler._use_langchain_assigned_parent is True
+            assert handler._prioritize_manually_assigned_parents is False
+
+    def test_handler_repr_includes_new_flag(self):
+        """Test that __repr__ includes the prioritize_manual_parents flag."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler(
+                use_langchain_assigned_parent=True,
+                prioritize_manually_assigned_parents=True,
+            )
+
+            repr_str = repr(handler)
+            assert "prioritize_manual_parents=True" in repr_str
 
     def test_parent_span_id_in_llm_start(self):
         """Test that parent_span_id is passed to start_span in LLM start."""

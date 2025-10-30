@@ -5,7 +5,6 @@ Tests the new helper functions added in the async/parallel execution patch:
 - safe_inputs_to_dict()
 """
 
-
 import pytest
 
 # Skip all tests if LangChain is not available

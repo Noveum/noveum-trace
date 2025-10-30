@@ -47,14 +47,22 @@ def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler for Noveum Trace integration."""
 
-    def __init__(self, use_langchain_assigned_parent: bool = False) -> None:
+    def __init__(
+        self,
+        use_langchain_assigned_parent: bool = True,
+        prioritize_manually_assigned_parents: bool = False,
+    ) -> None:
         """Initialize the callback handler.
 
         Args:
             use_langchain_assigned_parent: If True, use LangChain's parent_run_id
                 to determine parent span relationships instead of context-based
                 parent assignment. Falls back to context-based with warning if
-                parent_run_id lookup fails.
+                parent_run_id lookup fails. Default is True.
+            prioritize_manually_assigned_parents: If True (and use_langchain_assigned_parent
+                is also True), prioritize manually assigned parent_name over LangChain's
+                parent_run_id. When False, parent_run_id takes priority. Default is False.
+                This flag is ignored when use_langchain_assigned_parent is False.
         """
         super().__init__()
 
@@ -86,6 +94,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Parent assignment mode
         self._use_langchain_assigned_parent = use_langchain_assigned_parent
+        self._prioritize_manually_assigned_parents = (
+            prioritize_manually_assigned_parents
+        )
 
         # Import here to avoid circular imports
         from noveum_trace import get_client
@@ -305,11 +316,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         Resolve parent span ID based on mode.
 
         When use_langchain_assigned_parent=True:
-        - Use parent_run_id to look up parent span
-        - Fallback to parent_name if parent_run_id lookup fails
-        - Fallback to context-based parent with WARNING if both fail
+        - If prioritize_manually_assigned_parents=False (default):
+          * Use parent_run_id to look up parent span
+          * Fallback to parent_name if parent_run_id lookup fails
+          * Fallback to context-based parent with WARNING if both fail
+        - If prioritize_manually_assigned_parents=True:
+          * Use parent_name first (manual override)
+          * Fallback to parent_run_id if parent_name lookup fails
+          * Fallback to context-based parent with WARNING if both fail
 
-        When use_langchain_assigned_parent=False:
+        When use_langchain_assigned_parent=False (legacy):
         - Use parent_name if provided
         - Otherwise return None (uses context-based parent normally)
 
@@ -321,26 +337,45 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             Parent span ID if resolved, None otherwise
         """
         if self._use_langchain_assigned_parent:
-            # Try parent_run_id first
-            if parent_run_id:
-                parent_span = self._get_run(parent_run_id)
-                if parent_span:
-                    return parent_span.span_id
+            # Determine priority order based on manual override flag
+            if self._prioritize_manually_assigned_parents:
+                # Priority 1: Try parent_name first (manual override)
+                if parent_name:
+                    span_id = self._get_parent_span_id_from_name(parent_name)
+                    if span_id:
+                        return span_id
 
-            # Fallback to parent_name
-            if parent_name:
-                span_id = self._get_parent_span_id_from_name(parent_name)
-                if span_id:
-                    return span_id
+                # Priority 2: Fallback to parent_run_id
+                if parent_run_id:
+                    parent_span = self._get_run(parent_run_id)
+                    if parent_span:
+                        return parent_span.span_id
+            else:
+                # Priority 1: Try parent_run_id first (default)
+                if parent_run_id:
+                    parent_span = self._get_run(parent_run_id)
+                    if parent_span:
+                        return parent_span.span_id
+
+                # Priority 2: Fallback to parent_name
+                if parent_name:
+                    span_id = self._get_parent_span_id_from_name(parent_name)
+                    if span_id:
+                        return span_id
 
             # Final fallback: context-based parent with WARNING
             from noveum_trace.core.context import get_current_span
 
             current_span = get_current_span()
             if current_span:
+                override_mode = (
+                    " (manual override mode)"
+                    if self._prioritize_manually_assigned_parents
+                    else ""
+                )
                 logger.warning(
                     f"Could not resolve parent from parent_run_id ({parent_run_id}) "
-                    f"or parent_name ({parent_name}). Auto-assigning parent span "
+                    f"or parent_name ({parent_name}){override_mode}. Auto-assigning parent span "
                     f"from context: {current_span.span_id}"
                 )
                 return current_span.span_id
@@ -1607,7 +1642,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             f"named_spans={named_spans}, "
             f"managing_trace={self._trace_managed_by_langchain is not None}, "
             f"manual_control={self._manual_trace_control}, "
-            f"use_langchain_parent={self._use_langchain_assigned_parent})"
+            f"use_langchain_parent={self._use_langchain_assigned_parent}, "
+            f"prioritize_manual_parents={self._prioritize_manually_assigned_parents})"
         )
 
 
