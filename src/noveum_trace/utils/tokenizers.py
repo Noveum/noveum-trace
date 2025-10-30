@@ -25,6 +25,11 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - optional dependency
     AnthropicTokenizer = None
 
+try:  # pragma: no cover - optional dependency
+    import google.generativeai as google_genai  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    google_genai = None
+
 
 def _normalize_content(content: Any) -> str:
     """Serialize arbitrary prompt structures into a single string."""
@@ -102,6 +107,17 @@ def _get_anthropic_tokenizer():  # pragma: no cover - optional dependency
         return None
 
 
+@lru_cache(maxsize=8)
+def _get_gemini_model(model: Optional[str]):  # pragma: no cover - optional dependency
+    if google_genai is None or not model:
+        return None
+
+    try:
+        return google_genai.GenerativeModel(model)
+    except Exception:
+        return None
+
+
 def _count_openai_tokens(text: str, model: Optional[str]) -> Optional[int]:
     encoding = _get_tiktoken_encoding(model)
     if encoding is None:
@@ -127,24 +143,42 @@ def _count_anthropic_tokens(text: str, model: Optional[str]) -> Optional[int]:
 
 
 def _count_gemini_tokens(text: str, model: Optional[str]) -> Optional[int]:
-    """Approximate Gemini token counts based on documented pricing."""
+    """Return Gemini token counts when possible, otherwise use heuristics."""
 
     if not text:
         return 1
 
-    name = (model or "").lower()
+    model_name = model or "gemini-2.5-flash"
+    gemini_model = _get_gemini_model(model_name)
 
-    if "1.5" in name:
-        # Gemini 1.5 pricing is published per 1K characters, so approximate
-        # tokens using four characters per token.
-        divisor = 4
-    elif "flash" in name:
-        # Gemini 2.x Flash models operate on compact tokens.
-        divisor = 3.5
-    else:
-        divisor = 4
+    if gemini_model is not None:
+        try:
+            response = gemini_model.count_tokens(contents=text)
+        except TypeError:  # Older SDK versions do not accept ``contents``.
+            try:
+                response = gemini_model.count_tokens(text)
+            except Exception:
+                response = None
+        except Exception:
+            response = None
 
-    return max(1, math.ceil(len(text) / divisor))
+        if response is not None:
+            total_tokens = getattr(response, "total_tokens", None)
+            if total_tokens is None:
+                total_tokens = getattr(response, "totalTokens", None)
+
+            if isinstance(total_tokens, (int, float)):
+                return max(1, int(math.ceil(total_tokens)))
+
+            billable_characters = getattr(response, "total_billable_characters", None)
+            if billable_characters is None:
+                billable_characters = getattr(response, "totalBillableCharacters", None)
+
+            if isinstance(billable_characters, (int, float)):
+                return max(1, math.ceil(billable_characters / 4))
+
+    # If the official SDK is unavailable fall back to a 4 characters/token heuristic.
+    return max(1, math.ceil(len(text) / 4))
 
 
 def count_tokens(
