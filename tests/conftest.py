@@ -2,7 +2,7 @@ import asyncio
 import json
 import threading
 import time
-from typing import Any
+from typing import Any, Union
 from unittest.mock import Mock, patch
 
 import pytest
@@ -89,7 +89,8 @@ def prevent_real_api_calls(request):
         """Mock requests.post to prevent real API calls"""
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"success": True, "trace_id": "mock-trace-id"}
+        mock_response.json.return_value = {
+            "success": True, "trace_id": "mock-trace-id"}
         mock_response.text = '{"success": true}'
         mock_response.headers = {"content-type": "application/json"}
         return mock_response
@@ -203,13 +204,15 @@ def mock_transport_completely(request):
 
     with (
         patch.object(HttpTransport, "__init__", mock_http_transport_init),
-        patch.object(HttpTransport, "export_trace", mock_http_transport_export),
+        patch.object(HttpTransport, "export_trace",
+                     mock_http_transport_export),
         patch.object(HttpTransport, "flush", mock_http_transport_flush),
         patch.object(HttpTransport, "shutdown", mock_http_transport_shutdown),
         patch.object(BatchProcessor, "__init__", mock_batch_processor_init),
         patch.object(BatchProcessor, "add_trace", mock_batch_processor_add),
         patch.object(BatchProcessor, "flush", mock_batch_processor_flush),
-        patch.object(BatchProcessor, "shutdown", mock_batch_processor_shutdown),
+        patch.object(BatchProcessor, "shutdown",
+                     mock_batch_processor_shutdown),
     ):
         yield
 
