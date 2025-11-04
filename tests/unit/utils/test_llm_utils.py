@@ -183,9 +183,7 @@ def hello_world():
         def _mock_count(*_, **__):
             return 42
 
-        monkeypatch.setattr(
-            "noveum_trace.utils.tokenizers.count_tokens", _mock_count
-        )
+        monkeypatch.setattr("noveum_trace.utils.tokenizers.count_tokens", _mock_count)
 
         count = estimate_token_count("hello world", model="gpt-4o")
         assert count == 42
@@ -196,9 +194,7 @@ def hello_world():
         def _mock_count(*_, **__):
             return None
 
-        monkeypatch.setattr(
-            "noveum_trace.utils.tokenizers.count_tokens", _mock_count
-        )
+        monkeypatch.setattr("noveum_trace.utils.tokenizers.count_tokens", _mock_count)
 
         count = estimate_token_count("hello world", model="gpt-4o")
         assert isinstance(count, int)
