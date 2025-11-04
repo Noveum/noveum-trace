@@ -413,6 +413,11 @@ def attach_context_to_span(span: Span) -> None:
     context = get_current_context()
 
     # Add context attributes to span
+    # Defensive: ensure attributes is a dict (should always be, but be safe)
+    if not isinstance(context.attributes, dict):
+        span.set_attributes({})
+        return
+
     context_attributes = {}
     for key, value in context.attributes.items():
         context_attributes[f"context.{key}"] = value
@@ -450,4 +455,5 @@ def inherit_context_attributes(span: Span, parent_span: Optional[Span] = None) -
     for attr in inheritable_attributes:
         context_key = f"context.{attr}"
         if context_key in parent_span.attributes:
-            span.set_attribute(context_key, parent_span.attributes[context_key])
+            span.set_attribute(
+                context_key, parent_span.attributes[context_key])

@@ -9,7 +9,7 @@ import functools
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Optional, Union
 
-from noveum_trace.core.context import get_current_trace
+from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
 
 
@@ -47,16 +47,21 @@ class TraceContextManager:
 
         # Auto-create trace if none exists
         if trace is None:
-            self.auto_trace = self.client.start_trace(f"auto_trace_{self.name}")
+            self.auto_trace = self.client.start_trace(
+                f"auto_trace_{self.name}")
             trace = self.auto_trace
 
         # Create span
-        self.span = self.client.start_span(name=self.name, attributes=self.attributes)
+        self.span = self.client.start_span(
+            name=self.name, attributes=self.attributes)
 
         # Add tags if provided
         if self.tags:
             for key, value in self.tags.items():
                 self.span.set_attribute(f"tag.{key}", value)
+
+        # Attach context attributes to span
+        attach_context_to_span(self.span)
 
         return self.span
 
@@ -111,7 +116,8 @@ class LLMContextManager(TraceContextManager):
     def set_output_attributes(self, **attributes: Any) -> None:
         """Set output-related attributes."""
         if self.span and self.capture_outputs:
-            output_attrs = {f"llm.output.{k}": v for k, v in attributes.items()}
+            output_attrs = {f"llm.output.{k}": v for k,
+                            v in attributes.items()}
             self.span.set_attributes(output_attrs)
 
     def set_usage_attributes(
