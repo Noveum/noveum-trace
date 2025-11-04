@@ -64,6 +64,31 @@ def call_openai(prompt: str) -> str:
         return response.choices[0].message.content
 ```
 
+## ⚙️ Setup
+
+### Core Configuration
+
+The SDK requires a few core environment variables to function:
+
+```bash
+# Required: Your Noveum API key
+export NOVEUM_API_KEY="your-api-key"
+
+# Required: Project name for organizing traces
+export NOVEUM_PROJECT="your-project-name"
+
+# Optional: Environment name (defaults to "development")
+export NOVEUM_ENVIRONMENT="production"
+
+# Optional: Custom API endpoint (defaults to https://api.noveum.ai/api)
+export NOVEUM_ENDPOINT="https://api.noveum.ai/api"
+```
+
+### Additional Environment Variables
+
+For a complete list of all available environment variables including debug settings, logging configuration, and agent registry limits, see [`.env.example`](.env.example) in the repository root.
+
+
 ## 🏗️ Architecture
 
 ```
@@ -80,6 +105,8 @@ noveum_trace/
 ## 🔧 Configuration
 
 ### Environment Variables
+
+The SDK can be configured via environment variables. The core configuration variables are:
 
 ```bash
 export NOVEUM_API_KEY="your-api-key"
