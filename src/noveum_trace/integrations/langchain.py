@@ -20,7 +20,6 @@ from langchain_core.documents import Document
 from langchain_core.outputs import LLMResult
 
 from noveum_trace.core.span import SpanStatus
-from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 from noveum_trace.integrations.langchain_utils import (
     build_langgraph_attributes,
     build_routing_attributes,
@@ -32,6 +31,7 @@ from noveum_trace.integrations.langchain_utils import (
     extract_tool_function_name,
     get_operation_name,
 )
+from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 
 logger = logging.getLogger(__name__)
 
