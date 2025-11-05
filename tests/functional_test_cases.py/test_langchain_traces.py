@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from types import SimpleNamespace
-from typing import Generator
 from uuid import uuid4
 
 import pytest

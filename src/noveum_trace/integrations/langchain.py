@@ -8,9 +8,10 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 import inspect
 import logging
 import threading
+import types
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Union
 from uuid import UUID
 
 # Import LangChain dependencies
@@ -26,7 +27,6 @@ from noveum_trace.integrations.langchain_utils import (
     extract_agent_capabilities,
     extract_agent_type,
     extract_langgraph_metadata,
-    extract_model_name,
     extract_noveum_metadata,
     extract_tool_function_name,
     get_operation_name,
@@ -73,7 +73,7 @@ def get_code_location(skip_frames: int = 2) -> dict[str, Any]:
             return {}
 
         # Traverse up the call stack to skip the specified number of frames
-        current_frame = frame
+        current_frame: Optional[types.FrameType] = frame
         for _ in range(skip_frames):
             if current_frame is None:
                 return {}
@@ -111,17 +111,19 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Thread-safe runs dictionary for span tracking
         # Maps run_id -> span (for backward compatibility)
-        self.runs: "dict[Union[UUID, str], Any]" = {}
+        self.runs: "dict[Union[UUID, str], Any]" = {}  # noqa: UP037, F821
         self._runs_lock = threading.Lock()
 
         # Track root traces by root run_id
         # Maps root_run_id -> trace (for LangGraph workflow grouping)
-        self.root_traces: "dict[Union[UUID, str], Any]" = {}
+        self.root_traces: "dict[Union[UUID, str], Any]" = {}  # noqa: UP037, F821
         self._root_traces_lock = threading.Lock()
 
         # Track parent relationships
         # Maps run_id -> parent_run_id (self.parent_map)
-        self.parent_map: "dict[Union[UUID, str], Optional[Union[UUID, str]]]" = {}
+        self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = (
+            {}
+        )  # noqa: UP037, F821
         self._parent_map_lock = threading.Lock()
 
         # Custom name mapping for explicit parent relationships
@@ -533,8 +535,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return run_id
 
         # Traverse up the parent chain to find the root
-        current: "Optional[Union[UUID, str]]" = parent_run_id
-        visited: "set[Union[UUID, str]]" = {run_id}  # Avoid cycles
+        current: Optional[Union[UUID, str]] = parent_run_id
+        visited: set[Union[UUID, str]] = {run_id}  # Avoid cycles
 
         while current is not None and current not in visited:
             visited.add(current)
