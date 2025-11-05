@@ -62,17 +62,17 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Thread-safe runs dictionary for span tracking
         # Maps run_id -> span (for backward compatibility)
-        self.runs: dict[Union[UUID, str], Any] = {}
+        self.runs: "dict[Union[UUID, str], Any]" = {}
         self._runs_lock = threading.Lock()
 
         # Track root traces by root run_id
         # Maps root_run_id -> trace (for LangGraph workflow grouping)
-        self.root_traces: dict[Union[UUID, str], Any] = {}
+        self.root_traces: "dict[Union[UUID, str], Any]" = {}
         self._root_traces_lock = threading.Lock()
 
         # Track parent relationships
         # Maps run_id -> parent_run_id (self.parent_map)
-        self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = {}
+        self.parent_map: "dict[Union[UUID, str], Optional[Union[UUID, str]]]" = {}
         self._parent_map_lock = threading.Lock()
 
         # Custom name mapping for explicit parent relationships
@@ -98,12 +98,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None  # type: ignore[assignment]
 
-    def _set_run(self, run_id: Union[UUID, str], span: Any) -> None:
+    def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
         with self._runs_lock:
             self.runs[run_id] = span
 
-    def _pop_run(self, run_id: Union[UUID, str]) -> Any:
+    def _pop_run(self, run_id: "Union[UUID, str]") -> Any:
         """Thread-safe method to pop and return a run span."""
         with self._runs_lock:
             return self.runs.pop(run_id, None)
@@ -128,31 +128,31 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._names_lock:
             return self.names.get(name)
 
-    def _set_root_trace(self, root_run_id: Union[UUID, str], trace: Any) -> None:
+    def _set_root_trace(self, root_run_id: "Union[UUID, str]", trace: Any) -> None:
         """Thread-safe method to set a root trace."""
         with self._root_traces_lock:
             self.root_traces[root_run_id] = trace
 
-    def _get_root_trace(self, root_run_id: Union[UUID, str]) -> Any:
+    def _get_root_trace(self, root_run_id: "Union[UUID, str]") -> Any:
         """Thread-safe method to get a root trace."""
         with self._root_traces_lock:
             return self.root_traces.get(root_run_id)
 
     def _set_parent(
-        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
+        self, run_id: "Union[UUID, str]", parent_run_id: "Optional[Union[UUID, str]]"
     ) -> None:
         """Thread-safe method to set parent relationship."""
         with self._parent_map_lock:
             self.parent_map[run_id] = parent_run_id
 
-    def _get_parent(self, run_id: Union[UUID, str]) -> Optional[Union[UUID, str]]:
+    def _get_parent(self, run_id: "Union[UUID, str]") -> "Optional[Union[UUID, str]]":
         """Thread-safe method to get parent run_id."""
         with self._parent_map_lock:
             return self.parent_map.get(run_id)
 
     def _find_root_run_id_for_trace(
         self, target_trace: Any
-    ) -> Optional[Union[UUID, str]]:
+    ) -> "Optional[Union[UUID, str]]":
         """Find the root_run_id associated with a specific trace object."""
         with self._root_traces_lock:
             for root_run_id, trace in self.root_traces.items():
@@ -161,7 +161,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return None
 
     def _is_descendant_of(
-        self, run_id: Union[UUID, str], potential_ancestor: Union[UUID, str]
+        self, run_id: "Union[UUID, str]", potential_ancestor: "Union[UUID, str]"
     ) -> bool:
         """Check if run_id is a descendant of potential_ancestor in the parent chain."""
         current = self._get_parent(run_id)
@@ -393,9 +393,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return serialized.get("name", "unknown")
     def _is_descendant_of_unlocked(
         self,
-        run_id: Union[UUID, str],
-        potential_ancestor: Union[UUID, str],
-        parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]],
+        run_id: "Union[UUID, str]",
+        potential_ancestor: "Union[UUID, str]",
+        parent_map: "dict[Union[UUID, str], Optional[Union[UUID, str]]]",
     ) -> bool:
         """
         Check if run_id is a descendant of potential_ancestor (without acquiring locks).
@@ -418,7 +418,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return False
 
-    def _cleanup_trace_tracking(self, root_run_id: Union[UUID, str]) -> None:
+    def _cleanup_trace_tracking(self, root_run_id: "Union[UUID, str]") -> None:
         """
         Clean up tracking data for a finished trace.
 
@@ -460,8 +460,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error(f"Error cleaning up trace tracking data: {e}")
 
     def _find_root_run_id(
-        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
-    ) -> Union[UUID, str]:
+        self, run_id: "Union[UUID, str]", parent_run_id: "Optional[Union[UUID, str]]"
+    ) -> "Union[UUID, str]":
         """Find the root run_id by traversing parent relationships."""
         # Store this parent relationship
         self._set_parent(run_id, parent_run_id)
@@ -471,8 +471,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return run_id
 
         # Traverse up the parent chain to find the root
-        current: Optional[Union[UUID, str]] = parent_run_id
-        visited: set[Union[UUID, str]] = {run_id}  # Avoid cycles
+        current: "Optional[Union[UUID, str]]" = parent_run_id
+        visited: "set[Union[UUID, str]]" = {run_id}  # Avoid cycles
 
         while current is not None and current not in visited:
             visited.add(current)
