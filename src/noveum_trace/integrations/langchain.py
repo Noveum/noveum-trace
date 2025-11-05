@@ -289,13 +289,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Use normalize_model_name utility instead of hardcoding prefixes
             try:
                 from noveum_trace.utils.llm_utils import normalize_model_name
+
                 normalized = normalize_model_name(model_str)
                 return normalized
             except Exception:
                 # Fallback to basic prefix removal
-                for prefix in ["openai/", "anthropic/", "google/", "meta/", "microsoft/", "gemini/"]:
+                for prefix in [
+                    "openai/",
+                    "anthropic/",
+                    "google/",
+                    "meta/",
+                    "microsoft/",
+                    "gemini/",
+                ]:
                     if model_str.startswith(prefix):
-                        model_str = model_str[len(prefix):]
+                        model_str = model_str[len(prefix) :]
                 return model_str
 
         # Fallback to provider name from id path
@@ -318,7 +326,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if model_name and model_name != "unknown":
             try:
                 from noveum_trace.utils.llm_utils import get_model_info
-                
+
                 model_info = get_model_info(model_name)
                 if model_info and model_info.provider:
                     return model_info.provider
@@ -330,7 +338,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if model_name and model_name != "unknown":
             try:
                 from noveum_trace.utils.llm_utils import MODEL_REGISTRY
-                
+
                 model_lower = model_name.lower()
                 # Search registry for models that match or are prefixes of the model name
                 # This catches variations like "gpt-4", "gpt-4o", "gpt-3.5", etc.
@@ -342,12 +350,14 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     # Check if model name starts with registry model, or vice versa
                     # Use at least 3 characters to avoid false matches
                     if len(registry_lower) >= 3:
-                        if model_lower.startswith(registry_lower) or registry_lower.startswith(model_lower):
+                        if model_lower.startswith(
+                            registry_lower
+                        ) or registry_lower.startswith(model_lower):
                             # Prefer longer matches for better accuracy
                             if len(registry_lower) > best_match_length:
                                 best_match = model_info.provider
                                 best_match_length = len(registry_lower)
-                
+
                 if best_match:
                     return best_match
             except Exception:
@@ -358,13 +368,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if id_path:
             try:
                 from noveum_trace.utils.llm_utils import MODEL_REGISTRY
-                
+
                 # Get all unique providers from the registry dynamically
                 valid_providers = {info.provider for info in MODEL_REGISTRY.values()}
-                
+
                 # Check id path elements against valid providers from registry
                 for path_element in id_path:
-                    if isinstance(path_element, str) and path_element.lower() in {p.lower() for p in valid_providers}:
+                    if isinstance(path_element, str) and path_element.lower() in {
+                        p.lower() for p in valid_providers
+                    }:
                         # Find the matching provider with correct case from registry
                         for provider in valid_providers:
                             if provider.lower() == path_element.lower():
@@ -440,6 +452,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Fallback to class name
         return serialized.get("name", "unknown")
+
     def _is_descendant_of_unlocked(
         self,
         run_id: "Union[UUID, str]",
@@ -941,8 +954,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Extract the actual model name and provider
             # Try extracting model from kwargs passed to this function first (LangChain may pass it here)
             # Then fall back to serialized kwargs
-            model_from_kwargs = kwargs.get("invocation_params", {}).get("model") or kwargs.get("model")
-            
+            model_from_kwargs = kwargs.get("invocation_params", {}).get(
+                "model"
+            ) or kwargs.get("model")
+
             # Create a temporary serialized dict with model if found in kwargs
             if model_from_kwargs and not serialized.get("kwargs", {}).get("model"):
                 serialized_with_model = serialized.copy()
@@ -952,10 +967,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 extracted_model_name = self._extract_model_name(serialized_with_model)
             else:
                 extracted_model_name = self._extract_model_name(serialized)
-            
+
             extracted_provider = self._extract_provider_name(serialized)
 
-            temperature = self._extract_invocation_param(serialized, kwargs, "temperature")
+            temperature = self._extract_invocation_param(
+                serialized, kwargs, "temperature"
+            )
 
             attribute_kwargs = {
                 k: v
@@ -976,7 +993,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             }
 
             if temperature is not None:
-                if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
+                if isinstance(temperature, (int, float)) and not isinstance(
+                    temperature, bool
+                ):
                     span_attributes["llm.input.temperature"] = float(temperature)
                 elif isinstance(temperature, str):
                     try:
@@ -985,7 +1004,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.input.temperature"] = temperature
                 else:
                     span_attributes["llm.input.temperature"] = temperature
-            
+
             # Create span (either in new trace or existing trace)
             span = self._client.start_span(
                 name=span_name,
@@ -1109,9 +1128,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     **usage_attrs,
                     **cost_attrs,
                     **(
-                        {"llm.latency_ms": latency_ms}
-                        if latency_ms is not None
-                        else {}
+                        {"llm.latency_ms": latency_ms} if latency_ms is not None else {}
                     ),
                 }
             )

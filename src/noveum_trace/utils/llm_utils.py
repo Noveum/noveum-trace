@@ -625,21 +625,15 @@ def estimate_token_count(
     if isinstance(text, dict):
         total_tokens = 0
         for key, value in text.items():
-            total_tokens += estimate_token_count(
-                key, model=model, provider=provider
-            )
-            total_tokens += estimate_token_count(
-                value, model=model, provider=provider
-            )
+            total_tokens += estimate_token_count(key, model=model, provider=provider)
+            total_tokens += estimate_token_count(value, model=model, provider=provider)
         return max(1, total_tokens)
 
     if not isinstance(text, str):
         text = str(text)
 
     try:
-        provider_tokens = tokenizers.count_tokens(
-            text, model=model, provider=provider
-        )
+        provider_tokens = tokenizers.count_tokens(text, model=model, provider=provider)
     except Exception:
         provider_tokens = None
 

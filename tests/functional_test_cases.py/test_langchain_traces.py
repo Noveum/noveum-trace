@@ -35,7 +35,9 @@ def _ensure_env() -> None:
 
 
 @pytest.fixture
-def trace_export_capture(monkeypatch: pytest.MonkeyPatch) -> Generator[list[dict], None, None]:
+def trace_export_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[list[dict], None, None]:
     """Capture traces passed to the HTTP transport export call."""
 
     captured: list[dict] = []
