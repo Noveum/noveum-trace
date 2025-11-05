@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from functools import lru_cache
-from typing import Any
+from typing import Any, Optional
 
 try:  # pragma: no cover - optional dependency
     import tiktoken  # type: ignore
@@ -81,7 +81,9 @@ def _infer_provider(model: str | None) -> str | None:
 
 
 @lru_cache(maxsize=32)
-def _get_tiktoken_encoding(model: str | None):  # pragma: no cover - cache
+def _get_tiktoken_encoding(
+    model: str | None,
+) -> Optional[Any]:  # pragma: no cover - cache  # noqa: UP045
     if tiktoken is None:
         return None
 
@@ -98,7 +100,9 @@ def _get_tiktoken_encoding(model: str | None):  # pragma: no cover - cache
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_tokenizer():  # pragma: no cover - optional dependency
+def _get_anthropic_tokenizer() -> (
+    Optional[Any]  # noqa: UP045
+):  # pragma: no cover - optional dependency
     if AnthropicTokenizer is None:
         return None
     try:
@@ -108,7 +112,9 @@ def _get_anthropic_tokenizer():  # pragma: no cover - optional dependency
 
 
 @lru_cache(maxsize=8)
-def _get_gemini_model(model: str | None):  # pragma: no cover - optional dependency
+def _get_gemini_model(
+    model: str | None,
+) -> Optional[Any]:  # pragma: no cover - optional dependency  # noqa: UP045
     if google_genai is None or not model:
         return None
 
@@ -133,7 +139,7 @@ def _count_anthropic_tokens(text: str, model: str | None) -> int | None:
     tokenizer = _get_anthropic_tokenizer()
     if tokenizer is not None:
         try:
-            return max(1, int(tokenizer.count_tokens(text)))  # type: ignore[arg-type]
+            return max(1, int(tokenizer.count_tokens(text)))
         except Exception:
             pass
 

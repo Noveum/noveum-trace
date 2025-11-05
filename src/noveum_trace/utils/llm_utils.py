@@ -710,7 +710,7 @@ def extract_llm_metadata(response: Any) -> dict[str, Any]:
     Returns:
         Dictionary of extracted metadata
     """
-    metadata = {}
+    metadata: dict[str, Any] = {}
 
     def _get_value(obj: Any, name: str) -> Any:
         if obj is None:
