@@ -5,6 +5,7 @@ This module provides a callback handler that automatically traces LangChain
 operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
+import inspect
 import logging
 import threading
 from collections.abc import Sequence
@@ -44,6 +45,54 @@ def safe_inputs_to_dict(inputs: Any, prefix: str = "item") -> dict[str, str]:
         return {f"{prefix}_{i}": str(v) for i, v in enumerate(inputs)}
     else:
         return {prefix: str(inputs)}
+
+
+def get_code_location(skip_frames: int = 2) -> dict[str, Any]:
+    """
+    Extract code location information from the current call stack.
+
+    This function inspects the call stack to extract file path, function name,
+    and line number information. It's useful for adding code context to trace
+    attributes in async/parallel execution scenarios.
+
+    Args:
+        skip_frames: Number of frames to skip (default: 2 to skip get_code_location
+                     and the calling frame)
+
+    Returns:
+        Dictionary with keys:
+        - code.filepath: Path to the source file
+        - code.function: Name of the function
+        - code.lineno: Line number in the file
+        Returns empty dict if frame inspection fails.
+    """
+    try:
+        # Get the current frame
+        frame = inspect.currentframe()
+        if frame is None:
+            return {}
+
+        # Traverse up the call stack to skip the specified number of frames
+        current_frame = frame
+        for _ in range(skip_frames):
+            if current_frame is None:
+                return {}
+            current_frame = current_frame.f_back
+
+        if current_frame is None:
+            return {}
+
+        # Get frame info
+        frame_info = inspect.getframeinfo(current_frame)
+
+        return {
+            "code.filepath": frame_info.filename,
+            "code.function": frame_info.function,
+            "code.lineno": frame_info.lineno,
+        }
+    except Exception:
+        # Return empty dict on any exception
+        return {}
 
 
 class NoveumTraceCallbackHandler(BaseCallbackHandler):
@@ -881,6 +930,14 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Use custom name if provided, otherwise use operation name
             span_name = custom_name if custom_name else operation_name
 
+            # Resolve parent span ID based on mode
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
+
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
+
             # Extract the actual model name and provider
             # Try extracting model from kwargs passed to this function first (LangChain may pass it here)
             # Then fall back to serialized kwargs
@@ -931,7 +988,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             
             # Create span (either in new trace or existing trace)
             span = self._client.start_span(
-                name=operation_name,
+                name=span_name,
+                parent_span_id=parent_span_id,
                 attributes=span_attributes,
             )
 
