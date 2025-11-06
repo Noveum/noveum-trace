@@ -502,16 +502,16 @@ class TestLangChainIntegration:
             # Check new flattened attributes structure
             assert mock_span.set_attributes.called
             call_args = mock_span.set_attributes.call_args
-            if call_args:
-                attributes = call_args[0][0]
-                assert attributes["llm.output.response"] == [
-                    "Paris is the capital of France"
-                ]
-                assert attributes["llm.output.response_count"] == 1
-                assert attributes["llm.output.finish_reason"] == "stop"
-                assert attributes["llm.input_tokens"] == 10
-                assert attributes["llm.output_tokens"] == 8
-                assert attributes["llm.total_tokens"] == 18
+            assert call_args, "set_attributes was not called with arguments"
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == [
+                "Paris is the capital of France"
+            ]
+            assert attributes["llm.output.response_count"] == 1
+            assert attributes["llm.output.finish_reason"] == "stop"
+            assert attributes["llm.input_tokens"] == 10
+            assert attributes["llm.output_tokens"] == 8
+            assert attributes["llm.total_tokens"] == 18
 
     def test_chain_start_with_new_attributes(self):
         """Test chain start event with new attribute structure."""
@@ -1046,11 +1046,11 @@ class TestLangChainIntegration:
             # Check that attributes were set correctly for empty response
             assert mock_span.set_attributes.called
             call_args = mock_span.set_attributes.call_args
-            if call_args:
-                attributes = call_args[0][0]
-                assert attributes["llm.output.response"] == []
-                assert attributes["llm.output.response_count"] == 0
-                assert attributes["llm.output.finish_reason"] is None
+            assert call_args, "set_attributes was not called with arguments"
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == []
+            assert attributes["llm.output.response_count"] == 0
+            assert attributes["llm.output.finish_reason"] is None
 
     def test_large_input_truncation(self):
         """Test that large inputs are properly truncated."""
@@ -2780,15 +2780,15 @@ class TestLangChainIntegration:
             # Verify attributes were set without token usage
             assert mock_span.set_attributes.called
             call_args = mock_span.set_attributes.call_args
-            if call_args:
-                attributes = call_args[0][0]
-                assert attributes["llm.output.response"] == ["Test response"]
-                assert attributes["llm.output.response_count"] == 1
-                # Token usage should be 0 or missing
-                assert (
-                    "llm.input_tokens" not in attributes
-                    or attributes["llm.input_tokens"] == 0
-                )
+            assert call_args, "set_attributes was not called with arguments"
+            attributes = call_args[0][0]
+            assert attributes["llm.output.response"] == ["Test response"]
+            assert attributes["llm.output.response_count"] == 1
+            # Token usage should be 0 or missing
+            assert (
+                "llm.input_tokens" not in attributes
+                or attributes["llm.input_tokens"] == 0
+            )
 
     def test_retriever_end_truncation(self):
         """Test retriever end with >10 documents (truncation)."""
