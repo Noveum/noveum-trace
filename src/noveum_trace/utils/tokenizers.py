@@ -58,7 +58,7 @@ def _normalize_content(content: Any) -> str:
     return str(content)
 
 
-def _infer_provider(model: Optional[str]) -> Optional[str]:
+def _infer_provider(model: str | None) -> str | None:
     if not model:
         return None
 
@@ -81,7 +81,9 @@ def _infer_provider(model: Optional[str]) -> Optional[str]:
 
 
 @lru_cache(maxsize=32)
-def _get_tiktoken_encoding(model: Optional[str]):  # pragma: no cover - cache
+def _get_tiktoken_encoding(
+    model: str | None,
+) -> Optional[Any]:  # pragma: no cover - cache  # noqa: UP045
     if tiktoken is None:
         return None
 
@@ -98,7 +100,9 @@ def _get_tiktoken_encoding(model: Optional[str]):  # pragma: no cover - cache
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_tokenizer():  # pragma: no cover - optional dependency
+def _get_anthropic_tokenizer() -> (
+    Optional[Any]  # noqa: UP045
+):  # pragma: no cover - optional dependency
     if AnthropicTokenizer is None:
         return None
     try:
@@ -108,7 +112,9 @@ def _get_anthropic_tokenizer():  # pragma: no cover - optional dependency
 
 
 @lru_cache(maxsize=8)
-def _get_gemini_model(model: Optional[str]):  # pragma: no cover - optional dependency
+def _get_gemini_model(
+    model: str | None,
+) -> Optional[Any]:  # pragma: no cover - optional dependency  # noqa: UP045
     if google_genai is None or not model:
         return None
 
@@ -118,7 +124,7 @@ def _get_gemini_model(model: Optional[str]):  # pragma: no cover - optional depe
         return None
 
 
-def _count_openai_tokens(text: str, model: Optional[str]) -> Optional[int]:
+def _count_openai_tokens(text: str, model: str | None) -> int | None:
     encoding = _get_tiktoken_encoding(model)
     if encoding is None:
         return None
@@ -129,11 +135,11 @@ def _count_openai_tokens(text: str, model: Optional[str]) -> Optional[int]:
         return None
 
 
-def _count_anthropic_tokens(text: str, model: Optional[str]) -> Optional[int]:
+def _count_anthropic_tokens(text: str, model: str | None) -> int | None:
     tokenizer = _get_anthropic_tokenizer()
     if tokenizer is not None:
         try:
-            return max(1, int(tokenizer.count_tokens(text)))  # type: ignore[arg-type]
+            return max(1, int(tokenizer.count_tokens(text)))
         except Exception:
             pass
 
@@ -142,7 +148,7 @@ def _count_anthropic_tokens(text: str, model: Optional[str]) -> Optional[int]:
     return _count_openai_tokens(text, model or "claude-3.5-sonnet")
 
 
-def _count_gemini_tokens(text: str, model: Optional[str]) -> Optional[int]:
+def _count_gemini_tokens(text: str, model: str | None) -> int | None:
     """Return Gemini token counts when possible, otherwise use heuristics."""
 
     if not text:
@@ -184,9 +190,9 @@ def _count_gemini_tokens(text: str, model: Optional[str]) -> Optional[int]:
 def count_tokens(
     content: Any,
     *,
-    model: Optional[str] = None,
-    provider: Optional[str] = None,
-) -> Optional[int]:
+    model: str | None = None,
+    provider: str | None = None,
+) -> int | None:
     """Return provider-specific token counts when possible."""
 
     provider_name = (provider or _infer_provider(model) or "").lower()
@@ -209,4 +215,3 @@ def count_tokens(
 
 
 __all__ = ["count_tokens"]
-
