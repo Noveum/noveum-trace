@@ -24,6 +24,7 @@ from noveum_trace.integrations.langchain_utils import (
     build_routing_attributes,
     extract_agent_capabilities,
     extract_agent_type,
+    extract_call_site_info,
     extract_langgraph_metadata,
     extract_noveum_metadata,
     extract_tool_function_name,
@@ -933,6 +934,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 and isinstance(v, (str, int, float, bool))
             }
 
+            # Extract call site information
+            call_site_info = extract_call_site_info(skip_frames=1)  # Skip this frame
+
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
                 "llm.model": extracted_model_name,
@@ -943,6 +947,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "llm.input.prompt_count": len(prompts),
                 **attribute_kwargs,
             }
+
+            # Add call site information if available
+            if call_site_info:
+                span_attributes.update(call_site_info)
 
             if temperature is not None:
                 if isinstance(temperature, (int, float)) and not isinstance(
@@ -1487,6 +1495,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
+            # Extract call site information
+            call_site_info = extract_call_site_info(skip_frames=1)  # Skip this frame
+
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1502,6 +1513,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         if k not in ["tags", "metadata", "inputs"]
                         and isinstance(v, (str, int, float, bool))
                     },
+                    # Add call site information if available
+                    **(call_site_info or {}),
                 },
             )
 

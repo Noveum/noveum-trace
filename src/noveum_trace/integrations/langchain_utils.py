@@ -5,10 +5,91 @@ This module provides pure utility functions used by the NoveumTraceCallbackHandl
 to extract metadata, build attributes, and generate operation names.
 """
 
+import inspect
 import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def extract_call_site_info(skip_frames: int = 0) -> Optional[dict[str, Any]]:
+    """
+    Extract call site information from the call stack.
+
+    Walks up the call stack to find the first frame that's NOT in:
+    - LangChain code (langchain, langchain_core, langchain_openai, etc.)
+    - Noveum Trace code (noveum_trace)
+    - Python standard library
+
+    Args:
+        skip_frames: Number of frames to skip from the top (default: 0)
+
+    Returns:
+        Dict with call site info: {
+            "call_site.file": str,
+            "call_site.line": int,
+            "call_site.function": str,
+            "call_site.module": str,
+            "call_site.code_context": Optional[str]  # The actual line of code
+        }
+        Returns None if no user code frame found
+    """
+    try:
+        stack = inspect.stack()
+
+        # Skip the current frame (this function) and any requested frames
+        start_idx = 1 + skip_frames
+
+        # Patterns to skip (internal libraries)
+        skip_patterns = [
+            "langchain",
+            "noveum_trace",
+            "site-packages",
+            "<frozen",
+            "importlib",
+        ]
+
+        for frame_info in stack[start_idx:]:
+            filename = frame_info.filename
+
+            # Skip if this frame is in a library we want to ignore
+            if any(pattern in filename for pattern in skip_patterns):
+                continue
+
+            # Skip if this is a builtin or internal Python code
+            if filename.startswith("<") or "site-packages" in filename:
+                continue
+
+            # Found user code! Extract information
+            try:
+                code_context = None
+                if frame_info.code_context and len(frame_info.code_context) > 0:
+                    code_context = frame_info.code_context[0].strip()
+
+                module_name = "unknown"
+                try:
+                    frame = frame_info.frame
+                    module_name = frame.f_globals.get("__name__", "unknown")
+                except Exception:
+                    pass
+
+                return {
+                    "call_site.file": filename,
+                    "call_site.line": frame_info.lineno,
+                    "call_site.function": frame_info.function,
+                    "call_site.module": module_name,
+                    "call_site.code_context": code_context,
+                }
+            except Exception:
+                # If extraction fails, continue to next frame
+                continue
+
+        # No user code frame found
+        return None
+
+    except Exception:
+        # If stack inspection fails, return None (fail gracefully)
+        return None
 
 
 def extract_noveum_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
