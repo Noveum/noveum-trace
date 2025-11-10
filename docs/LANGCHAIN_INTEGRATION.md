@@ -128,6 +128,25 @@ response = llm.invoke("Hello world")
 handler.end_trace()
 ```
 
+### Prioritizing Custom Parent Relationships
+
+SDK supports fine-grained control over how parent spans are assigned. When initializing the callback handler, set `prioritize_manually_assigned_parents=True` and `use_langchain_assigned_parent=True` to prioritize manually assigned `parent_name` metadata over LangChain's parent_run_id. This is helpful in advanced graph and agent flows where parent-child relationships need to be explicitly managed:
+
+```python
+handler = NoveumTraceCallbackHandler(
+    use_langchain_assigned_parent=True,
+    prioritize_manually_assigned_parents=True
+)
+```
+
+See [`examples/langgraph_custom_parent_prioritized_example.py`](examples/langgraph_custom_parent_prioritzed_example.py) and [`examples/langgraph_custom_parent_example.py`](examples/langgraph_custom_parent_example.py) for working examples showing both parent ID strategies.
+
+### Asynchronous LLM Invocation
+
+SDK supports asynchronous tracing using `await llm.ainvoke(...)` or similar async calls within traced LangChain components. This is fully supported in both callback handler and graph tracing modes.
+
+See [`examples/langgraph_asynchronous_execution.py`](examples/langgraph_asynchronous_execution.py) for end-to-end async examples.
+
 ### Custom Parent Span Relationships
 
 You can explicitly set parent-child relationships between spans using custom names:
