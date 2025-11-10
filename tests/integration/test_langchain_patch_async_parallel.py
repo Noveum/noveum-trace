@@ -42,12 +42,37 @@ class TestConcurrentCallbackThreadSafety:
         """Test multiple threads calling callbacks simultaneously."""
         results = []
         errors = []
+        results_lock = threading.Lock()
+        errors_lock = threading.Lock()
+
+        # Use thread-local storage to track expected span_id per thread
+        thread_local = threading.local()
+
+        # Create a single shared side_effect that uses thread-local storage
+        def start_span_side_effect(*args, **kwargs):
+            # Get the expected span_id from thread-local storage
+            expected_id = getattr(thread_local, "expected_span_id", None)
+            if expected_id is None:
+                # Fallback if thread-local not set
+                expected_id = "span_unknown"
+
+            # Create a new mock span for this call
+            mock_span = Mock()
+            mock_span.span_id = expected_id
+            return mock_span
+
+        # Set the side_effect once before all threads start
+        handler._client.start_span.side_effect = start_span_side_effect
 
         def run_llm_callback(thread_id):
             try:
                 run_id = uuid4()
                 serialized = {"name": f"llm_{thread_id}"}
                 prompts = [f"prompt_{thread_id}"]
+
+                # Store the expected span_id in thread-local storage
+                expected_span_id = f"span_{thread_id}"
+                thread_local.expected_span_id = expected_span_id
 
                 with (
                     patch.object(
@@ -57,12 +82,6 @@ class TestConcurrentCallbackThreadSafety:
                     ),
                     patch.object(handler, "_resolve_parent_span_id", return_value=None),
                 ):
-
-                    # Mock span creation
-                    mock_span = Mock()
-                    mock_span.span_id = f"span_{thread_id}"
-                    handler._client.start_span.return_value = mock_span
-
                     # Call callback
                     handler.on_llm_start(
                         serialized=serialized, prompts=prompts, run_id=run_id
@@ -70,10 +89,16 @@ class TestConcurrentCallbackThreadSafety:
 
                     # Verify span was stored
                     stored_span = handler._get_run(run_id)
-                    results.append((thread_id, run_id, stored_span.span_id))
+                    if stored_span:
+                        with results_lock:
+                            results.append((thread_id, run_id, stored_span.span_id))
+                    else:
+                        with errors_lock:
+                            errors.append((thread_id, "Span not found in runs dict"))
 
             except Exception as e:
-                errors.append((thread_id, e))
+                with errors_lock:
+                    errors.append((thread_id, str(e)))
 
         # Run multiple threads concurrently
         threads = []

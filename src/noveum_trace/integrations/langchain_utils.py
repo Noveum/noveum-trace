@@ -8,6 +8,7 @@ to extract metadata, build attributes, and generate operation names.
 import inspect
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Cache for project root to avoid repeated lookups
 _project_root_cache: Optional[Path] = None
+_project_root_cache_lock = threading.Lock()
 
 
 def _is_library_directory(path: Path) -> bool:
@@ -68,9 +70,10 @@ def _find_project_root(file_path: str) -> Optional[Path]:
     """
     global _project_root_cache
 
-    # Use cached value if available
-    if _project_root_cache is not None:
-        return _project_root_cache
+    # Use cached value if available (thread-safe check)
+    with _project_root_cache_lock:
+        if _project_root_cache is not None:
+            return _project_root_cache
 
     try:
         path = Path(file_path).resolve()
@@ -85,9 +88,10 @@ def _find_project_root(file_path: str) -> Optional[Path]:
         while current != current.parent:  # Stop at filesystem root
             # Check if this directory is NOT a library location
             if not _is_library_directory(current):
-                # This looks like user code! Use it as project root
-                _project_root_cache = current
-                return current
+                with _project_root_cache_lock:
+                    # This looks like user code! Use it as project root
+                    _project_root_cache = current
+                    return current
 
             # Move up one level
             current = current.parent
