@@ -8,6 +8,7 @@ operations including LLM calls, chains, agents, tools, and retrieval operations.
 import logging
 import threading
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any, Optional, Union
 from uuid import UUID
 
@@ -24,11 +25,11 @@ from noveum_trace.integrations.langchain_utils import (
     extract_agent_capabilities,
     extract_agent_type,
     extract_langgraph_metadata,
-    extract_model_name,
     extract_noveum_metadata,
     extract_tool_function_name,
     get_operation_name,
 )
+from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +69,19 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Thread-safe runs dictionary for span tracking
         # Maps run_id -> span (for backward compatibility)
-        self.runs: dict[Union[UUID, str], Any] = {}
+        self.runs: "dict[Union[UUID, str], Any]" = {}  # noqa: UP037, F821
         self._runs_lock = threading.Lock()
 
         # Track root traces by root run_id
         # Maps root_run_id -> trace (for LangGraph workflow grouping)
-        self.root_traces: dict[Union[UUID, str], Any] = {}
+        self.root_traces: "dict[Union[UUID, str], Any]" = {}  # noqa: UP037, F821
         self._root_traces_lock = threading.Lock()
 
         # Track parent relationships
         # Maps run_id -> parent_run_id (self.parent_map)
-        self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = {}
+        self.parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]] = (
+            {}
+        )  # noqa: UP037, F821
         self._parent_map_lock = threading.Lock()
 
         # Custom name mapping for explicit parent relationships
@@ -107,12 +110,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None  # type: ignore[assignment]
 
-    def _set_run(self, run_id: Union[UUID, str], span: Any) -> None:
+    def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
         with self._runs_lock:
             self.runs[run_id] = span
 
-    def _pop_run(self, run_id: Union[UUID, str]) -> Any:
+    def _pop_run(self, run_id: "Union[UUID, str]") -> Any:
         """Thread-safe method to pop and return a run span."""
         with self._runs_lock:
             return self.runs.pop(run_id, None)
@@ -137,31 +140,31 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._names_lock:
             return self.names.get(name)
 
-    def _set_root_trace(self, root_run_id: Union[UUID, str], trace: Any) -> None:
+    def _set_root_trace(self, root_run_id: "Union[UUID, str]", trace: Any) -> None:
         """Thread-safe method to set a root trace."""
         with self._root_traces_lock:
             self.root_traces[root_run_id] = trace
 
-    def _get_root_trace(self, root_run_id: Union[UUID, str]) -> Any:
+    def _get_root_trace(self, root_run_id: "Union[UUID, str]") -> Any:
         """Thread-safe method to get a root trace."""
         with self._root_traces_lock:
             return self.root_traces.get(root_run_id)
 
     def _set_parent(
-        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
+        self, run_id: "Union[UUID, str]", parent_run_id: "Optional[Union[UUID, str]]"
     ) -> None:
         """Thread-safe method to set parent relationship."""
         with self._parent_map_lock:
             self.parent_map[run_id] = parent_run_id
 
-    def _get_parent(self, run_id: Union[UUID, str]) -> Optional[Union[UUID, str]]:
+    def _get_parent(self, run_id: "Union[UUID, str]") -> "Optional[Union[UUID, str]]":
         """Thread-safe method to get parent run_id."""
         with self._parent_map_lock:
             return self.parent_map.get(run_id)
 
     def _find_root_run_id_for_trace(
         self, target_trace: Any
-    ) -> Optional[Union[UUID, str]]:
+    ) -> "Optional[Union[UUID, str]]":
         """Find the root_run_id associated with a specific trace object."""
         with self._root_traces_lock:
             for root_run_id, trace in self.root_traces.items():
@@ -170,7 +173,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         return None
 
     def _is_descendant_of(
-        self, run_id: Union[UUID, str], potential_ancestor: Union[UUID, str]
+        self, run_id: "Union[UUID, str]", potential_ancestor: "Union[UUID, str]"
     ) -> bool:
         """Check if run_id is a descendant of potential_ancestor in the parent chain."""
         current = self._get_parent(run_id)
@@ -184,11 +187,240 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return False
 
+    def _get_operation_name(self, event_type: str, serialized: dict[str, Any]) -> str:
+        """Generate standardized operation names."""
+        if serialized is None:
+            return f"{event_type}.unknown"
+        name = serialized.get("name", "unknown")
+
+        if event_type == "llm_start":
+            # Use model name instead of class name for better readability
+            model_name = self._extract_model_name(serialized)
+            return f"llm.{model_name}"
+        elif event_type == "chain_start":
+            return f"chain.{name}"
+        elif event_type == "agent_start":
+            return f"agent.{name}"
+        elif event_type == "retriever_start":
+            return f"retrieval.{name}"
+        elif event_type == "tool_start":
+            return f"tool.{name}"
+
+        return f"{event_type}.{name}"
+
+    def _extract_invocation_param(
+        self,
+        serialized: Optional[dict[str, Any]],
+        kwargs: dict[str, Any],
+        key: str,
+    ) -> Any:
+        """Extract a specific invocation parameter from LangChain metadata."""
+
+        sources: list[dict[str, Any]] = []
+
+        if kwargs:
+            invocation_params = kwargs.get("invocation_params")
+            if isinstance(invocation_params, dict):
+                sources.append(invocation_params)
+            sources.append(kwargs)
+
+        if serialized:
+            serialized_kwargs = serialized.get("kwargs")
+            if isinstance(serialized_kwargs, dict):
+                sources.append(serialized_kwargs)
+
+        for source in sources:
+            if key in source and source[key] is not None:
+                return source[key]
+
+        return None
+
+    def _extract_model_name(self, serialized: dict[str, Any]) -> str:
+        """Extract and normalize model name from serialized LLM data."""
+        if not serialized:
+            return "unknown"
+
+        # Try to get model name from kwargs
+        kwargs = serialized.get("kwargs", {})
+        model = kwargs.get("model")
+        if model:
+            # Clean up model name (remove common prefixes)
+            model_str = str(model).strip()
+            # Remove "models/" prefix if present (e.g., "models/gemini-2.0-flash" -> "gemini-2.0-flash")
+            if model_str.startswith("models/"):
+                model_str = model_str[7:]  # Remove "models/" prefix
+            # Use normalize_model_name utility instead of hardcoding prefixes
+            try:
+                from noveum_trace.utils.llm_utils import normalize_model_name
+
+                normalized = normalize_model_name(model_str)
+                return normalized
+            except Exception:
+                # Fallback to basic prefix removal
+                for prefix in [
+                    "openai/",
+                    "anthropic/",
+                    "google/",
+                    "meta/",
+                    "microsoft/",
+                    "gemini/",
+                ]:
+                    if model_str.startswith(prefix):
+                        model_str = model_str[len(prefix) :]
+                return model_str
+
+        # Fallback to provider name from id path
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "openai" from ["langchain", "chat_models", "openai", "ChatOpenAI"]
+            return id_path[-2]
+
+        # Final fallback to class name
+        return serialized.get("name", "unknown")
+
+    def _extract_provider_name(self, serialized: dict[str, Any]) -> str:
+        """Extract provider name from serialized LLM data using model registry."""
+        if not serialized:
+            return "unknown"
+
+        # Strategy 1: Get provider from model name using the model registry
+        # This is the most reliable way as it uses the actual model name
+        model_name = self._extract_model_name(serialized)
+        if model_name and model_name != "unknown":
+            try:
+                from noveum_trace.utils.llm_utils import get_model_info
+
+                model_info = get_model_info(model_name)
+                if model_info and model_info.provider:
+                    return model_info.provider
+            except Exception:
+                pass  # Fall through to other methods if registry lookup fails
+
+        # Strategy 2: Try to find provider by matching model patterns in registry
+        # Instead of hardcoding patterns, we search the registry for matching models
+        if model_name and model_name != "unknown":
+            try:
+                from noveum_trace.utils.llm_utils import MODEL_REGISTRY
+
+                model_lower = model_name.lower()
+                # Search registry for models that match or are prefixes of the model name
+                # This catches variations like "gpt-4", "gpt-4o", "gpt-3.5", etc.
+                # We check if the model name starts with any registry model name (at least 3 chars)
+                best_match = None
+                best_match_length = 0
+                for registry_model_name, model_info in MODEL_REGISTRY.items():
+                    registry_lower = registry_model_name.lower()
+                    # Check if model name starts with registry model, or vice versa
+                    # Use at least 3 characters to avoid false matches
+                    if len(registry_lower) >= 3:
+                        if model_lower.startswith(
+                            registry_lower
+                        ) or registry_lower.startswith(model_lower):
+                            # Prefer longer matches for better accuracy
+                            if len(registry_lower) > best_match_length:
+                                best_match = model_info.provider
+                                best_match_length = len(registry_lower)
+
+                if best_match:
+                    return best_match
+            except Exception:
+                pass
+
+        # Strategy 3: Try to find provider in id path by checking against registry providers
+        id_path = serialized.get("id", [])
+        if id_path:
+            try:
+                from noveum_trace.utils.llm_utils import MODEL_REGISTRY
+
+                # Get all unique providers from the registry dynamically
+                valid_providers = {info.provider for info in MODEL_REGISTRY.values()}
+
+                # Check id path elements against valid providers from registry
+                for path_element in id_path:
+                    if isinstance(path_element, str) and path_element.lower() in {
+                        p.lower() for p in valid_providers
+                    }:
+                        # Find the matching provider with correct case from registry
+                        for provider in valid_providers:
+                            if provider.lower() == path_element.lower():
+                                return provider
+            except Exception:
+                pass
+
+        # Strategy 4: Use second-to-last element of id path as fallback
+        # (This might be "chat_models" or similar, but it's better than "unknown")
+        if len(id_path) >= 2:
+            return id_path[-2]
+
+        # Final fallback
+        return "unknown"
+
+    def _extract_agent_type(self, serialized: dict[str, Any]) -> str:
+        """Extract agent type from serialized agent data."""
+        if not serialized:
+            return "unknown"
+
+        # Get agent category from ID path
+        id_path = serialized.get("id", [])
+        if len(id_path) >= 2:
+            # e.g., "react" from ["langchain", "agents", "react", "ReActAgent"]
+            return id_path[-2]
+
+        return "unknown"
+
+    def _extract_agent_capabilities(self, serialized: dict[str, Any]) -> str:
+        """Extract agent capabilities from tools in serialized data."""
+        if not serialized:
+            return "unknown"
+
+        capabilities = []
+        kwargs = serialized.get("kwargs", {})
+        tools = kwargs.get("tools", [])
+
+        if tools:
+            capabilities.append("tool_usage")
+
+            # Extract specific tool types
+            tool_types = set()
+            for tool in tools:
+                if isinstance(tool, dict):
+                    tool_name = tool.get("name", "").lower()
+                    if "search" in tool_name or "web" in tool_name:
+                        tool_types.add("web_search")
+                    elif "calc" in tool_name or "math" in tool_name:
+                        tool_types.add("calculation")
+                    elif "file" in tool_name or "read" in tool_name:
+                        tool_types.add("file_operations")
+                    elif "api" in tool_name or "request" in tool_name:
+                        tool_types.add("api_calls")
+
+            if tool_types:
+                capabilities.extend(tool_types)
+
+        # Add default capabilities
+        if not capabilities:
+            capabilities = ["reasoning"]
+
+        return ",".join(capabilities)
+
+    def _extract_tool_function_name(self, serialized: dict[str, Any]) -> str:
+        """Extract function name from serialized tool data."""
+        if not serialized:
+            return "unknown"
+
+        kwargs = serialized.get("kwargs", {})
+        func_name = kwargs.get("name")
+        if func_name:
+            return func_name
+
+        # Fallback to class name
+        return serialized.get("name", "unknown")
+
     def _is_descendant_of_unlocked(
         self,
-        run_id: Union[UUID, str],
-        potential_ancestor: Union[UUID, str],
-        parent_map: dict[Union[UUID, str], Optional[Union[UUID, str]]],
+        run_id: "Union[UUID, str]",
+        potential_ancestor: "Union[UUID, str]",
+        parent_map: "dict[Union[UUID, str], Optional[Union[UUID, str]]]",
     ) -> bool:
         """
         Check if run_id is a descendant of potential_ancestor (without acquiring locks).
@@ -211,7 +443,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         return False
 
-    def _cleanup_trace_tracking(self, root_run_id: Union[UUID, str]) -> None:
+    def _cleanup_trace_tracking(self, root_run_id: "Union[UUID, str]") -> None:
         """
         Clean up tracking data for a finished trace.
 
@@ -253,8 +485,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             logger.error(f"Error cleaning up trace tracking data: {e}")
 
     def _find_root_run_id(
-        self, run_id: Union[UUID, str], parent_run_id: Optional[Union[UUID, str]]
-    ) -> Union[UUID, str]:
+        self, run_id: "Union[UUID, str]", parent_run_id: "Optional[Union[UUID, str]]"
+    ) -> "Union[UUID, str]":
         """Find the root run_id by traversing parent relationships."""
         # Store this parent relationship
         self._set_parent(run_id, parent_run_id)
@@ -705,31 +937,65 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_name, run_id, parent_run_id
             )
 
-            # Create span
+            # Extract the actual model name and provider
+            # Try extracting model from kwargs passed to this function first (LangChain may pass it here)
+            # Then fall back to serialized kwargs
+            model_from_kwargs = kwargs.get("invocation_params", {}).get(
+                "model"
+            ) or kwargs.get("model")
+
+            # Create a temporary serialized dict with model if found in kwargs
+            if model_from_kwargs and not serialized.get("kwargs", {}).get("model"):
+                serialized_with_model = serialized.copy()
+                if "kwargs" not in serialized_with_model:
+                    serialized_with_model["kwargs"] = {}
+                serialized_with_model["kwargs"]["model"] = model_from_kwargs
+                extracted_model_name = self._extract_model_name(serialized_with_model)
+            else:
+                extracted_model_name = self._extract_model_name(serialized)
+
+            extracted_provider = self._extract_provider_name(serialized)
+
+            temperature = self._extract_invocation_param(
+                serialized, kwargs, "temperature"
+            )
+
+            attribute_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["tags", "metadata", "temperature"]
+                and isinstance(v, (str, int, float, bool))
+            }
+
+            span_attributes: dict[str, Any] = {
+                "langchain.run_id": str(run_id),
+                "llm.model": extracted_model_name,
+                "llm.provider": extracted_provider,
+                "llm.operation": "completion",
+                # Input attributes
+                "llm.input.prompts": prompts[:5] if len(prompts) > 5 else prompts,
+                "llm.input.prompt_count": len(prompts),
+                **attribute_kwargs,
+            }
+
+            if temperature is not None:
+                if isinstance(temperature, (int, float)) and not isinstance(
+                    temperature, bool
+                ):
+                    span_attributes["llm.input.temperature"] = float(temperature)
+                elif isinstance(temperature, str):
+                    try:
+                        span_attributes["llm.input.temperature"] = float(temperature)
+                    except ValueError:
+                        span_attributes["llm.input.temperature"] = temperature
+                else:
+                    span_attributes["llm.input.temperature"] = temperature
+
+            # Create span (either in new trace or existing trace)
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
-                attributes={
-                    "langchain.run_id": str(run_id),
-                    "llm.model": extract_model_name(serialized),
-                    "llm.provider": (
-                        serialized.get("id", ["unknown"])[-1]
-                        if serialized and isinstance(serialized.get("id"), list)
-                        else (
-                            serialized.get("id", "unknown") if serialized else "unknown"
-                        )
-                    ),
-                    "llm.operation": "completion",
-                    # Input attributes
-                    "llm.input.prompts": prompts[:5] if len(prompts) > 5 else prompts,
-                    "llm.input.prompt_count": len(prompts),
-                    **{
-                        k: v
-                        for k, v in kwargs.items()
-                        if k not in ["tags", "metadata"]
-                        and isinstance(v, (str, int, float, bool))
-                    },
-                },
+                attributes=span_attributes,
             )
 
             # Store span for later cleanup
@@ -767,6 +1033,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Add response data
             generations = []
             token_usage = {}
+            end_time = datetime.now(timezone.utc)
+            latency_ms = None
+            if getattr(span, "start_time", None) is not None:
+                latency_ms = (end_time - span.start_time).total_seconds() * 1000
 
             if hasattr(response, "generations") and response.generations:
                 generations = [
@@ -791,6 +1061,45 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     }
                 )
 
+            provider = span.attributes.get("llm.provider")
+            model = span.attributes.get("llm.model")
+
+            if model and not usage_attrs.get("llm.input_tokens"):
+                prompts = span.attributes.get("llm.input.prompts")
+                if prompts:
+                    usage_attrs["llm.input_tokens"] = estimate_token_count(
+                        prompts, model=model, provider=provider
+                    )
+
+            if model and not usage_attrs.get("llm.output_tokens") and generations:
+                usage_attrs["llm.output_tokens"] = estimate_token_count(
+                    generations, model=model, provider=provider
+                )
+
+            if (
+                usage_attrs.get("llm.input_tokens") is not None
+                and usage_attrs.get("llm.output_tokens") is not None
+            ):
+                usage_attrs["llm.total_tokens"] = (
+                    usage_attrs.get("llm.total_tokens")
+                    or usage_attrs["llm.input_tokens"]
+                    + usage_attrs["llm.output_tokens"]
+                )
+
+            cost_attrs = {}
+            if model and usage_attrs.get("llm.input_tokens") is not None:
+                cost_info = estimate_cost(
+                    model,
+                    input_tokens=usage_attrs.get("llm.input_tokens", 0),
+                    output_tokens=usage_attrs.get("llm.output_tokens", 0),
+                )
+                cost_attrs = {
+                    "llm.cost.input": cost_info.get("input_cost", 0),
+                    "llm.cost.output": cost_info.get("output_cost", 0),
+                    "llm.cost.total": cost_info.get("total_cost", 0),
+                    "llm.cost.currency": cost_info.get("currency", "USD"),
+                }
+
             span.set_attributes(
                 {
                     # Output attributes
@@ -803,11 +1112,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     ),
                     # Flattened usage attributes
                     **usage_attrs,
+                    **cost_attrs,
+                    **(
+                        {"llm.latency_ms": latency_ms} if latency_ms is not None else {}
+                    ),
                 }
             )
 
             span.set_status(SpanStatus.OK)
-            self._client.finish_span(span)
+            self._client.finish_span(span, end_time=end_time)
 
             # Check if we should finish the trace
             self._finish_trace_if_needed()

@@ -139,7 +139,7 @@ handler = NoveumTraceCallbackHandler(
 )
 ```
 
-See [`examples/langgraph_custom_parent_prioritzed_example.py`](examples/langgraph_custom_parent_prioritzed_example.py) and [`examples/langgraph_custom_parent_example.py`](examples/langgraph_custom_parent_example.py) for working examples showing both parent ID strategies.
+See [`examples/langgraph_custom_parent_prioritized_example.py`](examples/langgraph_custom_parent_prioritzed_example.py) and [`examples/langgraph_custom_parent_example.py`](examples/langgraph_custom_parent_example.py) for working examples showing both parent ID strategies.
 
 ### Asynchronous LLM Invocation
 

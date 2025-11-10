@@ -149,7 +149,11 @@ def trace_llm(
 
                         # Estimate input tokens
                         if capture_tokens:
-                            input_tokens = estimate_token_count(prompts)
+                            input_tokens = estimate_token_count(
+                                prompts,
+                                model=attributes.get("llm.model"),
+                                provider=attributes.get("llm.provider"),
+                            )
                             attributes["llm.usage.input_tokens"] = input_tokens
 
             except Exception as e:
@@ -178,7 +182,11 @@ def trace_llm(
 
                         # Estimate output tokens
                         if capture_tokens:
-                            output_tokens = estimate_token_count(completion)
+                            output_tokens = estimate_token_count(
+                                completion,
+                                model=span.attributes.get("llm.model"),
+                                provider=span.attributes.get("llm.provider"),
+                            )
                             span.set_attribute("llm.usage.output_tokens", output_tokens)
 
                             # Calculate total tokens
