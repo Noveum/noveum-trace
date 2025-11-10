@@ -17,11 +17,11 @@ import pytest
 try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
     from noveum_trace.integrations.langchain_utils import (
+        _find_project_root,
+        _is_library_directory,
+        _make_path_relative,
         extract_call_site_info,
         extract_function_definition_info,
-        _find_project_root,
-        _make_path_relative,
-        _is_library_directory,
     )
 
     LANGCHAIN_AVAILABLE = True
