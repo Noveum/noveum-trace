@@ -25,6 +25,7 @@ from noveum_trace.integrations.langchain_utils import (
     extract_agent_capabilities,
     extract_agent_type,
     extract_call_site_info,
+    extract_function_definition_info,
     extract_langgraph_metadata,
     extract_noveum_metadata,
     extract_tool_function_name,
@@ -1495,8 +1496,42 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
-            # Extract call site information
+            # Extract call site information (includes function definition if available)
             call_site_info = extract_call_site_info(skip_frames=1)  # Skip this frame
+
+            # Try to extract function definition information from tool object
+            # For LangChain tools created with @tool, the function is in tool.func
+            function_def_info = None
+            try:
+                # Method 1: Try to get function from kwargs (if tool object is passed)
+                tool_obj = kwargs.get("tool") or kwargs.get("tool_instance")
+                if tool_obj:
+                    if hasattr(tool_obj, "func"):
+                        # Tool has a func attribute (for @tool decorated functions)
+                        func = tool_obj.func
+                        function_def_info = extract_function_definition_info(func)
+                    elif callable(tool_obj):
+                        # Tool itself is callable
+                        function_def_info = extract_function_definition_info(tool_obj)
+
+                # Method 2: If call_site_info has function definition, use it
+                if not function_def_info and call_site_info:
+                    # Check if call_site_info already has function definition info
+                    if "function.definition.file" in call_site_info:
+                        function_def_info = {
+                            "function.definition.file": call_site_info.get(
+                                "function.definition.file"
+                            ),
+                            "function.definition.start_line": call_site_info.get(
+                                "function.definition.start_line"
+                            ),
+                            "function.definition.end_line": call_site_info.get(
+                                "function.definition.end_line"
+                            ),
+                        }
+            except Exception:
+                # If extraction fails, continue without function definition info
+                pass
 
             span = self._client.start_span(
                 name=span_name,
@@ -1510,11 +1545,14 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     **{
                         k: v
                         for k, v in kwargs.items()
-                        if k not in ["tags", "metadata", "inputs"]
+                        if k
+                        not in ["tags", "metadata", "inputs", "tool", "tool_instance"]
                         and isinstance(v, (str, int, float, bool))
                     },
                     # Add call site information if available
                     **(call_site_info or {}),
+                    # Add function definition information if available
+                    **(function_def_info or {}),
                 },
             )
 
