@@ -413,6 +413,11 @@ def attach_context_to_span(span: Span) -> None:
     context = get_current_context()
 
     # Add context attributes to span
+    # Defensive: ensure attributes is a dict (should always be, but be safe)
+    if not isinstance(context.attributes, dict):
+        span.set_attributes({})
+        return
+
     context_attributes = {}
     for key, value in context.attributes.items():
         context_attributes[f"context.{key}"] = value

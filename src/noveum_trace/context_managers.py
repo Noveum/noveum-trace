@@ -9,7 +9,7 @@ import functools
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Optional, Union
 
-from noveum_trace.core.context import get_current_trace
+from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
 
 
@@ -57,6 +57,9 @@ class TraceContextManager:
         if self.tags:
             for key, value in self.tags.items():
                 self.span.set_attribute(f"tag.{key}", value)
+
+        # Attach context attributes to span
+        attach_context_to_span(self.span)
 
         return self.span
 
