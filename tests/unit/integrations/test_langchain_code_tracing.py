@@ -84,9 +84,21 @@ class TestCodeTracingUtils:
 
     def test_is_library_directory(self):
         """Test library directory detection."""
+        # Should detect library directories
         assert _is_library_directory(Path("/usr/lib/python3.9/site-packages"))
         assert _is_library_directory(Path("/path/to/venv/lib/python3.9"))
+        assert _is_library_directory(Path("/path/to/.venv"))
+        assert _is_library_directory(Path("/path/to/env"))
+        assert _is_library_directory(Path("/path/to/.env"))
+        assert _is_library_directory(Path("/path/to/virtualenv"))
+
+        # Should NOT treat user directories as library directories
+        # (even if they contain "env" as a substring)
+        assert not _is_library_directory(Path("/path/to/frontend/src"))
+        assert not _is_library_directory(Path("/path/to/inventory/scripts"))
+        assert not _is_library_directory(Path("/path/to/development/code"))
         assert not _is_library_directory(Path("/path/to/project/src"))
+        assert not _is_library_directory(Path("/home/user/environment_setup"))
 
     def test_find_project_root(self):
         """Test project root detection."""

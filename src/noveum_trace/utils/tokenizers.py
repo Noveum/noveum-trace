@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Optional
 
 try:  # pragma: no cover - optional dependency
-    import tiktoken  # type: ignore
+    import tiktoken
 except Exception:  # pragma: no cover - optional dependency
-    tiktoken = None
+    tiktoken = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency
     from anthropic import Tokenizer as AnthropicTokenizer  # type: ignore

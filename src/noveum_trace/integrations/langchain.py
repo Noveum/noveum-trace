@@ -13,10 +13,10 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 # Import LangChain dependencies
-from langchain_core.agents import AgentAction, AgentFinish
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.documents import Document
-from langchain_core.outputs import LLMResult
+from langchain_core.agents import AgentAction, AgentFinish  # type: ignore[import-not-found]
+from langchain_core.callbacks import BaseCallbackHandler  # type: ignore[import-not-found]
+from langchain_core.documents import Document  # type: ignore[import-not-found]
+from langchain_core.outputs import LLMResult  # type: ignore[import-not-found]
 
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.langchain_utils import (

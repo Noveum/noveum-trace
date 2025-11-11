@@ -29,25 +29,56 @@ def _is_library_directory(path: Path) -> bool:
     Returns:
         True if this is a library directory, False otherwise
     """
-    path_str = str(path).lower()
+    try:
+        # Normalize the path (resolve to absolute, handle symlinks)
+        normalized_path = path.resolve()
+        path_str = str(normalized_path).lower()
+        path_parts = [part.lower() for part in normalized_path.parts]
 
-    # Known library locations
-    library_patterns = [
-        "site-packages",
-        "dist-packages",
-        "venv",
-        ".venv",
-        "env",
-        ".env",
-        "virtualenv",
-        "lib/python",
-        "python3.",
-        "python2.",
-        "frozen",
-        "importlib",
-    ]
+        # Library directory names that must match exactly
+        # This prevents false positives like "frontend" or "inventory"
+        # being treated as library directories
+        library_dir_names = {
+            "site-packages",
+            "dist-packages",
+            "venv",
+            ".venv",
+            "env",
+            ".env",
+            "virtualenv",
+        }
 
-    return any(pattern in path_str for pattern in library_patterns)
+        # Check if any directory component exactly matches a library directory name
+        if any(part in library_dir_names for part in path_parts):
+            return True
+
+        # Patterns that require substring matching (e.g., "lib/python3.9", "python3.11")
+        library_substrings: tuple[str, ...] = (
+            "lib/python",
+            "python3.",
+            "python2.",
+            "frozen",
+            "importlib",
+        )
+        return any(substring in path_str for substring in library_substrings)
+    except Exception:
+        # If path resolution fails, fall back to string matching
+        path_str = str(path).lower()
+        fallback_substrings: tuple[str, ...] = (
+            "site-packages",
+            "dist-packages",
+            "venv",
+            ".venv",
+            "/env/",
+            "/.env/",
+            "virtualenv",
+            "lib/python",
+            "python3.",
+            "python2.",
+            "frozen",
+            "importlib",
+        )
+        return any(substring in path_str for substring in fallback_substrings)
 
 
 def _find_project_root(file_path: str) -> Optional[Path]:
