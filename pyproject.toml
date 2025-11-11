@@ -212,11 +212,11 @@ ignore = [
 "src/noveum_trace/auto_instrument.py" = ["B010"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_untyped_defs = true
-follow_imports = "silent"
+follow_imports = "skip"
 strict_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -225,11 +225,22 @@ no_implicit_optional = true
 show_error_codes = true
 mypy_path = "src"
 packages = ["noveum_trace"]
+exclude = [
+    ".*site-packages.*",
+    ".*_pytest.*",
+    ".*pytest.*",
+]
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = [
     "openai.*",
     "anthropic.*",
+    "tiktoken",
+    "tiktoken.*",
+    "langchain_core.*",
+    "_pytest.*",
+    "pytest.*",
 ]
 ignore_missing_imports = true
 

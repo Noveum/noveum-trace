@@ -13,8 +13,13 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 # Import LangChain dependencies
-from langchain_core.agents import AgentAction, AgentFinish
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.agents import (
+    AgentAction,
+    AgentFinish,
+)
+from langchain_core.callbacks import (
+    BaseCallbackHandler,
+)
 from langchain_core.documents import Document
 from langchain_core.outputs import LLMResult
 
@@ -24,6 +29,8 @@ from noveum_trace.integrations.langchain_utils import (
     build_routing_attributes,
     extract_agent_capabilities,
     extract_agent_type,
+    extract_code_location_info,
+    extract_function_definition_info,
     extract_langgraph_metadata,
     extract_noveum_metadata,
     extract_tool_function_name,
@@ -967,6 +974,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 and isinstance(v, (str, int, float, bool))
             }
 
+            # Extract code location information
+            code_location_info = extract_code_location_info(
+                skip_frames=1
+            )  # Skip this frame
+
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
                 "llm.model": extracted_model_name,
@@ -977,6 +989,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "llm.input.prompt_count": len(prompts),
                 **attribute_kwargs,
             }
+
+            # Add code location information if available
+            if code_location_info:
+                span_attributes.update(code_location_info)
 
             if temperature is not None:
                 if isinstance(temperature, (int, float)) and not isinstance(
@@ -1521,6 +1537,45 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
+            # Extract code location information (includes function definition if available)
+            code_location_info = extract_code_location_info(
+                skip_frames=1
+            )  # Skip this frame
+
+            # Try to extract function definition information from tool object
+            # For LangChain tools created with @tool, the function is in tool.func
+            function_def_info = None
+            try:
+                # Method 1: Try to get function from kwargs (if tool object is passed)
+                tool_obj = kwargs.get("tool") or kwargs.get("tool_instance")
+                if tool_obj:
+                    if hasattr(tool_obj, "func"):
+                        # Tool has a func attribute (for @tool decorated functions)
+                        func = tool_obj.func
+                        function_def_info = extract_function_definition_info(func)
+                    elif callable(tool_obj):
+                        # Tool itself is callable
+                        function_def_info = extract_function_definition_info(tool_obj)
+
+                # Method 2: If code_location_info has function definition, use it
+                if not function_def_info and code_location_info:
+                    # Check if code_location_info already has function definition info
+                    if "function.definition.file" in code_location_info:
+                        function_def_info = {
+                            "function.definition.file": code_location_info.get(
+                                "function.definition.file"
+                            ),
+                            "function.definition.start_line": code_location_info.get(
+                                "function.definition.start_line"
+                            ),
+                            "function.definition.end_line": code_location_info.get(
+                                "function.definition.end_line"
+                            ),
+                        }
+            except Exception:
+                # If extraction fails, continue without function definition info
+                pass
+
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1533,9 +1588,14 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     **{
                         k: v
                         for k, v in kwargs.items()
-                        if k not in ["tags", "metadata", "inputs"]
+                        if k
+                        not in ["tags", "metadata", "inputs", "tool", "tool_instance"]
                         and isinstance(v, (str, int, float, bool))
                     },
+                    # Add code location information if available
+                    **(code_location_info or {}),
+                    # Add function definition information if available
+                    **(function_def_info or {}),
                 },
             )
 

@@ -5,10 +5,300 @@ This module provides pure utility functions used by the NoveumTraceCallbackHandl
 to extract metadata, build attributes, and generate operation names.
 """
 
+import inspect
 import logging
+import os
+import threading
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Cache for project root to avoid repeated lookups
+_project_root_cache: Optional[Path] = None
+_project_root_cache_lock = threading.Lock()
+
+
+def _is_library_directory(path: Path) -> bool:
+    """
+    Check if a directory is a known library location (not user code).
+
+    Args:
+        path: Directory path to check
+
+    Returns:
+        True if this is a library directory, False otherwise
+    """
+    try:
+        # Normalize the path (resolve to absolute, handle symlinks)
+        normalized_path = path.resolve()
+        path_str = str(normalized_path).lower()
+        path_parts = [part.lower() for part in normalized_path.parts]
+
+        # Library directory names that must match exactly
+        # This prevents false positives like "frontend" or "inventory"
+        # being treated as library directories
+        library_dir_names = {
+            "site-packages",
+            "dist-packages",
+            "venv",
+            ".venv",
+            "env",
+            ".env",
+            "virtualenv",
+        }
+
+        # Check if any directory component exactly matches a library directory name
+        if any(part in library_dir_names for part in path_parts):
+            return True
+
+        # Patterns that require substring matching (e.g., "lib/python3.9", "python3.11")
+        library_substrings: tuple[str, ...] = (
+            "lib/python",
+            "python3.",
+            "python2.",
+            "frozen",
+            "importlib",
+        )
+        return any(substring in path_str for substring in library_substrings)
+    except Exception:
+        # If path resolution fails, fall back to string matching
+        path_str = str(path).lower()
+        fallback_substrings: tuple[str, ...] = (
+            "site-packages",
+            "dist-packages",
+            "venv",
+            ".venv",
+            "/env/",
+            "/.env/",
+            "virtualenv",
+            "lib/python",
+            "python3.",
+            "python2.",
+            "frozen",
+            "importlib",
+        )
+        return any(substring in path_str for substring in fallback_substrings)
+
+
+def _find_project_root(file_path: str) -> Optional[Path]:
+    """
+    Find the project root directory by identifying the first user code directory.
+
+    This method finds the first directory that:
+    1. Contains the file
+    2. Is NOT in a known library location (site-packages, venv, etc.)
+    3. Is likely the user's project root
+
+    This works in production environments where code might be deployed
+    without traditional markers like .git or pyproject.toml.
+
+    Args:
+        file_path: Absolute path to a file
+
+    Returns:
+        Path to project root if found, None otherwise
+    """
+    global _project_root_cache
+
+    # Use cached value if available (thread-safe check)
+    with _project_root_cache_lock:
+        if _project_root_cache is not None:
+            return _project_root_cache
+
+    try:
+        path = Path(file_path).resolve()
+
+        # If it's a file, start from its parent directory
+        if path.is_file():
+            current = path.parent
+        else:
+            current = path
+
+        # Walk up the directory tree
+        while current != current.parent:  # Stop at filesystem root
+            # Check if this directory is NOT a library location
+            if not _is_library_directory(current):
+                with _project_root_cache_lock:
+                    # This looks like user code! Use it as project root
+                    _project_root_cache = current
+                    return current
+
+            # Move up one level
+            current = current.parent
+
+        # If we reached filesystem root without finding user code, return None
+        return None
+    except Exception:
+        # If anything fails, return None
+        return None
+
+
+def _make_path_relative(file_path: str) -> str:
+    """
+    Convert an absolute file path to a relative path from project root.
+
+    If project root cannot be determined, returns just the filename.
+
+    Args:
+        file_path: Absolute file path
+
+    Returns:
+        Relative path from project root, or just filename if root not found
+    """
+    try:
+        project_root = _find_project_root(file_path)
+        if project_root is None:
+            # If we can't find project root, just return the filename
+            return os.path.basename(file_path)
+
+        abs_path = Path(file_path).resolve()
+        try:
+            relative_path = abs_path.relative_to(project_root)
+            return str(relative_path)
+        except ValueError:
+            # Path is not under project root, return filename
+            return os.path.basename(file_path)
+    except Exception:
+        # If anything fails, return filename
+        return os.path.basename(file_path)
+
+
+def extract_code_location_info(skip_frames: int = 0) -> Optional[dict[str, Any]]:
+    """
+    Extract code location information from the call stack.
+
+    Walks up the call stack to find the first frame that's in user code,
+    skipping library code and standard library.
+
+    This function intelligently identifies user code by:
+    - Skipping files in known library locations (site-packages, venv, etc.)
+    - Skipping Python standard library code
+    - Skipping LangChain internal code (but not user code that uses LangChain)
+    - NOT skipping noveum_trace if it's part of the user's codebase
+    - Finding the actual calling code in the user's application
+
+    This approach works in production environments where the SDK might be
+    installed in various ways (pip, local development, etc.).
+
+    Args:
+        skip_frames: Number of frames to skip from the top (default: 0)
+
+    Returns:
+        Dict with code location info: {
+            "code.file": str,  # Relative path from project root
+            "code.line": int,
+            "code.function": str,
+            "code.module": str,
+            "code.context": Optional[str]  # The actual line of code
+        }
+        Returns None if no user code frame found
+    """
+    try:
+        stack = inspect.stack()
+
+        # Skip the current frame (this function) and any requested frames
+        start_idx = 1 + skip_frames
+
+        for frame_info in stack[start_idx:]:
+            filename = frame_info.filename
+
+            # Skip if this is a builtin or internal Python code
+            if filename.startswith("<"):
+                continue
+
+            # Skip if this frame is in a known library location
+            # We check the directory, not just the filename, to be more accurate
+            try:
+                file_path = Path(filename).resolve()
+                # Check if the file is in a library directory
+                if _is_library_directory(file_path.parent):
+                    continue
+            except Exception:
+                # If we can't resolve the path, fall back to string matching
+                filename_lower = filename.lower()
+                library_patterns = [
+                    "site-packages",
+                    "dist-packages",
+                    "venv",
+                    ".venv",
+                    "env/",
+                    "virtualenv",
+                    "lib/python",
+                    "frozen",
+                    "importlib",
+                ]
+                if any(pattern in filename_lower for pattern in library_patterns):
+                    continue
+
+            # Skip LangChain internal code (but not user code that uses LangChain)
+            # Only skip if it's clearly in the langchain package directory
+            if "langchain" in filename.lower():
+                # Check if it's in site-packages/langchain or similar
+                try:
+                    if _is_library_directory(Path(filename).parent):
+                        continue
+                except Exception:
+                    # If we can't check the path, skip langchain files in library locations
+                    if any(
+                        pattern in filename.lower()
+                        for pattern in ["site-packages", "dist-packages"]
+                    ):
+                        continue
+
+            # Found user code! Extract information
+            try:
+                code_context = None
+                if frame_info.code_context and len(frame_info.code_context) > 0:
+                    code_context = frame_info.code_context[0].strip()
+
+                module_name = "unknown"
+                function_def_info = None
+                try:
+                    frame = frame_info.frame
+                    module_name = frame.f_globals.get("__name__", "unknown")
+
+                    # Try to get function definition info from the frame
+                    func_name = frame_info.function
+                    if func_name and func_name != "<module>":
+                        # Try to get the function object from the frame
+                        func_obj = frame.f_locals.get(func_name) or frame.f_globals.get(
+                            func_name
+                        )
+                        if func_obj and callable(func_obj):
+                            # Extract function definition info
+                            function_def_info = extract_function_definition_info(
+                                func_obj
+                            )
+                except Exception:
+                    pass
+
+                # Make path relative to project root
+                relative_file = _make_path_relative(filename)
+
+                result = {
+                    "code.file": relative_file,
+                    "code.line": frame_info.lineno,
+                    "code.function": frame_info.function,
+                    "code.module": module_name,
+                    "code.context": code_context,
+                }
+
+                # Add function definition info if available
+                if function_def_info:
+                    result.update(function_def_info)
+
+                return result
+            except Exception:
+                # If extraction fails, continue to next frame
+                continue
+
+        # No user code frame found
+        return None
+
+    except Exception:
+        # If stack inspection fails, return None (fail gracefully)
+        return None
 
 
 def extract_noveum_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -205,6 +495,44 @@ def extract_tool_function_name(serialized: dict[str, Any]) -> str:
 
     # Fallback to class name
     return serialized.get("name", "unknown")
+
+
+def extract_function_definition_info(func: Any) -> Optional[dict[str, Any]]:
+    """
+    Extract function definition information (file, start line, end line).
+
+    Args:
+        func: Function object
+
+    Returns:
+        Dict with function definition info:
+        {
+            "function.definition.file": str,  # Relative path from project root
+            "function.definition.start_line": int,
+            "function.definition.end_line": int,
+        }
+        Returns None if extraction fails
+    """
+    try:
+        if not callable(func):
+            return None
+
+        # Get source lines
+        source_lines, start_line = inspect.getsourcelines(func)
+        end_line = start_line + len(source_lines) - 1
+
+        # Get file path and make it relative
+        file_path = inspect.getfile(func)
+        relative_file = _make_path_relative(file_path)
+
+        return {
+            "function.definition.file": relative_file,
+            "function.definition.start_line": start_line,
+            "function.definition.end_line": end_line,
+        }
+    except (OSError, TypeError, AttributeError):
+        # Function might be builtin, from C extension, or not have source
+        return None
 
 
 def extract_langgraph_metadata(
