@@ -226,8 +226,9 @@ show_error_codes = true
 mypy_path = "src"
 packages = ["noveum_trace"]
 exclude = [
-    ".*/site-packages/.*",
-    ".*/_pytest/.*",
+    ".*site-packages.*",
+    ".*_pytest.*",
+    ".*pytest.*",
 ]
 
 [[tool.mypy.overrides]]
@@ -237,6 +238,8 @@ module = [
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",
+    "_pytest.*",
+    "pytest.*",
 ]
 ignore_missing_imports = true
 
