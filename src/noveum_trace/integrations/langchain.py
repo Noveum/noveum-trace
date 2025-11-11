@@ -13,8 +13,13 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 # Import LangChain dependencies
-from langchain_core.agents import AgentAction, AgentFinish  # type: ignore[import-not-found]
-from langchain_core.callbacks import BaseCallbackHandler  # type: ignore[import-not-found]
+from langchain_core.agents import (  # type: ignore[import-not-found]
+    AgentAction,
+    AgentFinish,
+)
+from langchain_core.callbacks import (  # type: ignore[import-not-found]
+    BaseCallbackHandler,
+)
 from langchain_core.documents import Document  # type: ignore[import-not-found]
 from langchain_core.outputs import LLMResult  # type: ignore[import-not-found]
 
