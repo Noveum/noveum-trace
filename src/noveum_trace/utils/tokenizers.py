@@ -18,10 +18,10 @@ from typing import Any, Optional
 try:  # pragma: no cover - optional dependency
     import tiktoken
 except Exception:  # pragma: no cover - optional dependency
-    tiktoken = None  # type: ignore[assignment]
+    tiktoken = None
 
 try:  # pragma: no cover - optional dependency
-    from anthropic import Tokenizer as AnthropicTokenizer  # type: ignore
+    from anthropic import Tokenizer as AnthropicTokenizer
 except Exception:  # pragma: no cover - optional dependency
     AnthropicTokenizer = None
 
