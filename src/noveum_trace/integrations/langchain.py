@@ -24,7 +24,7 @@ from noveum_trace.integrations.langchain_utils import (
     build_routing_attributes,
     extract_agent_capabilities,
     extract_agent_type,
-    extract_call_site_info,
+    extract_code_location_info,
     extract_function_definition_info,
     extract_langgraph_metadata,
     extract_noveum_metadata,
@@ -935,8 +935,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 and isinstance(v, (str, int, float, bool))
             }
 
-            # Extract call site information
-            call_site_info = extract_call_site_info(skip_frames=1)  # Skip this frame
+            # Extract code location information
+            code_location_info = extract_code_location_info(
+                skip_frames=1
+            )  # Skip this frame
 
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
@@ -949,9 +951,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 **attribute_kwargs,
             }
 
-            # Add call site information if available
-            if call_site_info:
-                span_attributes.update(call_site_info)
+            # Add code location information if available
+            if code_location_info:
+                span_attributes.update(code_location_info)
 
             if temperature is not None:
                 if isinstance(temperature, (int, float)) and not isinstance(
@@ -1496,8 +1498,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             else:
                 input_attrs["tool.input.argument_count"] = "0"
 
-            # Extract call site information (includes function definition if available)
-            call_site_info = extract_call_site_info(skip_frames=1)  # Skip this frame
+            # Extract code location information (includes function definition if available)
+            code_location_info = extract_code_location_info(
+                skip_frames=1
+            )  # Skip this frame
 
             # Try to extract function definition information from tool object
             # For LangChain tools created with @tool, the function is in tool.func
@@ -1514,18 +1518,18 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         # Tool itself is callable
                         function_def_info = extract_function_definition_info(tool_obj)
 
-                # Method 2: If call_site_info has function definition, use it
-                if not function_def_info and call_site_info:
-                    # Check if call_site_info already has function definition info
-                    if "function.definition.file" in call_site_info:
+                # Method 2: If code_location_info has function definition, use it
+                if not function_def_info and code_location_info:
+                    # Check if code_location_info already has function definition info
+                    if "function.definition.file" in code_location_info:
                         function_def_info = {
-                            "function.definition.file": call_site_info.get(
+                            "function.definition.file": code_location_info.get(
                                 "function.definition.file"
                             ),
-                            "function.definition.start_line": call_site_info.get(
+                            "function.definition.start_line": code_location_info.get(
                                 "function.definition.start_line"
                             ),
-                            "function.definition.end_line": call_site_info.get(
+                            "function.definition.end_line": code_location_info.get(
                                 "function.definition.end_line"
                             ),
                         }
@@ -1549,8 +1553,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         not in ["tags", "metadata", "inputs", "tool", "tool_instance"]
                         and isinstance(v, (str, int, float, bool))
                     },
-                    # Add call site information if available
-                    **(call_site_info or {}),
+                    # Add code location information if available
+                    **(code_location_info or {}),
                     # Add function definition information if available
                     **(function_def_info or {}),
                 },

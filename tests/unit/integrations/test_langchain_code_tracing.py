@@ -2,7 +2,7 @@
 Unit tests for LangChain code tracing functionality.
 
 Tests the code tracing features:
-- extract_call_site_info()
+- extract_code_location_info()
 - extract_function_definition_info()
 - Code attributes in spans
 """
@@ -20,7 +20,7 @@ try:
         _find_project_root,
         _is_library_directory,
         _make_path_relative,
-        extract_call_site_info,
+        extract_code_location_info,
         extract_function_definition_info,
     )
 
@@ -33,11 +33,11 @@ except ImportError:
 class TestCodeTracingUtils:
     """Test code tracing utility functions."""
 
-    def test_extract_call_site_info_finds_user_code(self):
-        """Test that extract_call_site_info finds user code frame."""
+    def test_extract_code_location_info_finds_user_code(self):
+        """Test that extract_code_location_info finds user code frame."""
 
         def user_function():
-            return extract_call_site_info(skip_frames=1)
+            return extract_code_location_info(skip_frames=1)
 
         result = user_function()
 
@@ -46,12 +46,12 @@ class TestCodeTracingUtils:
         assert "code.line" in result
         assert "code.function" in result
         # The function name will be the test function, not user_function
-        # because skip_frames=1 skips extract_call_site_info, then finds the test
+        # because skip_frames=1 skips extract_code_location_info, then finds the test
         assert "code.module" in result
 
-    def test_extract_call_site_info_skips_library_code(self):
+    def test_extract_code_location_info_skips_library_code(self):
         """Test that library code is skipped."""
-        result = extract_call_site_info(skip_frames=0)
+        result = extract_code_location_info(skip_frames=0)
 
         if result:
             file_path = result.get("code.file", "")

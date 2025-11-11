@@ -133,9 +133,9 @@ def _make_path_relative(file_path: str) -> str:
         return os.path.basename(file_path)
 
 
-def extract_call_site_info(skip_frames: int = 0) -> Optional[dict[str, Any]]:
+def extract_code_location_info(skip_frames: int = 0) -> Optional[dict[str, Any]]:
     """
-    Extract call site information from the call stack.
+    Extract code location information from the call stack.
 
     Walks up the call stack to find the first frame that's in user code,
     skipping library code and standard library.
@@ -154,7 +154,7 @@ def extract_call_site_info(skip_frames: int = 0) -> Optional[dict[str, Any]]:
         skip_frames: Number of frames to skip from the top (default: 0)
 
     Returns:
-        Dict with call site info: {
+        Dict with code location info: {
             "code.file": str,  # Relative path from project root
             "code.line": int,
             "code.function": str,
