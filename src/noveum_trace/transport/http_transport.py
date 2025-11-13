@@ -364,6 +364,22 @@ class HttpTransport:
         Returns:
             JSON-serializable representation of the object
         """
+        # Safeguard: Detect Mock objects to prevent infinite recursion
+        try:
+            from unittest.mock import (
+                AsyncMock,
+                MagicMock,
+                Mock,
+                NonCallableMagicMock,
+                NonCallableMock,
+            )
+
+            if isinstance(
+                obj, (Mock, MagicMock, AsyncMock, NonCallableMagicMock, NonCallableMock)
+            ):
+                return "<Mock object>"
+        except ImportError:
+            pass
         if obj is None:
             return None
         elif isinstance(obj, (str, int, float, bool)):
