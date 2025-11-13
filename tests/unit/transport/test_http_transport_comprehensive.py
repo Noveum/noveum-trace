@@ -536,13 +536,19 @@ class TestHttpTransportTraceToDict:
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             transport = HttpTransport(config)
 
-            # Create mock object with to_dict method
-            mock_obj = Mock()
-            mock_obj.to_dict.return_value = {"id": 123, "name": "test"}
+            class ObjectWithToDict:
+                def __init__(self):
+                    self.called = False
 
-            result = transport.trace_to_dict(mock_obj)
+                def to_dict(self):
+                    self.called = True
+                    return {"id": 123, "name": "test"}
+
+            obj = ObjectWithToDict()
+
+            result = transport.trace_to_dict(obj)
             assert result == {"id": 123, "name": "test"}
-            mock_obj.to_dict.assert_called_once()
+            assert obj.called is True
 
     def test_trace_to_dict_object_with_to_dict_exception(self):
         """Test handling of objects with to_dict method that raises exception."""
@@ -550,11 +556,13 @@ class TestHttpTransportTraceToDict:
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             transport = HttpTransport(config)
 
-            # Create mock object with to_dict method that raises exception
-            mock_obj = Mock()
-            mock_obj.to_dict.side_effect = Exception("to_dict failed")
+            class ObjectWithBadToDict:
+                def to_dict(self):
+                    raise Exception("to_dict failed")
 
-            result = transport.trace_to_dict(mock_obj)
+            obj = ObjectWithBadToDict()
+
+            result = transport.trace_to_dict(obj)
             assert result == "Non-serializable object, issue with tracing SDK"
 
     def test_trace_to_dict_object_with_dict_attrs(self):
