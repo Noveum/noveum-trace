@@ -17,6 +17,7 @@ from urllib3.util.retry import Retry
 
 from noveum_trace import __version__
 from noveum_trace.core.config import get_config
+from unittest.mock import Mock, MagicMock
 
 if TYPE_CHECKING:
     from noveum_trace.core.config import Config
@@ -364,6 +365,13 @@ class HttpTransport:
         Returns:
             JSON-serializable representation of the object
         """
+        # Safeguard: Detect Mock objects to prevent infinite recursion
+        try:
+            if isinstance(obj, (Mock, MagicMock)):
+                return "<Mock object>"
+        except ImportError:
+            pass
+        
         if obj is None:
             return None
         elif isinstance(obj, (str, int, float, bool)):
