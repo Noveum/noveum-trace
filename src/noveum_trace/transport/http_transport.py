@@ -33,6 +33,19 @@ from noveum_trace.utils.logging import (
     log_trace_flow,
 )
 
+try:
+    from unittest.mock import (
+        AsyncMock,
+        MagicMock,
+        Mock,
+        NonCallableMagicMock,
+        NonCallableMock,
+    )
+
+    _MOCK_TYPES = (Mock, MagicMock, AsyncMock, NonCallableMagicMock, NonCallableMock)
+except ImportError:
+    _MOCK_TYPES = ()
+
 logger = get_sdk_logger("transport.http_transport")
 
 
@@ -365,21 +378,8 @@ class HttpTransport:
             JSON-serializable representation of the object
         """
         # Safeguard: Detect Mock objects to prevent infinite recursion
-        try:
-            from unittest.mock import (
-                AsyncMock,
-                MagicMock,
-                Mock,
-                NonCallableMagicMock,
-                NonCallableMock,
-            )
-
-            if isinstance(
-                obj, (Mock, MagicMock, AsyncMock, NonCallableMagicMock, NonCallableMock)
-            ):
-                return "<Mock object>"
-        except ImportError:
-            pass
+        if _MOCK_TYPES and isinstance(obj, _MOCK_TYPES):
+            return "<Mock object>"
         if obj is None:
             return None
         elif isinstance(obj, (str, int, float, bool)):
