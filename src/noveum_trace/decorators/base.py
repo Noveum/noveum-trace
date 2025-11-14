@@ -216,18 +216,29 @@ def _serialize_value(value: Any) -> str:
         value: Value to serialize
 
     Returns:
-        Serialized string representation
+        Serialized string representation (dicts are converted to JSON strings)
     """
+    import json
+
     try:
         # Handle common types
         if value is None:
             return ""
         elif isinstance(value, (str, int, float, bool)):
             result = str(value)
-        elif isinstance(value, (list, tuple)):
-            result = str(value)
         elif isinstance(value, dict):
-            result = str(value)
+            # Convert dicts to JSON strings for safe serialization
+            try:
+                result = json.dumps(value, default=str)
+            except (TypeError, ValueError):
+                # If JSON serialization fails, fall back to string representation
+                result = str(value)
+        elif isinstance(value, (list, tuple)):
+            # Convert lists/tuples to JSON strings for consistency
+            try:
+                result = json.dumps(value, default=str)
+            except (TypeError, ValueError):
+                result = str(value)
         else:
             # For other types, use repr
             result = repr(value)
