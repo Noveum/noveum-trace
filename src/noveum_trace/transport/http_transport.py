@@ -33,6 +33,8 @@ from noveum_trace.utils.logging import (
     log_trace_flow,
 )
 
+_MOCK_TYPES: tuple[type[Any], ...]
+
 try:
     from unittest.mock import (
         AsyncMock,
