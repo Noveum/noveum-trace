@@ -161,6 +161,8 @@ class TestTraceSpanManagement:
     )
     def test_create_span_with_attributes(self, span_name, attributes):
         """Test span creation with different attributes."""
+        import json
+
         trace = Trace("test_trace")
 
         span = trace.create_span(span_name, attributes=attributes)
@@ -168,7 +170,15 @@ class TestTraceSpanManagement:
         assert span.name == span_name
         if attributes:
             for key, value in attributes.items():
-                assert span.attributes[key] == value
+                # Dicts and lists are converted to JSON strings
+                if isinstance(value, (dict, list)):
+                    assert isinstance(span.attributes[key], str)
+                    # Verify it's valid JSON and can be parsed back
+                    parsed = json.loads(span.attributes[key])
+                    assert parsed == value
+                else:
+                    # Other types remain unchanged
+                    assert span.attributes[key] == value
 
     def test_create_span_with_custom_time(self):
         """Test span creation with custom start time."""

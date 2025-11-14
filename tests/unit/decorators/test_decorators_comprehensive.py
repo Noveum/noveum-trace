@@ -751,25 +751,44 @@ class TestDecoratorUtilities:
     )
     def test_serialize_value_basic_types(self, value, expected_type):
         """Test _serialize_value with basic types."""
+        import json
+
         result = _serialize_value(value)
         if value is None:
             assert result == ""  # _serialize_value returns empty string for None
         else:
             assert isinstance(result, str)
-            assert str(value) in result or repr(value) in result
+            # For dicts and lists, verify it's valid JSON
+            if isinstance(value, (dict, list)):
+                try:
+                    parsed = json.loads(result)
+                    assert parsed == value
+                except json.JSONDecodeError:
+                    pytest.fail(f"Result should be valid JSON: {result}")
+            else:
+                # For other types, check string representation
+                assert str(value) in result or repr(value) in result
 
     def test_serialize_value_large_collections(self):
         """Test _serialize_value with large collections shows full content."""
+        import json
+
         large_list = list(range(20))
         result = _serialize_value(large_list)
-        assert result == str(large_list)  # Should show full content, not summary
+        # Should be valid JSON that can be parsed back
+        parsed = json.loads(result)
+        assert parsed == large_list
 
         large_dict = {f"key_{i}": i for i in range(20)}
         result = _serialize_value(large_dict)
-        assert result == str(large_dict)  # Should show full content, not summary
+        # Should be valid JSON that can be parsed back
+        parsed = json.loads(result)
+        assert parsed == large_dict
 
     def test_serialize_value_no_truncation(self):
         """Test _serialize_value does not truncate or summarize content."""
+        import json
+
         # Test long strings
         long_string = "x" * 2000
         result = _serialize_value(long_string)
@@ -777,15 +796,17 @@ class TestDecoratorUtilities:
         assert result == long_string
         assert not result.endswith("...")
 
-        # Test large lists
+        # Test large lists - should be valid JSON
         large_list = [f"item_{i}" for i in range(100)]
         result = _serialize_value(large_list)
-        assert result == str(large_list)
+        parsed = json.loads(result)
+        assert parsed == large_list
 
-        # Test large dictionaries
+        # Test large dictionaries - should be valid JSON
         large_dict = {f"key_{i}": f"value_{i}" for i in range(50)}
         result = _serialize_value(large_dict)
-        assert result == str(large_dict)
+        parsed = json.loads(result)
+        assert parsed == large_dict
 
     def test_serialize_value_complex_objects(self):
         """Test _serialize_value with complex objects."""

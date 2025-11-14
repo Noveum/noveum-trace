@@ -17,6 +17,7 @@ from noveum_trace.utils.logging import (
     log_trace_flow,
     setup_sdk_logging,
 )
+from noveum_trace.utils.serialization import convert_to_json_string
 
 __all__ = [
     # Exceptions
@@ -34,4 +35,6 @@ __all__ = [
     "log_http_response",
     "log_trace_flow",
     "setup_sdk_logging",
+    # Serialization
+    "convert_to_json_string",
 ]
