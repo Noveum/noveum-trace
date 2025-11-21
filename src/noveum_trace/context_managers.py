@@ -6,11 +6,13 @@ within functions without requiring decorators on the entire function.
 """
 
 import functools
+import inspect
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
+from noveum_trace.decorators.base import _serialize_value
 
 
 class TraceContextManager:
@@ -22,11 +24,13 @@ class TraceContextManager:
         attributes: Optional[dict[str, Any]] = None,
         tags: Optional[dict[str, str]] = None,
         auto_finish: bool = True,
+        capture_args: bool = False,
     ):
         self.name = name
         self.attributes = attributes or {}
         self.tags = tags or {}
         self.auto_finish = auto_finish
+        self.capture_args = capture_args
         self.span: Optional[Span] = None
         self.client: Optional[Any] = None
         self.auto_trace: Optional[Any] = None
@@ -62,6 +66,55 @@ class TraceContextManager:
         attach_context_to_span(self.span)
 
         return self.span
+
+    def capture_function_args(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> None:
+        """
+        Capture function arguments and set them as span attributes.
+
+        This method should be called when the context manager is used to wrap
+        a function call, to automatically capture the function's arguments.
+
+        Args:
+            func: The function being called
+            *args: Positional arguments passed to the function
+            **kwargs: Keyword arguments passed to the function
+        """
+        if not self.span or not self.capture_args:
+            return
+
+        try:
+            # Get function signature
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+
+            # Capture individual arguments
+            for param_name, param_value in bound_args.arguments.items():
+                serialized_value = _serialize_value(param_value)
+                self.span.set_attribute(f"input.{param_name}", serialized_value)
+
+            # Also capture args and kwargs as structured data
+            if args:
+                serialized_args = _serialize_value(args)
+                self.span.set_attribute("input.args", serialized_args)
+
+            if kwargs:
+                serialized_kwargs = _serialize_value(kwargs)
+                self.span.set_attribute("input.kwargs", serialized_kwargs)
+
+        except Exception as e:
+            # If argument capture fails, at least record the error
+            self.span.set_attribute("input.capture_error", str(e))
+            # Fallback: capture raw args/kwargs as strings
+            try:
+                if args:
+                    self.span.set_attribute("input.args", _serialize_value(args))
+                if kwargs:
+                    self.span.set_attribute("input.kwargs", _serialize_value(kwargs))
+            except Exception:
+                pass
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Exit the context and finish the span."""
@@ -259,6 +312,7 @@ def trace_operation(
     operation_name: str,
     attributes: Optional[dict[str, Any]] = None,
     tags: Optional[dict[str, str]] = None,
+    capture_args: bool = False,
     **kwargs: Any,
 ) -> OperationContextManager:
     """
@@ -268,6 +322,7 @@ def trace_operation(
         operation_name: Name of the operation
         attributes: Operation attributes
         tags: Operation tags
+        capture_args: Whether to capture function arguments if used as decorator (default: False)
         **kwargs: Additional configuration
 
     Returns:
@@ -282,7 +337,11 @@ def trace_operation(
             })
     """
     return OperationContextManager(
-        operation_name=operation_name, attributes=attributes, tags=tags, **kwargs
+        operation_name=operation_name,
+        attributes=attributes,
+        tags=tags,
+        capture_args=capture_args,
+        **kwargs,
     )
 
 
@@ -405,27 +464,49 @@ def create_child_span(
 
 
 def trace_function_calls(
-    func: Any,
+    func: Optional[Any] = None,
+    *,
     span_name: Optional[str] = None,
     attributes: Optional[dict[str, Any]] = None,
+    capture_args: bool = True,
 ) -> Any:
     """
     Decorator that uses context managers internally to trace function calls.
 
+    Can be used as:
+        @trace_function_calls
+        def my_func():
+            pass
+
+        @trace_function_calls(capture_args=False)
+        def my_func():
+            pass
+
     Args:
-        func: Function to trace
+        func: Function to trace (when used as @trace_function_calls)
         span_name: Custom span name
         attributes: Additional attributes
+        capture_args: Whether to capture function arguments (default: True)
 
     Returns:
-        Traced function
+        Traced function or decorator
 
     Example:
         # Trace an existing function
-        traced_func = trace_function_calls(existing_function, "custom_operation")
+        traced_func = trace_function_calls(existing_function, span_name="custom_operation")
         result = traced_func(arg1, arg2)
     """
+    # Handle being called with keyword arguments only
+    if func is None:
+        # Called as @trace_function_calls(capture_args=True)
+        def decorator(f: Any) -> Any:
+            return trace_function_calls(
+                f, span_name=span_name, attributes=attributes, capture_args=capture_args
+            )
 
+        return decorator
+
+    # Handle being called with function as first argument
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         name = span_name or f"function.{func.__name__}"
@@ -437,10 +518,25 @@ def trace_function_calls(
             **(attributes or {}),
         }
 
-        with trace_operation(name, func_attributes) as span:
+        # Create context manager with capture_args enabled
+        context_mgr = trace_operation(name, func_attributes, capture_args=capture_args)
+
+        with context_mgr as span:
+            # Capture function arguments if enabled
+            if capture_args:
+                context_mgr.capture_function_args(func, *args, **kwargs)
+
             try:
                 result = func(*args, **kwargs)
                 span.set_attribute("function.success", True)
+
+                # Capture result if it's a simple type
+                try:
+                    serialized_result = _serialize_value(result)
+                    span.set_attribute("output.result", serialized_result)
+                except Exception:
+                    pass  # Silently ignore result serialization errors
+
                 return result
             except Exception:
                 span.set_attribute("function.success", False)
