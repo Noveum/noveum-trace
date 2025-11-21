@@ -180,7 +180,7 @@ class TestDecoratorsIntegration:
         wait_for_trace_capture(trace_capture)
 
         # Verify trace was captured
-        latest_trace = trace_capture.get_latest_trace()
+        latest_trace = trace_capture.get_latest_trace() 
         assert latest_trace is not None, "No trace data captured"
 
         # Verify trace structure
@@ -194,7 +194,7 @@ class TestDecoratorsIntegration:
         # Verify function attributes
         attributes = function_span.attributes
         assert attributes.get("function.name") == "basic_function"
-        assert attributes.get("function.args.x") == "10"
+        assert attributes.get("function.args.x") == 10
         assert attributes.get("function.args.y") == "result"
         assert attributes.get("function.result") == "result: 20"
 
