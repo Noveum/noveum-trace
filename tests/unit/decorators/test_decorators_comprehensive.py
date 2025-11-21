@@ -753,20 +753,28 @@ class TestDecoratorUtilities:
         """Test _serialize_value with basic types."""
         result = _serialize_value(value)
         if value is None:
-            assert result == ""  # _serialize_value returns empty string for None
+            assert result is None  # _serialize_value returns None for None
         else:
-            assert isinstance(result, str)
-            assert str(value) in result or repr(value) in result
+            # Should return the same type for primitives, or appropriate type for collections
+            assert isinstance(result, (str, int, float, bool, list, dict))
+            if isinstance(value, (str, int, float, bool)):
+                assert result == value
+            elif isinstance(value, (list, tuple)):
+                assert isinstance(result, list)
+            elif isinstance(value, dict):
+                assert isinstance(result, dict)
 
     def test_serialize_value_large_collections(self):
-        """Test _serialize_value with large collections shows full content."""
+        """Test _serialize_value with large collections preserves structure."""
         large_list = list(range(20))
         result = _serialize_value(large_list)
-        assert result == str(large_list)  # Should show full content, not summary
+        assert isinstance(result, list)  # Should be list, not string
+        assert result == large_list
 
         large_dict = {f"key_{i}": i for i in range(20)}
         result = _serialize_value(large_dict)
-        assert result == str(large_dict)  # Should show full content, not summary
+        assert isinstance(result, dict)  # Should be dict, not string
+        assert result == large_dict
 
     def test_serialize_value_no_truncation(self):
         """Test _serialize_value does not truncate or summarize content."""
@@ -775,28 +783,34 @@ class TestDecoratorUtilities:
         result = _serialize_value(long_string)
         assert len(result) == 2000
         assert result == long_string
-        assert not result.endswith("...")
+        assert isinstance(result, str)
 
         # Test large lists
         large_list = [f"item_{i}" for i in range(100)]
         result = _serialize_value(large_list)
-        assert result == str(large_list)
+        assert isinstance(result, list)
+        assert len(result) == 100
 
         # Test large dictionaries
         large_dict = {f"key_{i}": f"value_{i}" for i in range(50)}
         result = _serialize_value(large_dict)
-        assert result == str(large_dict)
+        assert isinstance(result, dict)
+        assert len(result) == 50
 
     def test_serialize_value_complex_objects(self):
-        """Test _serialize_value with complex objects."""
+        """Test _serialize_value with complex objects extracts attributes."""
 
         class CustomObject:
-            def __repr__(self):
-                return "CustomObject()"
+            def __init__(self):
+                self.name = "test"
+                self.value = 42
 
         obj = CustomObject()
         result = _serialize_value(obj)
-        assert "CustomObject" in result
+        # Should extract __dict__ as a dictionary
+        assert isinstance(result, dict)
+        assert result["name"] == "test"
+        assert result["value"] == 42
 
     def test_is_traced_functionality(self):
         """Test is_traced function."""
