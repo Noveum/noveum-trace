@@ -337,6 +337,17 @@ except ImportError:
     # LangChain not installed
     pass
 
+try:
+    from noveum_trace.integrations.livekit import (
+        LiveKitSTTWrapper,
+        LiveKitTTSWrapper,
+    )
+
+    _integration_exports.extend(["LiveKitSTTWrapper", "LiveKitTTSWrapper"])
+except ImportError:
+    # LiveKit not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions

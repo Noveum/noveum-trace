@@ -234,6 +234,72 @@ The integration also supports:
 
 For complete details and examples, see the [LangChain Integration Guide](docs/LANGCHAIN_INTEGRATION.md).
 
+## 🎤 LiveKit Integration
+
+Automatically trace LiveKit agent sessions with complete observability:
+
+```python
+from livekit.agents import Agent, AgentSession, JobContext
+from livekit.plugins import deepgram, cartesia
+from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
+
+# Initialize noveum-trace
+noveum_trace.init(project="livekit-agent")
+
+async def agent_entrypoint(ctx: JobContext):
+    # Wrap STT/TTS providers for detailed audio tracking
+    traced_stt = LiveKitSTTWrapper(
+        stt=deepgram.STT(model="nova-2"),
+        session_id=ctx.job.id,
+        job_context={"job_id": ctx.job.id, "room": ctx.room.name}
+    )
+    
+    traced_tts = LiveKitTTSWrapper(
+        tts=cartesia.TTS(model="sonic-english"),
+        session_id=ctx.job.id,
+        job_context={"job_id": ctx.job.id}
+    )
+    
+    # Create session with traced providers
+    session = AgentSession(stt=traced_stt, tts=traced_tts)
+    
+    # Enable session tracing for automatic event tracking
+    # This creates the trace automatically - no need for start_trace()
+    setup_livekit_tracing(session)
+    
+    agent = Agent(instructions="You are a helpful assistant.")
+    await ctx.connect()
+    await session.start(agent)  # Complete tracing active!
+```
+
+### What Gets Traced
+
+**Session Events** (automatic):
+- **AgentSession Events**: State changes, transcriptions, function calls, errors, metrics
+- **RealtimeSession Events**: Speech detection, transcriptions, generations (when using RealtimeModel)
+- **Automatic Trace Creation**: Trace is created when `session.start()` is called
+
+**STT/TTS Operations** (via wrappers):
+- **STT Operations**: Transcripts, confidence scores, audio files, durations
+- **TTS Operations**: Synthesized text, audio files, durations
+- **Job Context**: Room info, participant details, agent metadata
+- **Audio Capture**: Automatic saving of audio files for debugging
+
+### Key Features
+
+- ✅ **Complete Observability**: Session events + detailed STT/TTS tracking
+- ✅ **Zero Configuration**: Session tracing creates trace automatically
+- ✅ Works with **any** LiveKit STT/TTS provider
+- ✅ Supports streaming and batch modes
+- ✅ Automatic audio file capture and storage
+- ✅ Rich metadata in span attributes
+- ✅ Graceful degradation (no disruption if tracing fails)
+
+For step-by-step setup instructions, see the [LiveKit Integration Guide](docs/LIVEKIT_INTEGRATION_GUIDE.md).
+
+For detailed API documentation, see the [LiveKit Integration Docs](docs/LIVEKIT_INTEGRATION.md).
+
 ## 🧵 Thread Management
 
 Track conversation threads and multi-turn interactions:

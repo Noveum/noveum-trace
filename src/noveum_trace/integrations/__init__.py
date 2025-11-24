@@ -15,3 +15,24 @@ try:
 except ImportError:
     # LangChain not installed
     pass
+
+# LiveKit integration
+try:
+    from noveum_trace.integrations.livekit import (
+        LiveKitSTTWrapper,
+        LiveKitTTSWrapper,
+    )
+
+    __all__.extend(["LiveKitSTTWrapper", "LiveKitTTSWrapper"])
+except ImportError:
+    # LiveKit not installed
+    pass
+
+# LiveKit session tracing integration
+try:
+    from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+
+    __all__.append("setup_livekit_tracing")
+except ImportError:
+    # LiveKit not installed
+    pass
