@@ -7,11 +7,18 @@ to any function to add comprehensive tracing capabilities.
 
 import functools
 import inspect
+import json
 import time
+import warnings
 from typing import Any, Callable, Optional, Union
 
 from noveum_trace.core.context import attach_context_to_span
 from noveum_trace.core.span import SpanStatus
+
+# Serialization configuration constants
+DEFAULT_MAX_DEPTH = 10
+DEFAULT_MAX_SIZE_BYTES = 1048576  # 1MB
+WARNING_STACKLEVEL = 4
 
 
 def trace(
@@ -208,46 +215,171 @@ def trace(
         return decorator(func)
 
 
-def _serialize_value(value: Any) -> str:
+def _serialize_value(
+    value: Any,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    current_depth: int = 0,
+    _visited: Optional[set[int]] = None,
+) -> Any:
     """
-    Safely serialize a value for tracing.
+    Safely serialize a value for tracing, returning JSON-serializable objects.
+
+    This function preserves structure for dicts and lists, extracts meaningful
+    data from complex objects, and provides size warnings for large data.
 
     Args:
         value: Value to serialize
+        max_depth: Maximum recursion depth (default: 10)
+        current_depth: Current recursion depth (internal use)
+        _visited: Set of object IDs to detect circular references (internal use)
 
     Returns:
         Serialized string representation (dicts are converted to JSON strings)
     """
     import json
+        JSON-serializable representation (dict, list, str, int, float, bool, None)
+    """
+    if _visited is None:
+        _visited = set()
+
+    # Check recursion depth
+    if current_depth >= max_depth:
+        return f"<max_depth_reached:{type(value).__name__}>"
 
     try:
-        # Handle common types
+        # Handle None
         if value is None:
-            return ""
-        elif isinstance(value, (str, int, float, bool)):
-            result = str(value)
-        elif isinstance(value, dict):
-            # Convert dicts to JSON strings for safe serialization
+            return None
+
+        # Handle primitive types - return as-is (already JSON-serializable)
+        if isinstance(value, (int, float, bool)):
+            return value
+
+        # Handle strings - check size before returning
+        if isinstance(value, str):
+            _check_serialized_size(value, value)
+            return value
+
+        # Handle dict - preserve structure and recursively serialize values
+        if isinstance(value, dict):
+            dict_result: dict[str, Any] = {}
+            for key, val in value.items():
+                # Convert keys to strings if needed
+                str_key = str(key) if not isinstance(key, str) else key
+                dict_result[str_key] = _serialize_value(
+                    val,
+                    max_depth=max_depth,
+                    current_depth=current_depth + 1,
+                    _visited=_visited,
+                )
+            # Check size before returning
+            _check_serialized_size(dict_result, value)
+            return dict_result
+
+        # Handle list/tuple - preserve structure and recursively serialize items
+        if isinstance(value, (list, tuple)):
+            list_result: list[Any] = [
+                _serialize_value(
+                    item,
+                    max_depth=max_depth,
+                    current_depth=current_depth + 1,
+                    _visited=_visited,
+                )
+                for item in value
+            ]
+            # Check size before returning
+            _check_serialized_size(list_result, value)
+            return list_result
+
+        # Handle objects with to_dict() method
+        if hasattr(value, "to_dict") and callable(value.to_dict):
             try:
-                result = json.dumps(value, default=str)
-            except (TypeError, ValueError):
-                # If JSON serialization fails, fall back to string representation
-                result = str(value)
-        elif isinstance(value, (list, tuple)):
-            # Convert lists/tuples to JSON strings for consistency
+                dict_value = value.to_dict()
+                serialized_result: Any = _serialize_value(
+                    dict_value,
+                    max_depth=max_depth,
+                    current_depth=current_depth + 1,
+                    _visited=_visited,
+                )
+                # Check size before returning
+                _check_serialized_size(serialized_result, value)
+                return serialized_result
+            except Exception:
+                pass  # Fall through to __dict__ extraction
+
+        # Handle objects with __dict__ - extract attributes
+        if hasattr(value, "__dict__"):
+            # Check for circular references
+            obj_id = id(value)
+            if obj_id in _visited:
+                return f"<circular_reference:{type(value).__name__}>"
+            _visited.add(obj_id)
+
             try:
-                result = json.dumps(value, default=str)
-            except (TypeError, ValueError):
-                result = str(value)
+                attrs: dict[str, Any] = {}
+                for key, val in value.__dict__.items():
+                    # Skip private attributes (starting with _)
+                    if not key.startswith("_"):
+                        attrs[key] = _serialize_value(
+                            val,
+                            max_depth=max_depth,
+                            current_depth=current_depth + 1,
+                            _visited=_visited,
+                        )
+                _visited.remove(obj_id)
+                # Check size before returning
+                _check_serialized_size(attrs, value)
+                return attrs
+            except Exception:
+                _visited.discard(obj_id)
+                pass  # Fall through to string conversion
+
+        # Fallback: convert to string representation
+        try:
+            result_str: str = str(value)
+            # Check size and warn if too large
+            _check_serialized_size(result_str, value)
+            return result_str
+        except Exception:
+            return f"<{type(value).__name__} object>"
+
+    except Exception as e:
+        # Final fallback for any unexpected errors
+        return f"<serialization_error:{type(value).__name__}:{str(e)}>"
+
+
+def _check_serialized_size(serialized: Any, original: Any) -> None:
+    """
+    Check the size of serialized data and warn if it's too large.
+
+    Args:
+        serialized: The serialized value
+        original: The original value (for context)
+    """
+    try:
+        # Estimate size by converting to JSON string
+        if isinstance(serialized, (dict, list)):
+            json_str = json.dumps(serialized)
+            size_bytes = len(json_str.encode("utf-8"))
+        elif isinstance(serialized, str):
+            size_bytes = len(serialized.encode("utf-8"))
         else:
-            # For other types, use repr
-            result = repr(value)
+            # For other types, estimate based on string representation
+            size_bytes = len(str(serialized).encode("utf-8"))
 
-        return result
-
+        # Warn if size exceeds threshold
+        if size_bytes > DEFAULT_MAX_SIZE_BYTES:
+            size_mb = size_bytes / (1024 * 1024)
+            warnings.warn(
+                f"Serialized value is large ({size_mb:.2f} MB). "
+                f"This may impact trace performance. "
+                f"Type: {type(original).__name__}",
+                UserWarning,
+                stacklevel=WARNING_STACKLEVEL,
+            )
     except Exception:
-        # Fallback for objects that can't be serialized
-        return f"<{type(value).__name__} object>"
+        # Silently ignore size checking errors
+        pass
 
 
 def is_traced(func: Callable[..., Any]) -> bool:

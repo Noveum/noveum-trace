@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noveum-trace"
-version = "0.4.0"
+version = "0.4.1"
 description = "Cloud-first, decorator-based tracing SDK for LLM applications and multi-agent systems"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -44,6 +44,7 @@ dependencies = [
     "requests>=2.25.0",
     "typing-extensions>=4.0.0; python_version<'3.10'",
     "python-dotenv>=0.19.0",
+    "PyYAML>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -254,7 +255,7 @@ skips = ["B101", "B601"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.4.0"
+version = "0.4.1"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
