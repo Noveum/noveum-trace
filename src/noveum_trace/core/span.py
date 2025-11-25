@@ -12,8 +12,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from noveum_trace.utils.serialization import convert_to_json_string
-
 
 class SpanStatus(Enum):
     """Enumeration of possible span statuses."""
@@ -72,11 +70,8 @@ class Span:
         self.status_message: Optional[str] = None
 
         # Span data
-        # Convert any dicts in initial attributes to JSON strings
-        initial_attrs = attributes or {}
-        self.attributes: dict[str, Any] = {
-            key: convert_to_json_string(value) for key, value in initial_attrs.items()
-        }
+        # Store attributes as-is (native types - dict/list preserved)
+        self.attributes: dict[str, Any] = attributes or {}
         self.events: list[SpanEvent] = []
         self.links: list[dict[str, Any]] = []
 
@@ -107,7 +102,7 @@ class Span:
 
         Args:
             key: Attribute key
-            value: Attribute value (dicts are automatically converted to JSON strings)
+            value: Attribute value (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -115,8 +110,8 @@ class Span:
         if self._finished:
             return self
 
-        # Convert dicts to JSON strings for safe serialization
-        self.attributes[key] = convert_to_json_string(value)
+        # Store value as-is (native types preserved)
+        self.attributes[key] = value
         return self
 
     def set_attributes(self, attributes: dict[str, Any]) -> "Span":
@@ -124,7 +119,7 @@ class Span:
         Set multiple span attributes.
 
         Args:
-            attributes: Dictionary of attributes to set (dicts are automatically converted to JSON strings)
+            attributes: Dictionary of attributes to set (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -132,11 +127,8 @@ class Span:
         if self._finished:
             return self
 
-        # Convert dicts to JSON strings for safe serialization
-        converted_attributes = {
-            key: convert_to_json_string(value) for key, value in attributes.items()
-        }
-        self.attributes.update(converted_attributes)
+        # Store attributes as-is (native types preserved)
+        self.attributes.update(attributes)
         return self
 
     def add_event(
@@ -150,7 +142,7 @@ class Span:
 
         Args:
             name: Event name
-            attributes: Event attributes (dicts are automatically converted to JSON strings)
+            attributes: Event attributes (native types preserved - dict/list not converted to JSON)
             timestamp: Event timestamp (defaults to current time)
 
         Returns:
@@ -159,16 +151,13 @@ class Span:
         if self._finished:
             return self
 
-        # Convert dicts in event attributes to JSON strings
+        # Store event attributes as-is (native types preserved)
         event_attrs = attributes or {}
-        converted_event_attrs = {
-            key: convert_to_json_string(value) for key, value in event_attrs.items()
-        }
 
         event = SpanEvent(
             name=name,
             timestamp=timestamp or datetime.now(timezone.utc),
-            attributes=converted_event_attrs,
+            attributes=event_attrs,
         )
         self.events.append(event)
         return self
@@ -182,7 +171,7 @@ class Span:
         Args:
             trace_id: Linked trace ID
             span_id: Linked span ID
-            attributes: Link attributes (dicts are automatically converted to JSON strings)
+            attributes: Link attributes (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -190,16 +179,13 @@ class Span:
         if self._finished:
             return self
 
-        # Convert dicts in link attributes to JSON strings
+        # Store link attributes as-is (native types preserved)
         link_attrs = attributes or {}
-        converted_link_attrs = {
-            key: convert_to_json_string(value) for key, value in link_attrs.items()
-        }
 
         link = {
             "trace_id": trace_id,
             "span_id": span_id,
-            "attributes": converted_link_attrs,
+            "attributes": link_attrs,
         }
         self.links.append(link)
         return self

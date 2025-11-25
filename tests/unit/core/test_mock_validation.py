@@ -377,20 +377,18 @@ class TestMockValidation:
         for key, value in test_data.items():
             span.set_attribute(key, value)
 
-        # Validate all data types are preserved or converted to JSON strings
+        # Validate all data types are preserved as native types
         for key, expected_value in test_data.items():
             actual_value = span.attributes.get(key)
 
-            # Dicts and lists are converted to JSON strings
+            # Dicts and lists are preserved as native types (not converted to JSON strings)
             if isinstance(expected_value, (dict, list)):
                 assert isinstance(
-                    actual_value, str
-                ), f"{key} should be JSON string, got {type(actual_value)}"
-                # Verify it's valid JSON and can be parsed back
-                parsed = json.loads(actual_value)
+                    actual_value, type(expected_value)
+                ), f"{key} should be {type(expected_value).__name__}, got {type(actual_value).__name__}"
                 assert (
-                    parsed == expected_value
-                ), f"{key} JSON doesn't match original: {parsed} != {expected_value}"
+                    actual_value == expected_value
+                ), f"{key} doesn't match original: {actual_value} != {expected_value}"
             else:
                 # Other types remain unchanged
                 assert (
