@@ -240,6 +240,10 @@ module = [
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",
+    "google",
+    "google.*",
+    "google.generativeai",
+    "google.generativeai.*",
     "_pytest.*",
     "pytest.*",
 ]

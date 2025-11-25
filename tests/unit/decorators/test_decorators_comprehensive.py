@@ -751,6 +751,7 @@ class TestDecoratorUtilities:
     )
     def test_serialize_value_basic_types(self, value, expected_type):
         """Test _serialize_value with basic types."""
+
         result = _serialize_value(value)
         if value is None:
             assert result is None  # _serialize_value returns None for None
@@ -778,6 +779,7 @@ class TestDecoratorUtilities:
 
     def test_serialize_value_no_truncation(self):
         """Test _serialize_value does not truncate or summarize content."""
+
         # Test long strings
         long_string = "x" * 2000
         result = _serialize_value(long_string)
@@ -785,13 +787,13 @@ class TestDecoratorUtilities:
         assert result == long_string
         assert isinstance(result, str)
 
-        # Test large lists
+        # Test large lists - should be valid JSON
         large_list = [f"item_{i}" for i in range(100)]
         result = _serialize_value(large_list)
         assert isinstance(result, list)
         assert len(result) == 100
 
-        # Test large dictionaries
+        # Test large dictionaries - should be valid JSON
         large_dict = {f"key_{i}": f"value_{i}" for i in range(50)}
         result = _serialize_value(large_dict)
         assert isinstance(result, dict)

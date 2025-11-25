@@ -110,12 +110,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Import here to avoid circular imports
         from noveum_trace import get_client
+        from noveum_trace.core.client import NoveumClient
 
         try:
-            self._client = get_client()
+            self._client: Optional[NoveumClient] = get_client()
         except Exception as e:
             logger.warning("Failed to get Noveum Trace client: %s", e)
-            self._client = None  # type: ignore[assignment]
+            self._client = None
 
     def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
@@ -658,6 +659,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 return existing_trace, False
 
             # Create new trace
+            if not self._ensure_client():
+                return None, False
+            assert self._client is not None  # Type guard after _ensure_client
             new_trace = self._client.start_trace(operation_name)
             set_current_trace(new_trace)
             return new_trace, True
@@ -687,6 +691,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "Call start_trace() first."
                 )
 
+            if not self._ensure_client():
+                return None, False
+            assert self._client is not None  # Type guard after _ensure_client
             new_trace = self._client.start_trace(operation_name)
             set_current_trace(new_trace)
             self._set_root_trace(root_run_id, new_trace)
@@ -720,6 +727,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     f"Child operation '{operation_name}' has no parent trace. "
                     "Creating new trace as fallback."
                 )
+                if not self._ensure_client():
+                    return None, False
+                assert self._client is not None  # Type guard after _ensure_client
                 new_trace = self._client.start_trace(operation_name)
                 set_current_trace(new_trace)
                 return new_trace, True
@@ -733,6 +743,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             tool_input = str(action.tool_input)
 
             # Create a tool span similar to on_tool_start
+            if not self._ensure_client():
+                return
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=f"tool:{tool_name}:{tool_name}",
                 attributes={
@@ -790,7 +803,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     }
                 )
                 tool_span.set_status(SpanStatus.OK)
-                self._client.finish_span(tool_span)
+                if self._client is not None:
+                    self._client.finish_span(tool_span)
 
         except Exception as e:
             logger.error("Error completing tool spans from finish: %s", e)
@@ -822,6 +836,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
         # Create new trace
+        if not self._ensure_client():
+            return
+        assert self._client is not None  # Type guard after _ensure_client
         trace = self._client.start_trace(name)
         set_current_trace(trace)
 
@@ -858,6 +875,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         root_run_id = self._find_root_run_id_for_trace(trace)
 
         # Finish the trace
+        if not self._ensure_client():
+            return
+        assert self._client is not None  # Type guard after _ensure_client
         self._client.finish_trace(trace)
 
         # Clear context
@@ -899,6 +919,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Finish the trace
+            if not self._ensure_client():
+                return
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_trace(self._trace_managed_by_langchain)
             from noveum_trace.core.context import set_current_trace
 
@@ -1008,6 +1031,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     span_attributes["llm.input.temperature"] = temperature
 
             # Create span (either in new trace or existing trace)
+            if not self._ensure_client():
+                return None
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1136,6 +1162,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             span.set_status(SpanStatus.OK)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span, end_time=end_time)
 
             # Check if we should finish the trace
@@ -1164,6 +1191,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1254,6 +1282,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes.update(langgraph_attrs)
 
             # Create span for chain
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1308,6 +1337,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             span.set_status(SpanStatus.OK)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1336,6 +1366,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1424,6 +1455,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 )
 
             # Create routing span (same method as LLM/Chain/Tool spans)
+            assert self._client is not None  # Type guard after _ensure_client
             routing_span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,  # None if no parent = root span
@@ -1439,6 +1471,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             routing_span.set_status(SpanStatus.OK)
 
             # Finish span immediately (routing is instant operation)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(routing_span)
 
             # Note: We do NOT store routing_span in self.runs because:
@@ -1576,6 +1609,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 # If extraction fails, continue without function definition info
                 pass
 
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1633,6 +1667,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span.set_attributes({"tool.output.output": output})
             span.set_status(SpanStatus.OK)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1661,6 +1696,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1713,6 +1749,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             agent_type = extract_agent_type(serialized)
             agent_capabilities = extract_agent_capabilities(serialized)
 
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1834,6 +1871,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             span.set_status(SpanStatus.OK)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1878,6 +1916,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Create span
+            assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
@@ -1946,6 +1985,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             span.set_status(SpanStatus.OK)
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
@@ -1976,6 +2016,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             span.record_exception(error)
             span.set_status(SpanStatus.ERROR, str(error))
+            assert self._client is not None  # Type guard after _ensure_client
             self._client.finish_span(span)
 
             # Check if we should finish the trace
