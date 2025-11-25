@@ -234,9 +234,6 @@ def _serialize_value(
         _visited: Set of object IDs to detect circular references (internal use)
 
     Returns:
-        Serialized string representation (dicts are converted to JSON strings)
-    """
-    import json
         JSON-serializable representation (dict, list, str, int, float, bool, None)
     """
     if _visited is None:

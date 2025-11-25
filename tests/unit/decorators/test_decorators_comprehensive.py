@@ -751,7 +751,6 @@ class TestDecoratorUtilities:
     )
     def test_serialize_value_basic_types(self, value, expected_type):
         """Test _serialize_value with basic types."""
-        import json
 
         result = _serialize_value(value)
         if value is None:
@@ -780,7 +779,6 @@ class TestDecoratorUtilities:
 
     def test_serialize_value_no_truncation(self):
         """Test _serialize_value does not truncate or summarize content."""
-        import json
 
         # Test long strings
         long_string = "x" * 2000

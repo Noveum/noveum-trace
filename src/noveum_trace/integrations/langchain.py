@@ -110,12 +110,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Import here to avoid circular imports
         from noveum_trace import get_client
+        from noveum_trace.core.client import NoveumClient
 
         try:
-            self._client = get_client()
+            self._client: Optional[NoveumClient] = get_client()
         except Exception as e:
             logger.warning("Failed to get Noveum Trace client: %s", e)
-            self._client = None  # type: ignore[assignment]
+            self._client = None
 
     def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
