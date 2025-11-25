@@ -379,8 +379,6 @@ class TestDecoratorsIntegration:
         assert attributes.get("function.name") == "mock_tool_call"
         assert attributes.get("function.type") == "tool_call"
 
-        # Verify list return value is stored as native list (not JSON string)
-        # Note: tool outputs are stored differently, but inputs should be dict/list
         query_arg = attributes.get("tool.input.query")
         assert query_arg == "Python testing", "Query argument should be captured"
 
