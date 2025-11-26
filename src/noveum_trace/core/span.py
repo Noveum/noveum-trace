@@ -70,6 +70,7 @@ class Span:
         self.status_message: Optional[str] = None
 
         # Span data
+        # Store attributes as-is (native types - dict/list preserved)
         self.attributes: dict[str, Any] = attributes or {}
         self.events: list[SpanEvent] = []
         self.links: list[dict[str, Any]] = []
@@ -101,7 +102,7 @@ class Span:
 
         Args:
             key: Attribute key
-            value: Attribute value
+            value: Attribute value (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -109,6 +110,7 @@ class Span:
         if self._finished:
             return self
 
+        # Store value as-is (native types preserved)
         self.attributes[key] = value
         return self
 
@@ -117,7 +119,7 @@ class Span:
         Set multiple span attributes.
 
         Args:
-            attributes: Dictionary of attributes to set
+            attributes: Dictionary of attributes to set (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -125,6 +127,7 @@ class Span:
         if self._finished:
             return self
 
+        # Store attributes as-is (native types preserved)
         self.attributes.update(attributes)
         return self
 
@@ -139,7 +142,7 @@ class Span:
 
         Args:
             name: Event name
-            attributes: Event attributes
+            attributes: Event attributes (native types preserved - dict/list not converted to JSON)
             timestamp: Event timestamp (defaults to current time)
 
         Returns:
@@ -148,10 +151,13 @@ class Span:
         if self._finished:
             return self
 
+        # Store event attributes as-is (native types preserved)
+        event_attrs = attributes or {}
+
         event = SpanEvent(
             name=name,
             timestamp=timestamp or datetime.now(timezone.utc),
-            attributes=attributes or {},
+            attributes=event_attrs,
         )
         self.events.append(event)
         return self
@@ -165,7 +171,7 @@ class Span:
         Args:
             trace_id: Linked trace ID
             span_id: Linked span ID
-            attributes: Link attributes
+            attributes: Link attributes (native types preserved - dict/list not converted to JSON)
 
         Returns:
             Self for method chaining
@@ -173,10 +179,13 @@ class Span:
         if self._finished:
             return self
 
+        # Store link attributes as-is (native types preserved)
+        link_attrs = attributes or {}
+
         link = {
             "trace_id": trace_id,
             "span_id": span_id,
-            "attributes": attributes or {},
+            "attributes": link_attrs,
         }
         self.links.append(link)
         return self

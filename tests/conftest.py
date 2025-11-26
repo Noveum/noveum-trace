@@ -1,17 +1,27 @@
 import json
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
 
+# Ensure we use the source code, not the installed package
+# Add src directory to Python path if not already there
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 # Import noveum_trace modules for proper mocking
-import noveum_trace
-from noveum_trace.core.client import NoveumClient
-from noveum_trace.core.config import Config
-from noveum_trace.transport.batch_processor import BatchProcessor
-from noveum_trace.transport.http_transport import HttpTransport
+# Note: These imports must come after sys.path modification
+import noveum_trace  # noqa: E402
+from noveum_trace.core.client import NoveumClient  # noqa: E402
+from noveum_trace.core.config import Config  # noqa: E402
+from noveum_trace.transport.batch_processor import BatchProcessor  # noqa: E402
+from noveum_trace.transport.http_transport import HttpTransport  # noqa: E402
 
 # Global registry to track all clients created during tests
 _test_clients: list[NoveumClient] = []

@@ -177,11 +177,18 @@ class TestSpanAttributeManagement:
     )
     def test_set_attribute_different_types(self, key, value):
         """Test setting attributes with different data types."""
+
         span = Span("test_span", "trace-123")
 
         span.set_attribute(key, value)
 
-        assert span.attributes[key] == value
+        # Dicts and lists are preserved as native types (not converted to JSON strings)
+        if isinstance(value, (dict, list)):
+            assert isinstance(span.attributes[key], type(value))
+            assert span.attributes[key] == value
+        else:
+            # Other types remain unchanged
+            assert span.attributes[key] == value
 
     def test_set_attributes_multiple(self):
         """Test setting multiple attributes."""

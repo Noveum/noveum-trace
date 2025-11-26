@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover - optional dependency
     AnthropicTokenizer = None
 
 try:  # pragma: no cover - optional dependency
-    import google.generativeai as google_genai  # type: ignore
+    import google.generativeai as google_genai
 except Exception:  # pragma: no cover - optional dependency
     google_genai = None
 

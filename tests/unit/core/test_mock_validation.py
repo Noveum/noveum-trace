@@ -356,6 +356,8 @@ class TestMockValidation:
 
     def test_data_type_compatibility(self, client_with_mocked_transport):
         """Test that various data types can be stored as attributes"""
+        import json
+
         client = client_with_mocked_transport
 
         trace = client.start_trace("datatype-test")
@@ -375,12 +377,23 @@ class TestMockValidation:
         for key, value in test_data.items():
             span.set_attribute(key, value)
 
-        # Validate all data types are preserved
+        # Validate all data types are preserved as native types
         for key, expected_value in test_data.items():
             actual_value = span.attributes.get(key)
-            assert (
-                actual_value == expected_value
-            ), f"Data type test failed for {key}: expected {expected_value}, got {actual_value}"
+
+            # Dicts and lists are preserved as native types (not converted to JSON strings)
+            if isinstance(expected_value, (dict, list)):
+                assert isinstance(
+                    actual_value, type(expected_value)
+                ), f"{key} should be {type(expected_value).__name__}, got {type(actual_value).__name__}"
+                assert (
+                    actual_value == expected_value
+                ), f"{key} doesn't match original: {actual_value} != {expected_value}"
+            else:
+                # Other types remain unchanged
+                assert (
+                    actual_value == expected_value
+                ), f"Data type test failed for {key}: expected {expected_value}, got {actual_value}"
 
         # Test JSON serialization compatibility
         try:

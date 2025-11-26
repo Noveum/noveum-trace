@@ -194,7 +194,7 @@ class TestDecoratorsIntegration:
         # Verify function attributes
         attributes = function_span.attributes
         assert attributes.get("function.name") == "basic_function"
-        assert attributes.get("function.args.x") == "10"
+        assert attributes.get("function.args.x") == 10
         assert attributes.get("function.args.y") == "result"
         assert attributes.get("function.result") == "result: 20"
 
@@ -333,6 +333,14 @@ class TestDecoratorsIntegration:
         assert attributes.get("agent.id") == "test-agent-001"
         assert attributes.get("function.type") == "agent_operation"
 
+        # Verify dict argument is stored as native dict (not JSON string)
+        context_arg = attributes.get("agent.input.context")
+        assert context_arg is not None, "Context argument should be captured"
+        assert isinstance(
+            context_arg, dict
+        ), "Context should be stored as dict, not string"
+        assert context_arg == {"user_id": "123"}, "Context dict should match input"
+
     @pytest.mark.integration
     @pytest.mark.tool
     def test_trace_tool_decorator_captures_data(self, trace_capture):
@@ -370,6 +378,9 @@ class TestDecoratorsIntegration:
         assert "mock_tool_call" in tool_span.name
         assert attributes.get("function.name") == "mock_tool_call"
         assert attributes.get("function.type") == "tool_call"
+
+        query_arg = attributes.get("tool.input.query")
+        assert query_arg == "Python testing", "Query argument should be captured"
 
     @pytest.mark.integration
     @pytest.mark.retrieval
@@ -578,6 +589,81 @@ class TestDecoratorsIntegration:
         attributes = custom_span.attributes
         assert attributes.get("function.name") == "custom_function"
         assert attributes.get("function.args.data") == "hello world"
+
+    @pytest.mark.integration
+    def test_decorator_dict_list_serialization(self, trace_capture):
+        """Test that decorators properly serialize dict and list arguments as native types"""
+        trace_capture.clear()
+
+        @trace
+        def function_with_collections(
+            data_dict: dict[str, Any],
+            data_list: list[str],
+            nested_dict: dict[str, list[int]],
+        ) -> dict[str, Any]:
+            """Function that takes dict and list arguments"""
+            return {
+                "processed_dict": data_dict,
+                "processed_list": data_list,
+                "nested": nested_dict,
+            }
+
+        # Execute function with dict/list arguments
+        input_dict = {"key1": "value1", "key2": 42}
+        input_list = ["item1", "item2", "item3"]
+        nested = {"numbers": [1, 2, 3], "more": [4, 5]}
+        function_with_collections(input_dict, input_list, nested)
+
+        # Flush to ensure data is captured
+        noveum_trace.get_client().flush()
+        wait_for_trace_capture(trace_capture)
+
+        # Verify trace was captured
+        latest_trace = trace_capture.get_latest_trace()
+        assert latest_trace is not None, "No trace data captured"
+        assert len(latest_trace.spans) > 0, "No spans in trace"
+
+        span = latest_trace.spans[0]
+        attributes = span.attributes
+
+        # Verify dict argument is stored as native dict (not JSON string)
+        captured_dict = attributes.get("function.args.data_dict")
+        assert captured_dict is not None, "Dict argument should be captured"
+        assert isinstance(
+            captured_dict, dict
+        ), "Dict should be stored as dict, not string"
+        assert captured_dict == input_dict, "Dict should match input exactly"
+
+        # Verify list argument is stored as native list (not JSON string)
+        captured_list = attributes.get("function.args.data_list")
+        assert captured_list is not None, "List argument should be captured"
+        assert isinstance(
+            captured_list, list
+        ), "List should be stored as list, not string"
+        assert captured_list == input_list, "List should match input exactly"
+
+        # Verify nested dict with list values
+        captured_nested = attributes.get("function.args.nested_dict")
+        assert captured_nested is not None, "Nested dict argument should be captured"
+        assert isinstance(captured_nested, dict), "Nested dict should be stored as dict"
+        assert captured_nested == nested, "Nested dict should match input exactly"
+        assert isinstance(
+            captured_nested["numbers"], list
+        ), "Nested list should be list"
+        assert captured_nested["numbers"] == [1, 2, 3], "Nested list should match"
+
+        # Verify result is also stored as native dict
+        captured_result = attributes.get("function.result")
+        assert captured_result is not None, "Result should be captured"
+        assert isinstance(
+            captured_result, dict
+        ), "Result should be stored as dict, not string"
+        assert (
+            captured_result["processed_dict"] == input_dict
+        ), "Result dict should preserve structure"
+        assert (
+            captured_result["processed_list"] == input_list
+        ), "Result list should preserve structure"
 
     @pytest.mark.integration
     @pytest.mark.comprehensive

@@ -407,7 +407,8 @@ def get_config() -> Config:
     if _config is None:
         # Auto-configure from environment
         configure()
-    return _config  # type: ignore
+    assert _config is not None, "Configuration must be set after configure()"
+    return _config
 
 
 def _load_from_environment() -> Config:
