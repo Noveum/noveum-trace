@@ -9,8 +9,9 @@ Tests the wrapper classes in livekit.py:
 - _WrappedChunkedStream
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 # Skip all tests if LiveKit is not available
 try:

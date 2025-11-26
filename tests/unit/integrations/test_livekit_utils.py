@@ -17,7 +17,10 @@ import pytest
 
 # Skip all tests if LiveKit is not available
 try:
+    # Import private functions for testing
     from noveum_trace.integrations.livekit.livekit_utils import (
+        _is_mock_object,
+        _safe_str,
         calculate_audio_duration_ms,
         create_span_attributes,
         ensure_audio_directory,
@@ -25,12 +28,6 @@ try:
         generate_audio_filename,
         save_audio_buffer,
         save_audio_frames,
-    )
-
-    # Import private functions for testing
-    from noveum_trace.integrations.livekit.livekit_utils import (
-        _is_mock_object,
-        _safe_str,
     )
 
     LIVEKIT_UTILS_AVAILABLE = True

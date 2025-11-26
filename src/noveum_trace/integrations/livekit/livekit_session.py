@@ -34,7 +34,6 @@ try:
         CloseEvent,
         CloseReason,
         ConversationItemAddedEvent,
-        ErrorEvent,
         FunctionToolsExecutedEvent,
         MetricsCollectedEvent,
         SpeechCreatedEvent,
@@ -82,8 +81,7 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
             data = asdict(event)
         # Handle objects with __dict__
         elif hasattr(event, "__dict__"):
-            data = {k: v for k, v in event.__dict__.items()
-                    if not k.startswith("_")}
+            data = {k: v for k, v in event.__dict__.items() if not k.startswith("_")}
         # Handle dictionaries
         elif isinstance(event, dict):
             data = event
@@ -225,8 +223,7 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                             text_parts.append(str(part.text))
                         elif isinstance(part, dict) and "text" in part:
                             text_parts.append(str(part["text"]))
-                    text_content = "\n".join(
-                        text_parts) if text_parts else None
+                    text_content = "\n".join(text_parts) if text_parts else None
                 elif isinstance(content, str):
                     text_content = content
 
@@ -249,8 +246,7 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                 {
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "arguments": (
-                        str(item.arguments) if hasattr(
-                            item, "arguments") else None
+                        str(item.arguments) if hasattr(item, "arguments") else None
                     ),
                 }
             )
@@ -262,8 +258,7 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "output": str(item.output) if hasattr(item, "output") else None,
                     "is_error": (
-                        bool(item.is_error) if hasattr(
-                            item, "is_error") else False
+                        bool(item.is_error) if hasattr(item, "is_error") else False
                     ),
                 }
             )
@@ -520,9 +515,7 @@ def _create_event_span(
         # Set status for error events
         # Check event_type == "error" or hasattr(event_data, "error") to avoid
         # referencing ErrorEvent when LIVEKIT_AVAILABLE is False
-        if event_type == "error" or (
-            hasattr(event_data, "error") and event_data.error
-        ):
+        if event_type == "error" or (hasattr(event_data, "error") and event_data.error):
             span.set_status(
                 SpanStatus.ERROR,
                 (
@@ -542,8 +535,7 @@ def _create_event_span(
             # Check if we already have system prompt in attributes
             if "llm.system_prompt" not in attributes:
                 # Start background task to wait for agent_activity and update span
-                asyncio.create_task(
-                    _update_span_with_system_prompt(span, manager))
+                asyncio.create_task(_update_span_with_system_prompt(span, manager))
 
         return span
 
@@ -655,8 +647,7 @@ class _LiveKitTracingManager:
                     if job_ctx:
                         attributes["livekit.job.id"] = job_ctx.job.id
                         attributes["livekit.room.name"] = (
-                            job_ctx.room.name if hasattr(
-                                job_ctx, "room") else None
+                            job_ctx.room.name if hasattr(job_ctx, "room") else None
                         )
                 except Exception:
                     pass
@@ -723,8 +714,7 @@ class _LiveKitTracingManager:
                         self._register_realtime_handlers(rt_session)
                         logger.debug("RealtimeSession handlers registered")
         except Exception as e:
-            logger.debug(
-                f"RealtimeSession not available or failed to setup: {e}")
+            logger.debug(f"RealtimeSession not available or failed to setup: {e}")
 
     def _try_setup_realtime_handlers_later(self) -> None:
         """Try to setup RealtimeSession handlers later (called from event handlers)."""
@@ -913,8 +903,7 @@ class _LiveKitTracingManager:
                         else:
                             # LiveKit not available, use default status
                             if hasattr(ev, "error") and ev.error:
-                                self._trace.set_status(
-                                    SpanStatus.ERROR, str(ev.error))
+                                self._trace.set_status(SpanStatus.ERROR, str(ev.error))
                             else:
                                 self._trace.set_status(SpanStatus.OK)
 
@@ -931,8 +920,7 @@ class _LiveKitTracingManager:
         try:
             asyncio.create_task(_handle_close())
         except Exception as e:
-            logger.warning(
-                f"Failed to create task for close event: {e}", exc_info=True)
+            logger.warning(f"Failed to create task for close event: {e}", exc_info=True)
 
     # RealtimeSession event handlers (synchronous, use asyncio.create_task internally)
     def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
@@ -947,8 +935,7 @@ class _LiveKitTracingManager:
         self, ev: InputTranscriptionCompleted
     ) -> None:
         """Handle input_audio_transcription_completed event."""
-        self._create_async_handler(
-            "realtime.input_audio_transcription_completed")(ev)
+        self._create_async_handler("realtime.input_audio_transcription_completed")(ev)
 
     def _on_generation_created(self, ev: GenerationCreatedEvent) -> None:
         """Handle generation_created event."""

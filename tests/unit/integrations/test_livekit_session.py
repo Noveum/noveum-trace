@@ -17,8 +17,8 @@ import pytest
 # Skip all tests if LiveKit is not available
 try:
     from noveum_trace.integrations.livekit.livekit_session import (
-        _LiveKitTracingManager,
         _create_event_span,
+        _LiveKitTracingManager,
         _serialize_chat_items,
         _serialize_event_data,
         _serialize_value,
@@ -393,7 +393,10 @@ class TestLiveKitTracingManager:
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
     @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch("noveum_trace.integrations.livekit.livekit_session.asyncio.sleep", new_callable=AsyncMock)
+    @patch(
+        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
     @pytest.mark.asyncio
     async def test_wrapped_start_creates_trace(
         self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
@@ -423,17 +426,14 @@ class TestLiveKitTracingManager:
         manager = _LiveKitTracingManager(session=mock_session, enabled=False)
         manager._wrap_start_method()
 
-        # Store reference to original start before it gets wrapped
-        original_start = manager._original_start
-        # Ensure it's async
-        original_start = AsyncMock(return_value=None)
-        manager._original_start = original_start
+        # When disabled, _wrap_start_method returns early, so session.start is not wrapped
+        # It should still be the original mock_session.start
         mock_agent = Mock()
 
         await manager.session.start(mock_agent)
 
-        # Should call original start directly
-        original_start.assert_called_once_with(mock_agent)
+        # Should call original start directly (not wrapped)
+        mock_session.start.assert_called_once_with(mock_agent)
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     def test_register_agent_session_handlers(self, mock_session):

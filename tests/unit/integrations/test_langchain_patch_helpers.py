@@ -96,8 +96,7 @@ class TestSafeInputsToDict:
         inputs = ["item1", "item2", "item3"]
         result = safe_inputs_to_dict(inputs, prefix="custom")
 
-        expected = {"custom_0": "item1",
-                    "custom_1": "item2", "custom_2": "item3"}
+        expected = {"custom_0": "item1", "custom_1": "item2", "custom_2": "item3"}
         assert result == expected
 
     def test_safe_inputs_to_dict_with_complex_objects(self):

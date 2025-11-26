@@ -1718,7 +1718,9 @@ class TestLangChainIntegration:
 
             handler = NoveumTraceCallbackHandler()
 
-            with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+            with patch(
+                "noveum_trace.integrations.langchain.langchain.logger"
+            ) as mock_logger:
                 parent_id = handler._get_parent_span_id_from_name("nonexistent_parent")
 
                 assert parent_id is None
@@ -1977,7 +1979,9 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = mock_current_span
 
-                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                with patch(
+                    "noveum_trace.integrations.langchain.langchain.logger"
+                ) as mock_logger:
                     parent_id = handler._resolve_parent_span_id(None, None)
 
                     assert parent_id == "context_span_id"
@@ -2075,7 +2079,7 @@ class TestLangChainIntegration:
             handler._set_run(parent_run_id, mock_parent_span_runid)
 
             # parent_name is provided but not found in names dict
-            with patch("noveum_trace.integrations.langchain.logger"):
+            with patch("noveum_trace.integrations.langchain.langchain.logger"):
                 parent_id = handler._resolve_parent_span_id(
                     parent_run_id, "nonexistent_parent"
                 )
@@ -2126,7 +2130,9 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = mock_current_span
 
-                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                with patch(
+                    "noveum_trace.integrations.langchain.langchain.logger"
+                ) as mock_logger:
                     parent_id = handler._resolve_parent_span_id(None, None)
 
                     assert parent_id == "context_span_id"
@@ -2555,7 +2561,9 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = None
 
-                with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+                with patch(
+                    "noveum_trace.integrations.langchain.langchain.logger"
+                ) as mock_logger:
                     handler.end_trace()
 
                     # Should log an error instead of raising
