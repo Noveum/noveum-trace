@@ -14,7 +14,7 @@ pytest_plugins = []
 
 try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
-    from noveum_trace.integrations.langchain_utils import (
+    from noveum_trace.integrations.langchain.langchain_utils import (
         build_langgraph_attributes,
         build_routing_attributes,
         extract_agent_capabilities,

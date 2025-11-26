@@ -79,9 +79,9 @@ Here's the complete solution for tracing your LiveKit agent:
 import noveum_trace
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.plugins import deepgram, cartesia
-from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
-from noveum_trace.integrations.livekit_utils import extract_job_context
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 # Initialize noveum-trace (do this once at startup)
 noveum_trace.init(project="my-livekit-agent")
@@ -171,7 +171,7 @@ The session tracing component automatically creates a trace when your agent sess
 
 ```python
 from livekit.agents import Agent, AgentSession, JobContext
-from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 import noveum_trace
 
 # Initialize once
@@ -446,7 +446,7 @@ traced_stt = LiveKitSTTWrapper(
 Use the utility function to extract context from LiveKit's JobContext:
 
 ```python
-from noveum_trace.integrations.livekit_utils import extract_job_context
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 job_context = extract_job_context(ctx)
 # Automatically extracts: job_id, room_name, room_sid, agent_id, worker_id, etc.
@@ -769,7 +769,7 @@ async def entrypoint(ctx: JobContext):
 
 3. **Check for import errors**:
    ```python
-   from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+   from noveum_trace.integrations.livekit import setup_livekit_tracing
    # Should not raise ImportError
    ```
 
@@ -855,8 +855,8 @@ from noveum_trace.integrations.livekit import (
     LiveKitSTTWrapper,
     LiveKitTTSWrapper,
 )
-from noveum_trace.integrations.livekit_session import setup_livekit_tracing
-from noveum_trace.integrations.livekit_utils import extract_job_context
+from noveum_trace.integrations.livekit import setup_livekit_tracing
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

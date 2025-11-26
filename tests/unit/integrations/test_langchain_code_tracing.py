@@ -16,7 +16,7 @@ import pytest
 # Skip all tests if LangChain is not available
 try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
-    from noveum_trace.integrations.langchain_utils import (
+    from noveum_trace.integrations.langchain.langchain_utils import (
         _find_project_root,
         _is_library_directory,
         _make_path_relative,

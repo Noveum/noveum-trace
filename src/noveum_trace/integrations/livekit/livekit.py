@@ -5,12 +5,13 @@ This module provides wrapper classes that automatically trace LiveKit STT and TT
 operations, capturing audio files and metadata as span attributes.
 """
 
+import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from noveum_trace.core.context import get_current_trace
 from noveum_trace.core.span import SpanStatus
-from noveum_trace.integrations.livekit_utils import (
+from noveum_trace.integrations.livekit.livekit_utils import (
     calculate_audio_duration_ms,
     create_span_attributes,
     ensure_audio_directory,
@@ -19,21 +20,21 @@ from noveum_trace.integrations.livekit_utils import (
     save_audio_frames,
 )
 
+logger = logging.getLogger(__name__)
+
 try:
     from livekit.agents.stt import SpeechEvent, SpeechEventType, STTCapabilities
     from livekit.agents.tts import SynthesizedAudio, TTSCapabilities
     from livekit.agents.utils import AudioBuffer
 
     LIVEKIT_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    # Placeholders for when LiveKit is not installed
-    SpeechEvent = Any  # type: ignore
-    SpeechEventType = Any  # type: ignore
-    STTCapabilities = Any  # type: ignore
-    SynthesizedAudio = Any  # type: ignore
-    TTSCapabilities = Any  # type: ignore
-    AudioBuffer = Any  # type: ignore
+    logger.error(
+        "LiveKit is not importable. LiveKit integration features will not be available. "
+        "Install it with: pip install livekit livekit-agents",
+        exc_info=e,
+    )
 
 
 class LiveKitSTTWrapper:
@@ -71,7 +72,7 @@ class LiveKitSTTWrapper:
         stt: Any,  # noqa: F811 - parameter shadows import
         session_id: str,
         job_context: Optional[dict[str, Any]] = None,
-        audio_base_dir: Optional[Path] = None
+        audio_base_dir: Optional[Path] = None,
     ):
         """
         Initialize STT wrapper.
@@ -81,15 +82,13 @@ class LiveKitSTTWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
-
-        Raises:
-            ImportError: If livekit package is not installed
         """
         if not LIVEKIT_AVAILABLE:
-            raise ImportError(
-                "livekit package is required for LiveKit integration. "
+            logger.error(
+                "Cannot initialize LiveKitSTTWrapper: LiveKit is not available. "
                 "Install it with: pip install livekit livekit-agents"
             )
+            return
 
         self._base_stt = stt
         self._session_id = session_id
@@ -105,23 +104,19 @@ class LiveKitSTTWrapper:
     @property
     def model(self) -> str:
         """Get model name from base provider."""
-        return getattr(self._base_stt, 'model', 'unknown')
+        return getattr(self._base_stt, "model", "unknown")
 
     @property
     def provider(self) -> str:
         """Get provider name from base provider."""
-        return getattr(self._base_stt, 'provider', 'unknown')
+        return getattr(self._base_stt, "provider", "unknown")
 
     @property
     def label(self) -> str:
         """Get label from base provider."""
-        return getattr(self._base_stt, 'label', self._base_stt.__class__.__name__)
+        return getattr(self._base_stt, "label", self._base_stt.__class__.__name__)
 
-    async def _recognize_impl(
-        self,
-        buffer: AudioBuffer,
-        **kwargs: Any
-    ) -> SpeechEvent:
+    async def _recognize_impl(self, buffer: AudioBuffer, **kwargs: Any) -> SpeechEvent:
         """
         Batch recognition implementation with tracing.
 
@@ -136,7 +131,7 @@ class LiveKitSTTWrapper:
         self._counter_ref[0] += 1
 
         # Generate audio filename
-        audio_filename = generate_audio_filename('stt', self._counter_ref[0])
+        audio_filename = generate_audio_filename("stt", self._counter_ref[0])
         audio_path = self._audio_dir / audio_filename
 
         # Save audio buffer
@@ -171,16 +166,16 @@ class LiveKitSTTWrapper:
                 attributes = create_span_attributes(
                     provider=self.provider,
                     model=self.model,
-                    operation_type='stt',
+                    operation_type="stt",
                     audio_file=audio_filename,
                     audio_duration_ms=duration_ms,
                     job_context=self._job_context,
                     **{
-                        'stt.transcript': transcript,
-                        'stt.confidence': confidence,
-                        'stt.is_final': True,
-                        'stt.mode': 'batch'
-                    }
+                        "stt.transcript": transcript,
+                        "stt.confidence": confidence,
+                        "stt.is_final": True,
+                        "stt.mode": "batch",
+                    },
                 )
 
                 # Create and finish span
@@ -195,11 +190,7 @@ class LiveKitSTTWrapper:
 
         return event
 
-    async def recognize(
-        self,
-        buffer: AudioBuffer,
-        **kwargs: Any
-    ) -> SpeechEvent:
+    async def recognize(self, buffer: AudioBuffer, **kwargs: Any) -> SpeechEvent:
         """
         Public recognition API.
 
@@ -230,12 +221,12 @@ class LiveKitSTTWrapper:
             provider=self.provider,
             model=self.model,
             counter_ref=self._counter_ref,
-            audio_dir=self._audio_dir
+            audio_dir=self._audio_dir,
         )
 
     async def aclose(self) -> None:
         """Close the STT provider."""
-        if hasattr(self._base_stt, 'aclose'):
+        if hasattr(self._base_stt, "aclose"):
             await self._base_stt.aclose()
 
     def __getattr__(self, name: str) -> Any:
@@ -254,7 +245,7 @@ class _WrappedSpeechStream:
         provider: str,
         model: str,
         counter_ref: list[int],
-        audio_dir: Path
+        audio_dir: Path,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -294,7 +285,7 @@ class _WrappedSpeechStream:
 
             # Generate audio filename
             audio_filename = generate_audio_filename(
-                'stt', self._counter_ref[0])
+                "stt", self._counter_ref[0])
             audio_path = self._audio_dir / audio_filename
 
             # Save buffered audio
@@ -327,17 +318,17 @@ class _WrappedSpeechStream:
                     attributes = create_span_attributes(
                         provider=self._provider,
                         model=self._model,
-                        operation_type='stt',
+                        operation_type="stt",
                         audio_file=audio_filename,
                         audio_duration_ms=duration_ms,
                         job_context=self._job_context,
                         **{
-                            'stt.transcript': transcript,
-                            'stt.confidence': confidence,
-                            'stt.is_final': True,
-                            'stt.mode': 'streaming',
-                            'stt.request_id': event.request_id
-                        }
+                            "stt.transcript": transcript,
+                            "stt.confidence": confidence,
+                            "stt.is_final": True,
+                            "stt.mode": "streaming",
+                            "stt.request_id": event.request_id,
+                        },
                     )
 
                     # Create and finish span
@@ -346,7 +337,9 @@ class _WrappedSpeechStream:
                     span.set_status(SpanStatus.OK)
                     client.finish_span(span)
 
-                except Exception:  # noqa: S110 - broad exception for graceful degradation
+                except (
+                    Exception
+                ):  # noqa: S110 - broad exception for graceful degradation
                     # Gracefully handle span creation errors
                     pass
 
@@ -362,19 +355,19 @@ class _WrappedSpeechStream:
     async def __aenter__(self) -> "_WrappedSpeechStream":
         """Enter async context manager."""
         # If base stream is an async context manager, enter it
-        if hasattr(self._base_stream, '__aenter__'):
+        if hasattr(self._base_stream, "__aenter__"):
             await self._base_stream.__aenter__()
         return self
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
+        exc_type: Union[type[BaseException], None],
+        exc: Union[BaseException, None],
         exc_tb: Any,
     ) -> None:
         """Exit async context manager."""
         # If base stream is an async context manager, exit it
-        if hasattr(self._base_stream, '__aexit__'):
+        if hasattr(self._base_stream, "__aexit__"):
             await self._base_stream.__aexit__(exc_type, exc, exc_tb)
         else:
             # Fallback to aclose if no context manager support
@@ -382,12 +375,12 @@ class _WrappedSpeechStream:
 
     async def flush(self) -> None:
         """Flush the stream."""
-        if hasattr(self._base_stream, 'flush'):
+        if hasattr(self._base_stream, "flush"):
             await self._base_stream.flush()
 
     async def aclose(self) -> None:
         """Close the stream."""
-        if hasattr(self._base_stream, 'aclose'):
+        if hasattr(self._base_stream, "aclose"):
             await self._base_stream.aclose()
 
     def __getattr__(self, name: str) -> Any:
@@ -430,7 +423,7 @@ class LiveKitTTSWrapper:
         tts: Any,  # noqa: F811 - parameter shadows import
         session_id: str,
         job_context: Optional[dict[str, Any]] = None,
-        audio_base_dir: Optional[Path] = None
+        audio_base_dir: Optional[Path] = None,
     ):
         """
         Initialize TTS wrapper.
@@ -440,15 +433,13 @@ class LiveKitTTSWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
-
-        Raises:
-            ImportError: If livekit package is not installed
         """
         if not LIVEKIT_AVAILABLE:
-            raise ImportError(
-                "livekit package is required for LiveKit integration. "
+            logger.error(
+                "Cannot initialize LiveKitTTSWrapper: LiveKit is not available. "
                 "Install it with: pip install livekit livekit-agents"
             )
+            return
 
         self._base_tts = tts
         self._session_id = session_id
@@ -464,17 +455,17 @@ class LiveKitTTSWrapper:
     @property
     def model(self) -> str:
         """Get model name from base provider."""
-        return getattr(self._base_tts, 'model', 'unknown')
+        return getattr(self._base_tts, "model", "unknown")
 
     @property
     def provider(self) -> str:
         """Get provider name from base provider."""
-        return getattr(self._base_tts, 'provider', 'unknown')
+        return getattr(self._base_tts, "provider", "unknown")
 
     @property
     def label(self) -> str:
         """Get label from base provider."""
-        return getattr(self._base_tts, 'label', self._base_tts.__class__.__name__)
+        return getattr(self._base_tts, "label", self._base_tts.__class__.__name__)
 
     @property
     def sample_rate(self) -> int:
@@ -506,7 +497,7 @@ class LiveKitTTSWrapper:
             provider=self.provider,
             model=self.model,
             counter_ref=self._counter_ref,
-            audio_dir=self._audio_dir
+            audio_dir=self._audio_dir,
         )
 
     def stream(self, **kwargs: Any) -> "_WrappedSynthesizeStream":
@@ -527,17 +518,17 @@ class LiveKitTTSWrapper:
             provider=self.provider,
             model=self.model,
             counter_ref=self._counter_ref,
-            audio_dir=self._audio_dir
+            audio_dir=self._audio_dir,
         )
 
     def prewarm(self) -> None:
         """Pre-warm connection to TTS service."""
-        if hasattr(self._base_tts, 'prewarm'):
+        if hasattr(self._base_tts, "prewarm"):
             self._base_tts.prewarm()
 
     async def aclose(self) -> None:
         """Close the TTS provider."""
-        if hasattr(self._base_tts, 'aclose'):
+        if hasattr(self._base_tts, "aclose"):
             await self._base_tts.aclose()
 
     def __getattr__(self, name: str) -> Any:
@@ -556,7 +547,7 @@ class _WrappedSynthesizeStream:
         provider: str,
         model: str,
         counter_ref: list[int],
-        audio_dir: Path
+        audio_dir: Path,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -605,7 +596,7 @@ class _WrappedSynthesizeStream:
 
             # Generate audio filename
             audio_filename = generate_audio_filename(
-                'tts', self._counter_ref[0])
+                "tts", self._counter_ref[0])
             audio_path = self._audio_dir / audio_filename
 
             # Save buffered audio
@@ -631,7 +622,11 @@ class _WrappedSynthesizeStream:
                     input_text = self._input_text.strip() if self._input_text else ""
 
                     # Try to get text from audio.delta_text if input_text is empty
-                    if not input_text and hasattr(audio, 'delta_text') and audio.delta_text:
+                    if (
+                        not input_text
+                        and hasattr(audio, "delta_text")
+                        and audio.delta_text
+                    ):
                         # Fallback: try to use delta_text if available
                         delta_text = audio.delta_text.strip()
                         if delta_text:
@@ -645,16 +640,16 @@ class _WrappedSynthesizeStream:
                     attributes = create_span_attributes(
                         provider=self._provider,
                         model=self._model,
-                        operation_type='tts',
+                        operation_type="tts",
                         audio_file=audio_filename,
                         audio_duration_ms=duration_ms,
                         job_context=self._job_context,
                         **{
-                            'tts.input_text': input_text,
-                            'tts.segment_id': self._segment_id or '',
-                            'tts.request_id': self._current_request_id or '',
-                            'tts.mode': 'streaming'
-                        }
+                            "tts.input_text": input_text,
+                            "tts.segment_id": self._segment_id or "",
+                            "tts.request_id": self._current_request_id or "",
+                            "tts.mode": "streaming",
+                        },
                     )
 
                     # Create and finish span
@@ -663,7 +658,9 @@ class _WrappedSynthesizeStream:
                     span.set_status(SpanStatus.OK)
                     client.finish_span(span)
 
-                except Exception:  # noqa: S110 - broad exception for graceful degradation
+                except (
+                    Exception
+                ):  # noqa: S110 - broad exception for graceful degradation
                     # Gracefully handle span creation errors
                     pass
 
@@ -680,19 +677,19 @@ class _WrappedSynthesizeStream:
     async def __aenter__(self) -> "_WrappedSynthesizeStream":
         """Enter async context manager."""
         # If base stream is an async context manager, enter it
-        if hasattr(self._base_stream, '__aenter__'):
+        if hasattr(self._base_stream, "__aenter__"):
             await self._base_stream.__aenter__()
         return self
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
+        exc_type: Union[type[BaseException], None],
+        exc: Union[BaseException, None],
         exc_tb: Any,
     ) -> None:
         """Exit async context manager."""
         # If base stream is an async context manager, exit it
-        if hasattr(self._base_stream, '__aexit__'):
+        if hasattr(self._base_stream, "__aexit__"):
             await self._base_stream.__aexit__(exc_type, exc, exc_tb)
         else:
             # Fallback to aclose if no context manager support
@@ -700,12 +697,12 @@ class _WrappedSynthesizeStream:
 
     async def flush(self) -> None:
         """Flush the stream."""
-        if hasattr(self._base_stream, 'flush'):
+        if hasattr(self._base_stream, "flush"):
             await self._base_stream.flush()
 
     async def aclose(self) -> None:
         """Close the stream."""
-        if hasattr(self._base_stream, 'aclose'):
+        if hasattr(self._base_stream, "aclose"):
             await self._base_stream.aclose()
 
     def __getattr__(self, name: str) -> Any:
@@ -725,7 +722,7 @@ class _WrappedChunkedStream:
         provider: str,
         model: str,
         counter_ref: list[int],
-        audio_dir: Path
+        audio_dir: Path,
     ):
         self._base_stream = base_stream
         self._input_text = input_text
@@ -774,7 +771,7 @@ class _WrappedChunkedStream:
         self._counter_ref[0] += 1
 
         # Generate audio filename
-        audio_filename = generate_audio_filename('tts', self._counter_ref[0])
+        audio_filename = generate_audio_filename("tts", self._counter_ref[0])
         audio_path = self._audio_dir / audio_filename
 
         # Save buffered audio
@@ -800,14 +797,11 @@ class _WrappedChunkedStream:
                 attributes = create_span_attributes(
                     provider=self._provider,
                     model=self._model,
-                    operation_type='tts',
+                    operation_type="tts",
                     audio_file=audio_filename,
                     audio_duration_ms=duration_ms,
                     job_context=self._job_context,
-                    **{
-                        'tts.input_text': self._input_text,
-                        'tts.mode': 'batch'
-                    }
+                    **{"tts.input_text": self._input_text, "tts.mode": "batch"},
                 )
 
                 # Create and finish span
@@ -830,7 +824,7 @@ class _WrappedChunkedStream:
         if not self._span_created and self._buffered_frames:
             self._create_span()
 
-        if hasattr(self._base_stream, 'aclose'):
+        if hasattr(self._base_stream, "aclose"):
             await self._base_stream.aclose()
 
     def __getattr__(self, name: str) -> Any:

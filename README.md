@@ -241,7 +241,7 @@ Automatically trace LiveKit agent sessions with complete observability:
 ```python
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.plugins import deepgram, cartesia
-from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
 
 # Initialize noveum-trace

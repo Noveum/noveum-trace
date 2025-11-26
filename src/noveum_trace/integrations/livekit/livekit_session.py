@@ -9,7 +9,9 @@ import asyncio
 import functools
 import logging
 from dataclasses import asdict, is_dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from noveum_trace.core.trace import Trace
 
 from noveum_trace.core.context import (
     get_current_span,
@@ -20,12 +22,8 @@ from noveum_trace.core.span import SpanStatus
 
 logger = logging.getLogger(__name__)
 
-# Try to import LiveKit types
 try:
-    from livekit.agents import JobContext
-    from livekit.agents.voice import AgentSession
     from livekit.agents.voice.events import (
-        AgentEvent,
         AgentStateChangedEvent,
         CloseEvent,
         CloseReason,
@@ -37,7 +35,6 @@ try:
         UserInputTranscribedEvent,
         UserStateChangedEvent,
     )
-    from livekit.agents.llm import RealtimeSession
     from livekit.agents.llm.realtime import (
         GenerationCreatedEvent,
         InputSpeechStartedEvent,
@@ -47,13 +44,13 @@ try:
     )
 
     LIVEKIT_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    # Placeholders for when LiveKit is not installed
-    AgentSession = Any  # type: ignore
-    RealtimeSession = Any  # type: ignore
-    AgentEvent = Any  # type: ignore
-    JobContext = Any  # type: ignore
+    logger.error(
+        "LiveKit is not importable. LiveKit session tracing features will not be available. "
+        "Install it with: pip install livekit livekit-agents",
+        exc_info=e,
+    )
 
 
 def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
@@ -81,7 +78,8 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
         elif hasattr(event, "dict"):
             data = event.dict()
         # Handle dataclasses
-        elif is_dataclass(event):
+        elif is_dataclass(event) and not isinstance(event, type):
+            # Type guard: is_dataclass ensures event is a dataclass instance, not a class
             data = asdict(event)
         # Handle objects with __dict__
         elif hasattr(event, "__dict__"):
@@ -111,7 +109,11 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
                     result[attr_key] = serialized
             elif isinstance(value, (str, int, float, bool)):
                 result[attr_key] = value
-            elif is_dataclass(value) or hasattr(value, "model_dump") or hasattr(value, "dict"):
+            elif (
+                is_dataclass(value)
+                or hasattr(value, "model_dump")
+                or hasattr(value, "dict")
+            ):
                 # Recursively serialize nested objects
                 nested = _serialize_event_data(value, attr_key)
                 result.update(nested)
@@ -187,9 +189,7 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
     if not chat_items:
         return {}
 
-    result: dict[str, Any] = {
-        "speech.chat_items.count": len(chat_items)
-    }
+    result: dict[str, Any] = {"speech.chat_items.count": len(chat_items)}
 
     # Collect all messages, function calls, and outputs
     messages = []
@@ -232,26 +232,42 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                     text_content = content
 
             if text_content:
-                messages.append({
-                    "role": str(item.role) if hasattr(item, "role") else None,
-                    "content": text_content,
-                    "interrupted": bool(item.interrupted) if hasattr(item, "interrupted") else False,
-                })
+                messages.append(
+                    {
+                        "role": str(item.role) if hasattr(item, "role") else None,
+                        "content": text_content,
+                        "interrupted": (
+                            bool(item.interrupted)
+                            if hasattr(item, "interrupted")
+                            else False
+                        ),
+                    }
+                )
 
         elif item_type == "function_call":
             # FunctionCall
-            function_calls.append({
-                "name": str(item.name) if hasattr(item, "name") else None,
-                "arguments": str(item.arguments) if hasattr(item, "arguments") else None,
-            })
+            function_calls.append(
+                {
+                    "name": str(item.name) if hasattr(item, "name") else None,
+                    "arguments": (
+                        str(item.arguments) if hasattr(
+                            item, "arguments") else None
+                    ),
+                }
+            )
 
         elif item_type == "function_call_output":
             # FunctionCallOutput
-            function_outputs.append({
-                "name": str(item.name) if hasattr(item, "name") else None,
-                "output": str(item.output) if hasattr(item, "output") else None,
-                "is_error": bool(item.is_error) if hasattr(item, "is_error") else False,
-            })
+            function_outputs.append(
+                {
+                    "name": str(item.name) if hasattr(item, "name") else None,
+                    "output": str(item.output) if hasattr(item, "output") else None,
+                    "is_error": (
+                        bool(item.is_error) if hasattr(
+                            item, "is_error") else False
+                    ),
+                }
+            )
 
     # Add flattened results
     if messages:
@@ -292,7 +308,8 @@ async def _update_speech_span_with_chat_items(
             span.attributes.update(chat_attributes)
 
             logger.debug(
-                f"Updated speech span {span.span_id} with {len(chat_items)} chat items")
+                f"Updated speech span {span.span_id} with {len(chat_items)} chat items"
+            )
 
         # Remove from tracking
         speech_id = speech_handle.id
@@ -301,14 +318,17 @@ async def _update_speech_span_with_chat_items(
 
     except Exception as e:
         logger.warning(
-            f"Failed to update speech span with chat_items: {e}", exc_info=True)
+            f"Failed to update speech span with chat_items: {e}", exc_info=True
+        )
         # Still remove from tracking to prevent memory leak
         speech_id = speech_handle.id
         if speech_id in manager._speech_spans:
             del manager._speech_spans[speech_id]
 
 
-def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] = None) -> Optional[Any]:
+def _create_event_span(
+    event_type: str, event_data: Any, manager: Optional[Any] = None
+) -> Optional[Any]:
     """
     Create a span for an event with explicit parent resolution.
 
@@ -325,8 +345,9 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
         trace = get_current_trace()
         if trace is None:
             logger.debug(
-                f"No active trace for event {event_type}, skipping span creation")
-            return
+                f"No active trace for event {event_type}, skipping span creation"
+            )
+            return None
 
         # Get client
         from noveum_trace import get_client
@@ -335,7 +356,7 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
             client = get_client()
         except Exception as e:
             logger.warning(f"Failed to get Noveum client: {e}")
-            return
+            return None
 
         # Serialize event data
         attributes = _serialize_event_data(event_data, event_type)
@@ -350,14 +371,19 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
         # metrics_collected events should use the latest agent_state_changed span as parent
         # and should not be set as current span
         # speech_created events should also not be set as current (finished immediately)
-        is_metrics_event = event_type == "metrics_collected" or event_type == "realtime.metrics_collected"
+        is_metrics_event = (
+            event_type == "metrics_collected"
+            or event_type == "realtime.metrics_collected"
+        )
         is_speech_event = event_type == "speech_created"
 
         if is_metrics_event:
             # Use the latest agent_state_changed span as parent, or None if none exists yet
             if manager and manager._last_agent_state_changed_span_id:
                 parent_span_id = manager._last_agent_state_changed_span_id
-                use_direct_create = False  # Use client.start_span() with explicit parent
+                use_direct_create = (
+                    False  # Use client.start_span() with explicit parent
+                )
             else:
                 # No agent_state_changed yet, create as direct child of trace
                 # Bypass client.start_span() to avoid its None fallback to context
@@ -368,8 +394,8 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
             # speech_created: use context-based parent resolution
             current_span = get_current_span()
             if current_span and (
-                current_span.name == "livekit.metrics_collected" or
-                current_span.name == "livekit.realtime.metrics_collected"
+                current_span.name == "livekit.metrics_collected"
+                or current_span.name == "livekit.realtime.metrics_collected"
             ):
                 # Current span is metrics_collected, use latest agent_state_changed as parent
                 if manager and manager._last_agent_state_changed_span_id:
@@ -387,8 +413,8 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
             # If so, use the latest agent_state_changed span as parent
             current_span = get_current_span()
             if current_span and (
-                current_span.name == "livekit.metrics_collected" or
-                current_span.name == "livekit.realtime.metrics_collected"
+                current_span.name == "livekit.metrics_collected"
+                or current_span.name == "livekit.realtime.metrics_collected"
             ):
                 # Current span is metrics_collected, use latest agent_state_changed as parent
                 if manager and manager._last_agent_state_changed_span_id:
@@ -428,9 +454,27 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
             manager._last_agent_state_changed_span_id = span.span_id
 
         # Set status for error events
-        if event_type == "error" or (isinstance(event_data, ErrorEvent) and event_data.error):
-            span.set_status(SpanStatus.ERROR, str(event_data.error) if hasattr(
-                event_data, "error") else "Error occurred")
+        if event_type == "error":
+            span.set_status(
+                SpanStatus.ERROR,
+                (
+                    str(event_data.error)
+                    if hasattr(event_data, "error")
+                    else "Error occurred"
+                ),
+            )
+        elif LIVEKIT_AVAILABLE:
+            # Only check isinstance if LiveKit types are available
+            try:
+                if (
+                    isinstance(event_data, ErrorEvent)
+                    and hasattr(event_data, "error")
+                    and event_data.error
+                ):
+                    span.set_status(SpanStatus.ERROR, str(event_data.error))
+            except (NameError, TypeError):
+                # ErrorEvent not available, skip isinstance check
+                pass
 
         # Finish span immediately (events are instantaneous)
         # Note: We don't need to restore context for metrics_collected since we never set it
@@ -440,14 +484,20 @@ def _create_event_span(event_type: str, event_data: Any, manager: Optional[Any] 
 
     except Exception as e:
         logger.warning(
-            f"Failed to create span for event {event_type}: {e}", exc_info=True)
+            f"Failed to create span for event {event_type}: {e}", exc_info=True
+        )
         return None
 
 
 class _LiveKitTracingManager:
     """Manages tracing for a LiveKit AgentSession."""
 
-    def __init__(self, session: Any, enabled: bool = True, trace_name_prefix: Optional[str] = None):
+    def __init__(
+        self,
+        session: Any,
+        enabled: bool = True,
+        trace_name_prefix: Optional[str] = None,
+    ):
         """
         Initialize tracing manager.
 
@@ -457,16 +507,17 @@ class _LiveKitTracingManager:
             trace_name_prefix: Optional prefix for trace names
         """
         if not LIVEKIT_AVAILABLE:
-            raise ImportError(
-                "livekit package is required for LiveKit session tracing. "
+            logger.error(
+                "Cannot initialize LiveKit tracing manager: LiveKit is not available. "
                 "Install it with: pip install livekit livekit-agents"
             )
+            return
 
         self.session = session
         self.enabled = enabled
         self.trace_name_prefix = trace_name_prefix or "livekit"
-        self._original_start = None
-        self._trace = None
+        self._original_start: Optional[Callable[..., Any]] = None
+        self._trace: Optional[Trace] = None
         # List of (event_type, handler)
         self._event_handlers: list[tuple[str, Any]] = []
         self._realtime_session: Optional[Any] = None
@@ -483,16 +534,19 @@ class _LiveKitTracingManager:
             return
 
         self._original_start = self.session.start
+        assert self._original_start is not None, "session.start must be callable"
 
         @functools.wraps(self._original_start)
         async def wrapped_start(agent: Any, **kwargs: Any) -> Any:
             """Wrapped start method that creates trace."""
             if not self.enabled:
+                assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
 
             try:
                 # Get client
                 from noveum_trace import get_client
+
                 client = get_client()
 
                 # Create trace name
@@ -501,9 +555,12 @@ class _LiveKitTracingManager:
                 # Try to get session ID or job context for trace name
                 try:
                     from livekit.agents import get_job_context
+
                     job_ctx = get_job_context()
                     if job_ctx:
-                        trace_name = f"{self.trace_name_prefix}.agent_session.{job_ctx.job.id}"
+                        trace_name = (
+                            f"{self.trace_name_prefix}.agent_session.{job_ctx.job.id}"
+                        )
                 except Exception:
                     pass
 
@@ -519,11 +576,14 @@ class _LiveKitTracingManager:
                 # Add job context if available
                 try:
                     from livekit.agents import get_job_context
+
                     job_ctx = get_job_context()
                     if job_ctx:
                         attributes["livekit.job.id"] = job_ctx.job.id
-                        attributes["livekit.room.name"] = job_ctx.room.name if hasattr(
-                            job_ctx, "room") else None
+                        attributes["livekit.room.name"] = (
+                            job_ctx.room.name if hasattr(
+                                job_ctx, "room") else None
+                        )
                 except Exception:
                     pass
 
@@ -538,6 +598,7 @@ class _LiveKitTracingManager:
 
                 # Call original start
                 try:
+                    assert self._original_start is not None
                     result = await self._original_start(agent, **kwargs)
 
                     # Check for RealtimeSession after start (with retry)
@@ -558,12 +619,14 @@ class _LiveKitTracingManager:
 
             except Exception as e:
                 logger.warning(
-                    f"Failed to create trace in session.start(): {e}", exc_info=True)
+                    f"Failed to create trace in session.start(): {e}", exc_info=True
+                )
                 # Fallback to original start without tracing
+                assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
 
         # Replace method
-        self.session.start = wrapped_start  # type: ignore
+        self.session.start = wrapped_start
         self._wrapped = True
 
     def _setup_realtime_handlers(self) -> None:
@@ -599,8 +662,10 @@ class _LiveKitTracingManager:
         handlers = [
             ("input_speech_started", self._on_input_speech_started),
             ("input_speech_stopped", self._on_input_speech_stopped),
-            ("input_audio_transcription_completed",
-             self._on_input_audio_transcription_completed),
+            (
+                "input_audio_transcription_completed",
+                self._on_input_audio_transcription_completed,
+            ),
             ("generation_created", self._on_generation_created),
             ("session_reconnected", self._on_session_reconnected),
             ("metrics_collected", self._on_realtime_metrics_collected),
@@ -613,7 +678,8 @@ class _LiveKitTracingManager:
                 self._realtime_handlers.append((event_type, handler))
             except Exception as e:
                 logger.warning(
-                    f"Failed to register RealtimeSession handler for {event_type}: {e}")
+                    f"Failed to register RealtimeSession handler for {event_type}: {e}"
+                )
 
     def _register_agent_session_handlers(self) -> None:
         """Register handlers for AgentSession events."""
@@ -636,9 +702,12 @@ class _LiveKitTracingManager:
                 self._event_handlers.append((event_type, handler))
             except Exception as e:
                 logger.warning(
-                    f"Failed to register AgentSession handler for {event_type}: {e}")
+                    f"Failed to register AgentSession handler for {event_type}: {e}"
+                )
 
-    def _create_async_handler(self, event_type: str, additional_work: Optional[Any] = None):
+    def _create_async_handler(
+        self, event_type: str, additional_work: Optional[Any] = None
+    ) -> Callable[[Any], None]:
         """
         Create a synchronous handler that runs async code via asyncio.create_task.
 
@@ -646,6 +715,7 @@ class _LiveKitTracingManager:
             event_type: Type of event (e.g., "user_state_changed")
             additional_work: Optional async function to call after creating span
         """
+
         def handler(ev: Any) -> None:
             async def _handle() -> None:
                 try:
@@ -667,13 +737,15 @@ class _LiveKitTracingManager:
                         await additional_work()
                 except Exception as e:
                     logger.warning(
-                        f"Error in event handler for {event_type}: {e}", exc_info=True)
+                        f"Error in event handler for {event_type}: {e}", exc_info=True
+                    )
 
             try:
                 asyncio.create_task(_handle())
             except Exception as e:
                 logger.warning(
-                    f"Failed to create task for {event_type}: {e}", exc_info=True)
+                    f"Failed to create task for {event_type}: {e}", exc_info=True
+                )
 
         return handler
 
@@ -684,6 +756,7 @@ class _LiveKitTracingManager:
 
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         """Handle agent_state_changed event."""
+
         async def _additional_work() -> None:
             # Try to setup realtime handlers if not already done (session might be ready now)
             self._try_setup_realtime_handlers_later()
@@ -720,6 +793,7 @@ class _LiveKitTracingManager:
 
     def _on_close(self, ev: CloseEvent) -> None:
         """Handle close event and end trace."""
+
         async def _handle_close() -> None:
             try:
                 _create_event_span("close", ev, manager=self)
@@ -732,23 +806,45 @@ class _LiveKitTracingManager:
                 if self._trace:
                     try:
                         from noveum_trace import get_client
+
                         client = get_client()
 
                         # Set trace status based on close reason
-                        if ev.reason == CloseReason.ERROR and ev.error:
-                            self._trace.set_status(
-                                SpanStatus.ERROR, str(ev.error))
-                        elif ev.reason in (CloseReason.JOB_SHUTDOWN, CloseReason.PARTICIPANT_DISCONNECTED):
-                            self._trace.set_status(SpanStatus.OK)
+                        if LIVEKIT_AVAILABLE:
+                            try:
+                                if (
+                                    ev.reason == CloseReason.ERROR
+                                    and hasattr(ev, "error")
+                                    and ev.error
+                                ):
+                                    self._trace.set_status(
+                                        SpanStatus.ERROR, str(ev.error)
+                                    )
+                                elif hasattr(ev, "reason") and ev.reason in (
+                                    CloseReason.JOB_SHUTDOWN,
+                                    CloseReason.PARTICIPANT_DISCONNECTED,
+                                ):
+                                    self._trace.set_status(SpanStatus.OK)
+                                else:
+                                    self._trace.set_status(SpanStatus.OK)
+                            except (NameError, AttributeError):
+                                # CloseReason not available, use default status
+                                self._trace.set_status(SpanStatus.OK)
                         else:
-                            self._trace.set_status(SpanStatus.OK)
+                            # LiveKit not available, use default status
+                            if hasattr(ev, "error") and ev.error:
+                                self._trace.set_status(
+                                    SpanStatus.ERROR, str(ev.error))
+                            else:
+                                self._trace.set_status(SpanStatus.OK)
 
                         client.finish_trace(self._trace)
                         set_current_trace(None)
                         self._trace = None
                     except Exception as e:
                         logger.warning(
-                            f"Failed to end trace on close: {e}", exc_info=True)
+                            f"Failed to end trace on close: {e}", exc_info=True
+                        )
             except Exception as e:
                 logger.warning(f"Error in close handler: {e}", exc_info=True)
 
@@ -767,7 +863,9 @@ class _LiveKitTracingManager:
         """Handle input_speech_stopped event."""
         self._create_async_handler("realtime.input_speech_stopped")(ev)
 
-    def _on_input_audio_transcription_completed(self, ev: InputTranscriptionCompleted) -> None:
+    def _on_input_audio_transcription_completed(
+        self, ev: InputTranscriptionCompleted
+    ) -> None:
         """Handle input_audio_transcription_completed event."""
         self._create_async_handler(
             "realtime.input_audio_transcription_completed")(ev)
@@ -803,11 +901,11 @@ class _LiveKitTracingManager:
                 try:
                     self._realtime_session.off(event_type, handler)
                 except Exception:
-                    pass
+                    pass  # Ignore errors during cleanup
 
         # Restore original start method
         if self._original_start and self._wrapped:
-            self.session.start = self._original_start  # type: ignore
+            self.session.start = self._original_start
             self._wrapped = False
 
 
@@ -836,16 +934,17 @@ def setup_livekit_tracing(
 
     Example:
         >>> from livekit.agents import AgentSession, Agent
-        >>> from noveum_trace.integrations.livekit_session import setup_livekit_tracing
-        >>> 
+        >>> from noveum_trace.integrations.livekit import setup_livekit_tracing
+        >>>
         >>> session = AgentSession()
         >>> manager = setup_livekit_tracing(session)
-        >>> 
+        >>>
         >>> agent = Agent(instructions="You are helpful.")
         >>> await session.start(agent)  # Trace is automatically created
     """
     manager = _LiveKitTracingManager(
-        session, enabled=enabled, trace_name_prefix=trace_name_prefix)
+        session, enabled=enabled, trace_name_prefix=trace_name_prefix
+    )
 
     # Wrap start method
     manager._wrap_start_method()

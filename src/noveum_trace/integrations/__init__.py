@@ -5,6 +5,10 @@ This package contains integration modules that provide seamless tracing
 capabilities for popular frameworks and libraries used in LLM applications.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 __all__ = []
 
 # Conditional imports based on available dependencies
@@ -12,8 +16,9 @@ try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
     __all__.append("NoveumTraceCallbackHandler")
-except ImportError:
+except ImportError as e:
     # LangChain not installed
+    print("LangChain not installed - {}".format(e))
     pass
 
 # LiveKit integration
@@ -24,15 +29,21 @@ try:
     )
 
     __all__.extend(["LiveKitSTTWrapper", "LiveKitTTSWrapper"])
-except ImportError:
-    # LiveKit not installed
-    pass
+except ImportError as e:
+    logger.error(
+        "Failed to import LiveKit integration modules. "
+        "LiveKit integration features will not be available.",
+        exc_info=e,
+    )
 
 # LiveKit session tracing integration
 try:
-    from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+    from noveum_trace.integrations.livekit import setup_livekit_tracing
 
     __all__.append("setup_livekit_tracing")
-except ImportError:
-    # LiveKit not installed
-    pass
+except ImportError as e:
+    logger.error(
+        "Failed to import LiveKit session tracing integration. "
+        "LiveKit session tracing features will not be available.",
+        exc_info=e,
+    )

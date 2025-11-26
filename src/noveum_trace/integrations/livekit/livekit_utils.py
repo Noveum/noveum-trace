@@ -5,23 +5,33 @@ This module provides helper functions for audio handling, file management,
 and context extraction for LiveKit integration with noveum-trace.
 """
 
+import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from livekit.agents.utils import AudioBuffer
+
+logger = logging.getLogger(__name__)
 
 try:
     from livekit import rtc
     from livekit.agents.utils import AudioBuffer
 
     LIVEKIT_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    # Define placeholder types for when LiveKit is not installed
-    rtc = None  # type: ignore
-    AudioBuffer = list  # type: ignore
+    logger.error(
+        "LiveKit is not importable. LiveKit utility functions will not work properly. "
+        "Install it with: pip install livekit livekit-agents",
+        exc_info=e,
+    )
+    # Define a dummy type for when LiveKit is not available
+    AudioBuffer = Any  # type: ignore
 
 
-def save_audio_frames(frames: list, output_path: Path) -> None:
+def save_audio_frames(frames: list[Any], output_path: Path) -> None:
     """
     Combine audio frames and save as WAV file.
 
@@ -30,14 +40,14 @@ def save_audio_frames(frames: list, output_path: Path) -> None:
         output_path: Path where the WAV file will be saved
 
     Raises:
-        ImportError: If livekit package is not installed
         IOError: If file cannot be written
     """
     if not LIVEKIT_AVAILABLE:
-        raise ImportError(
-            "livekit package is required for audio file operations. "
+        logger.error(
+            "Cannot save audio frames: LiveKit is not available. "
             "Install it with: pip install livekit"
         )
+        return
 
     if not frames:
         # Create empty WAV file for empty frames
@@ -58,7 +68,7 @@ def save_audio_frames(frames: list, output_path: Path) -> None:
     output_path.write_bytes(wav_bytes)
 
 
-def save_audio_buffer(buffer: AudioBuffer, output_path: Path) -> None:
+def save_audio_buffer(buffer: "AudioBuffer", output_path: Path) -> None:
     """
     Save AudioBuffer (list of frames) as WAV file.
 
@@ -74,7 +84,7 @@ def save_audio_buffer(buffer: AudioBuffer, output_path: Path) -> None:
     save_audio_frames(list(buffer), output_path)
 
 
-def calculate_audio_duration_ms(frames: list) -> float:
+def calculate_audio_duration_ms(frames: list[Any]) -> float:
     """
     Calculate total duration of audio frames in milliseconds.
 
@@ -110,7 +120,9 @@ def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> 
     return audio_dir
 
 
-def generate_audio_filename(prefix: str, counter: int, timestamp: Optional[int] = None) -> str:
+def generate_audio_filename(
+    prefix: str, counter: int, timestamp: Optional[int] = None
+) -> str:
     """
     Generate a standardized audio filename.
 
@@ -132,10 +144,10 @@ def _is_mock_object(obj: Any) -> bool:
     """Check if an object is a mock object."""
     obj_str = str(obj)
     return (
-        '<Mock' in obj_str or
-        '<MagicMock' in obj_str or
-        '<AsyncMock' in obj_str or
-        obj_str.startswith('mock.')
+        "<Mock" in obj_str
+        or "<MagicMock" in obj_str
+        or "<AsyncMock" in obj_str
+        or obj_str.startswith("mock.")
     )
 
 
@@ -175,56 +187,64 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
     context: dict[str, Any] = {}
 
     # Job info
-    if hasattr(ctx, 'job') and ctx.job and not _is_mock_object(ctx.job):
-        if hasattr(ctx.job, 'id'):
+    if hasattr(ctx, "job") and ctx.job and not _is_mock_object(ctx.job):
+        if hasattr(ctx.job, "id"):
             job_id = _safe_str(ctx.job.id)
             if job_id != "unknown":
-                context['job_id'] = job_id
+                context["job_id"] = job_id
 
-        if hasattr(ctx.job, 'room') and ctx.job.room and not _is_mock_object(ctx.job.room):
-            if hasattr(ctx.job.room, 'sid'):
+        if (
+            hasattr(ctx.job, "room")
+            and ctx.job.room
+            and not _is_mock_object(ctx.job.room)
+        ):
+            if hasattr(ctx.job.room, "sid"):
                 room_sid = _safe_str(ctx.job.room.sid)
                 if room_sid != "unknown":
-                    context['job_room_sid'] = room_sid
-            if hasattr(ctx.job.room, 'name'):
+                    context["job_room_sid"] = room_sid
+            if hasattr(ctx.job.room, "name"):
                 room_name = _safe_str(ctx.job.room.name)
                 if room_name != "unknown":
-                    context['job_room_name'] = room_name
+                    context["job_room_name"] = room_name
 
     # Room info
-    if hasattr(ctx, 'room') and ctx.room and not _is_mock_object(ctx.room):
-        if hasattr(ctx.room, 'name'):
+    if hasattr(ctx, "room") and ctx.room and not _is_mock_object(ctx.room):
+        if hasattr(ctx.room, "name"):
             room_name = _safe_str(ctx.room.name)
             if room_name != "unknown":
-                context['room_name'] = room_name
-        if hasattr(ctx.room, 'sid'):
+                context["room_name"] = room_name
+        if hasattr(ctx.room, "sid"):
             room_sid = _safe_str(ctx.room.sid)
             if room_sid != "unknown":
-                context['room_sid'] = room_sid
+                context["room_sid"] = room_sid
 
     # Agent info
-    if hasattr(ctx, 'agent') and ctx.agent and not _is_mock_object(ctx.agent):
-        if hasattr(ctx.agent, 'id'):
+    if hasattr(ctx, "agent") and ctx.agent and not _is_mock_object(ctx.agent):
+        if hasattr(ctx.agent, "id"):
             agent_id = _safe_str(ctx.agent.id)
             if agent_id != "unknown":
-                context['agent_id'] = agent_id
+                context["agent_id"] = agent_id
 
     # Worker info
-    if hasattr(ctx, 'worker_id') and not _is_mock_object(ctx.worker_id):
+    if hasattr(ctx, "worker_id") and not _is_mock_object(ctx.worker_id):
         worker_id = _safe_str(ctx.worker_id)
         if worker_id != "unknown":
-            context['worker_id'] = worker_id
+            context["worker_id"] = worker_id
 
     # Participant info
-    if hasattr(ctx, 'participant') and ctx.participant and not _is_mock_object(ctx.participant):
-        if hasattr(ctx.participant, 'identity'):
+    if (
+        hasattr(ctx, "participant")
+        and ctx.participant
+        and not _is_mock_object(ctx.participant)
+    ):
+        if hasattr(ctx.participant, "identity"):
             identity = _safe_str(ctx.participant.identity)
             if identity != "unknown":
-                context['participant_identity'] = identity
-        if hasattr(ctx.participant, 'sid'):
+                context["participant_identity"] = identity
+        if hasattr(ctx.participant, "sid"):
             sid = _safe_str(ctx.participant.sid)
             if sid != "unknown":
-                context['participant_sid'] = sid
+                context["participant_sid"] = sid
 
     return context
 
@@ -236,7 +256,7 @@ def create_span_attributes(
     audio_file: str,
     audio_duration_ms: float,
     job_context: dict[str, Any],
-    **extra_attributes: Any
+    **extra_attributes: Any,
 ) -> dict[str, Any]:
     """
     Create standardized span attributes for STT/TTS operations.
@@ -263,10 +283,10 @@ def create_span_attributes(
     # Add job context with 'job.' prefix
     for key, value in job_context.items():
         # If key already has 'job.' prefix with dot, use as-is
-        if key.startswith('job.'):
+        if key.startswith("job."):
             attributes[key] = value
         # If key has 'job_' prefix with underscore, convert to 'job.'
-        elif key.startswith('job_'):
+        elif key.startswith("job_"):
             attributes[f"job.{key[4:]}"] = value
         # Otherwise, add 'job.' prefix
         else:

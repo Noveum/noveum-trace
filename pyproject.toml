@@ -52,6 +52,7 @@ dependencies = [
 openai = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.3.0"]
 langchain = ["langchain-core>=0.1.0"]
+livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 
 # Development dependencies
 dev = [
@@ -240,6 +241,7 @@ module = [
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",
+    "livekit.*",
     "_pytest.*",
     "pytest.*",
 ]

@@ -33,6 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install livekit livekit-agents
 
       - name: Check code formatting with black
         run: |
@@ -65,6 +66,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install livekit livekit-agents
 
       - name: Run bandit security linter
         run: |
@@ -100,6 +102,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install livekit livekit-agents
 
       - name: Run unit tests only
         run: |
@@ -135,6 +138,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install livekit livekit-agents
 
       - name: Run integration tests
         run: |
@@ -176,6 +180,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install livekit livekit-agents
 
       - name: Run full integration tests (main branch)
         run: |
