@@ -16,9 +16,8 @@ try:
     from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
     __all__.append("NoveumTraceCallbackHandler")
-except ImportError as e:
+except ImportError:
     # LangChain not installed
-    print(f"LangChain not installed - {e}")
     pass
 
 # LiveKit integration

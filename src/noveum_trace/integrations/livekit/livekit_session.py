@@ -321,6 +321,71 @@ async def _update_speech_span_with_chat_items(
             del manager._speech_spans[speech_id]
 
 
+async def _update_span_with_system_prompt(
+    span: Any,
+    manager: Any,
+    max_wait_seconds: float = 5.0,
+    check_interval: float = 0.1,
+) -> None:
+    """
+    Wait for agent_activity to become available, then update span with system prompt.
+
+    Args:
+        span: Span to update
+        manager: _LiveKitTracingManager instance
+        max_wait_seconds: Maximum time to wait for agent_activity
+        check_interval: Interval between checks
+    """
+    try:
+        start_time = asyncio.get_event_loop().time()
+
+        # Wait for agent_activity to become available
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= max_wait_seconds:
+                return
+
+            # Check if agent_activity is available (try both property and attribute)
+            agent_activity = None
+
+            # Try property first
+            if hasattr(manager.session, "agent_activity"):
+                try:
+                    agent_activity = manager.session.agent_activity
+                except Exception:
+                    pass
+
+            # Fallback to checking _activity attribute directly
+            if not agent_activity and hasattr(manager.session, "_activity"):
+                try:
+                    agent_activity = manager.session._activity
+                except Exception:
+                    pass
+
+            if agent_activity:
+                if hasattr(agent_activity, "_agent") and agent_activity._agent:
+                    agent = agent_activity._agent
+
+                    # Extract system prompt from agent.instructions (most reliable source)
+                    system_prompt = None
+                    if hasattr(agent, "instructions") and agent.instructions:
+                        system_prompt = agent.instructions
+                    elif hasattr(agent, "_instructions") and agent._instructions:
+                        system_prompt = agent._instructions
+
+                    if system_prompt:
+                        # Directly modify span.attributes (bypassing set_attribute since span may be finished)
+                        # This follows the same pattern as _update_speech_span_with_chat_items
+                        span.attributes["llm.system_prompt"] = system_prompt
+                        return
+
+            # Wait before next check
+            await asyncio.sleep(check_interval)
+
+    except Exception:
+        pass
+
+
 def _create_event_span(
     event_type: str, event_data: Any, manager: Optional[Any] = None
 ) -> Optional[Any]:
@@ -475,6 +540,14 @@ def _create_event_span(
         # Note: We don't need to restore context for metrics_collected since we never set it
         client.finish_span(span)
 
+        # For speech_created events, start background task to update span with system prompt
+        # (waiting for agent_activity to become available)
+        if manager and event_type == "speech_created":
+            # Check if we already have system prompt in attributes
+            if "llm.system_prompt" not in attributes:
+                # Start background task to wait for agent_activity and update span
+                asyncio.create_task(_update_span_with_system_prompt(span, manager))
+
         return span
 
     except Exception as e:
@@ -567,6 +640,12 @@ class _LiveKitTracingManager:
                 # Add agent label if available
                 if hasattr(agent, "label"):
                     attributes["livekit.agent.label"] = agent.label
+
+                # Extract agent instructions (system prompt) if available
+                if hasattr(agent, "instructions") and agent.instructions:
+                    attributes["llm.system_prompt"] = agent.instructions
+                elif hasattr(agent, "_instructions") and agent._instructions:
+                    attributes["llm.system_prompt"] = agent._instructions
 
                 # Add job context if available
                 try:

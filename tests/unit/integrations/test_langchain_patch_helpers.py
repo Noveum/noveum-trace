@@ -9,10 +9,13 @@ import pytest
 
 # Skip all tests if LangChain is not available
 try:
-    from noveum_trace.integrations.langchain import safe_inputs_to_dict
+    # Import directly from the module to avoid issues with other integrations
+    from noveum_trace.integrations.langchain.langchain import (
+        safe_inputs_to_dict,
+    )
 
     LANGCHAIN_AVAILABLE = True
-except ImportError:
+except (ImportError, NameError, AttributeError):
     LANGCHAIN_AVAILABLE = False
 
 

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import threading
 import time
@@ -338,17 +337,6 @@ def mock_config():
         api_key="test-api-key", project="test-project", endpoint="https://api.noveum.ai"
     )
     return config
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an event loop for async tests"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 # Ensure proper cleanup on test session end

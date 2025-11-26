@@ -120,6 +120,7 @@ Changelog = "https://github.com/Noveum/noveum-trace/blob/main/CHANGELOG.md"
 minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests",
     "llm: marks tests as LLM-related",

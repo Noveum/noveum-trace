@@ -14,10 +14,11 @@ import pytest
 
 # Skip all tests if LangChain is not available
 try:
-    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+    # Import directly from the module to avoid issues with other integrations
+    from noveum_trace.integrations.langchain.langchain import NoveumTraceCallbackHandler
 
     LANGCHAIN_AVAILABLE = True
-except ImportError:
+except (ImportError, NameError, AttributeError):
     LANGCHAIN_AVAILABLE = False
 
 
@@ -91,15 +92,15 @@ class TestCallbackMethodUpdates:
             ) as mock_context,
             patch.object(handler, "_resolve_parent_span_id", return_value=None),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_langgraph_metadata",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_langgraph_metadata",
                 return_value={},
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.get_operation_name",
+                "noveum_trace.integrations.langchain.langchain_utils.get_operation_name",
                 return_value="chain.test_chain",
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.build_langgraph_attributes",
+                "noveum_trace.integrations.langchain.langchain_utils.build_langgraph_attributes",
                 return_value={},
             ),
         ):
@@ -137,7 +138,7 @@ class TestCallbackMethodUpdates:
             ) as mock_context,
             patch.object(handler, "_resolve_parent_span_id", return_value=None),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_tool_function_name",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_tool_function_name",
                 return_value="test_func",
             ),
         ):
@@ -175,15 +176,15 @@ class TestCallbackMethodUpdates:
             ) as mock_context,
             patch.object(handler, "_resolve_parent_span_id", return_value=None),
             patch(
-                "noveum_trace.integrations.langchain_utils.get_operation_name",
+                "noveum_trace.integrations.langchain.langchain_utils.get_operation_name",
                 return_value="agent.test_agent",
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_agent_type",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_agent_type",
                 return_value="test_type",
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_agent_capabilities",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_agent_capabilities",
                 return_value=["test_cap"],
             ),
         ):
@@ -221,7 +222,7 @@ class TestCallbackMethodUpdates:
             ) as mock_context,
             patch.object(handler, "_resolve_parent_span_id", return_value=None),
             patch(
-                "noveum_trace.integrations.langchain_utils.get_operation_name",
+                "noveum_trace.integrations.langchain.langchain_utils.get_operation_name",
                 return_value="retrieval.test_retriever",
             ),
         ):
@@ -278,15 +279,15 @@ class TestSafeInputsConversion:
                 ),
                 patch.object(handler, "_resolve_parent_span_id", return_value=None),
                 patch(
-                    "noveum_trace.integrations.langchain_utils.extract_langgraph_metadata",
+                    "noveum_trace.integrations.langchain.langchain_utils.extract_langgraph_metadata",
                     return_value={},
                 ),
                 patch(
-                    "noveum_trace.integrations.langchain_utils.get_operation_name",
+                    "noveum_trace.integrations.langchain.langchain_utils.get_operation_name",
                     return_value="chain.test",
                 ),
                 patch(
-                    "noveum_trace.integrations.langchain_utils.build_langgraph_attributes",
+                    "noveum_trace.integrations.langchain.langchain_utils.build_langgraph_attributes",
                     return_value={},
                 ),
             ):
@@ -346,19 +347,19 @@ class TestSafeInputsConversion:
             ),
             patch.object(handler, "_resolve_parent_span_id", return_value=None),
             patch(
-                "noveum_trace.integrations.langchain_utils.get_operation_name",
+                "noveum_trace.integrations.langchain.langchain_utils.get_operation_name",
                 return_value="agent.test",
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_agent_type",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_agent_type",
                 return_value="test_type",
             ),
             patch(
-                "noveum_trace.integrations.langchain_utils.extract_agent_capabilities",
+                "noveum_trace.integrations.langchain.langchain_utils.extract_agent_capabilities",
                 return_value=[],
             ),
             patch(
-                "noveum_trace.integrations.langchain.safe_inputs_to_dict"
+                "noveum_trace.integrations.langchain.langchain.safe_inputs_to_dict"
             ) as mock_safe_convert,
         ):
 
@@ -389,7 +390,7 @@ class TestSafeInputsConversion:
         with (
             patch.object(handler, "_complete_tool_spans_from_finish"),
             patch(
-                "noveum_trace.integrations.langchain.safe_inputs_to_dict"
+                "noveum_trace.integrations.langchain.langchain.safe_inputs_to_dict"
             ) as mock_safe_convert,
         ):
 
@@ -427,7 +428,7 @@ class TestSafeInputsConversion:
                 ),
                 patch.object(handler, "_resolve_parent_span_id", return_value=None),
                 patch(
-                    "noveum_trace.integrations.langchain_utils.extract_tool_function_name",
+                    "noveum_trace.integrations.langchain.langchain_utils.extract_tool_function_name",
                     return_value="test_func",
                 ),
             ):
