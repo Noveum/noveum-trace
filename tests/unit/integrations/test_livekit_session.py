@@ -393,7 +393,7 @@ class TestLiveKitTracingManager:
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
     @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch("noveum_trace.integrations.livekit.livekit_session.asyncio.sleep")
+    @patch("noveum_trace.integrations.livekit.livekit_session.asyncio.sleep", new_callable=AsyncMock)
     @pytest.mark.asyncio
     async def test_wrapped_start_creates_trace(
         self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client

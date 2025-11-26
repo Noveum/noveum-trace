@@ -398,8 +398,6 @@ async def entrypoint(ctx: JobContext):
 
 ---
 
----
-
 ## Configuration Options
 
 ### Job Context
@@ -927,7 +925,7 @@ if __name__ == "__main__":
 
 - **Documentation**: See [`LIVEKIT_INTEGRATION.md`](LIVEKIT_INTEGRATION.md)
 - **Issues**: Report issues on GitHub
-- **Email**: support@noveum.ai
+- **Email**: [support@noveum.ai](mailto:support@noveum.ai)
 
 ---
 
@@ -937,7 +935,7 @@ if __name__ == "__main__":
 - [ ] Install `noveum-trace` and LiveKit packages
 - [ ] Set environment variables (API keys)
 - [ ] Initialize `noveum_trace.init()` at startup
-- [ ] Import `setup_livekit_tracing` from `noveum_trace.integrations.livekit_session`
+- [ ] Import `setup_livekit_tracing` from `noveum_trace.integrations.livekit`
 - [ ] Import wrapper classes from `noveum_trace.integrations.livekit`
 - [ ] Wrap STT provider with `LiveKitSTTWrapper`
 - [ ] Wrap TTS provider with `LiveKitTTSWrapper`

@@ -59,34 +59,19 @@ except ImportError:
 
 import noveum_trace
 
-# Optional imports
-try:
-    from livekit.agents import (
-        Agent,
-        AgentServer,
-        JobContext,
-        RunContext,
-        ToolError,
-        cli,
-        function_tool,
-    )
-    from livekit.agents.voice import AgentSession
-    from livekit.plugins import cartesia, deepgram
-    from livekit.plugins import openai as openai_plugin
-
-    LIVEKIT_AVAILABLE = True
-except ImportError:
-    LIVEKIT_AVAILABLE = False
-    openai_plugin = None
-    RunContext = None  # type: ignore
-    function_tool = None  # type: ignore
-
-try:
-    import openai
-
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    JobContext,
+    RunContext,
+    ToolError,
+    cli,
+    function_tool,
+)
+from livekit.agents.voice import AgentSession
+from livekit.plugins import cartesia, deepgram
+from livekit.plugins import openai as openai_plugin
+import openai
 
 # Import LiveKit wrappers
 from noveum_trace.integrations.livekit import (
@@ -120,7 +105,8 @@ class Order:
         if item.lower() in MENU:
             for _ in range(quantity):
                 self.items.append(
-                    {"name": item.lower(), "price": MENU[item.lower()]["price"]}
+                    {"name": item.lower(),
+                     "price": MENU[item.lower()]["price"]}
                 )
             return True
         return False
@@ -163,11 +149,6 @@ def call_llm(prompt: str, system_prompt: Optional[str] = None) -> str:
 
     Requires OpenAI API key to be set.
     """
-    if not OPENAI_AVAILABLE:
-        raise ImportError(
-            "OpenAI package is required. Install with: pip install openai"
-        )
-
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
@@ -194,7 +175,8 @@ def create_system_prompt(order: Order) -> str:
     # Filter out "coke" from menu display since it's the same as "drink"
     menu_display = {k: v for k, v in MENU.items() if k != "coke"}
     menu_text = "\n".join(
-        [f"- {name}: ${info['price']:.2f}" for name, info in menu_display.items()]
+        [f"- {name}: ${info['price']:.2f}" for name,
+            info in menu_display.items()]
     )
     menu_text += "\n- coke: $1.99 (same as drink)"
 
@@ -245,9 +227,6 @@ Be concise and friendly. Keep responses short (1-2 sentences)."""
 
     def build_add_item_tool(self):
         """Build the add_item_to_order tool."""
-        if function_tool is None:
-            raise ImportError("function_tool is required from livekit.agents")
-
         available_items = list(MENU.keys())
 
         @function_tool
@@ -353,10 +332,12 @@ class DriveThruAgentText:
 
         # Replace placeholder with actual total
         if "${:.2f}" in response:
-            response = response.replace("${:.2f}", f"${self.order.get_total():.2f}")
+            response = response.replace(
+                "${:.2f}", f"${self.order.get_total():.2f}")
 
         # Add to conversation history
-        self.conversation_history.append({"role": "agent", "content": response})
+        self.conversation_history.append(
+            {"role": "agent", "content": response})
 
         return response
 
@@ -419,10 +400,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = Userdata(order=order)
 
     # Create LLM using livekit.plugins.openai
-    if openai_plugin is None:
-        raise ImportError(
-            "livekit.plugins.openai is required. Install with: pip install livekit-plugins-openai"
-        )
     llm = openai_plugin.LLM(model="gpt-4o-mini", temperature=0.7)
 
     # Create agent session with userdata
@@ -471,13 +448,6 @@ async def run_text_simulation():
         print("❌ Error: OPENAI_API_KEY environment variable is required.")
         print("   Set it with: export OPENAI_API_KEY=your-key")
         sys.exit(1)
-
-    # Initialize noveum-trace
-    noveum_trace.init(
-        project="drive-thru-agent-demo",
-        api_key=os.getenv("NOVEUM_API_KEY", "demo-key"),
-        environment="development",
-    )
 
     # Create trace
     with noveum_trace.start_trace("drive_thru_simulation") as trace:
@@ -543,15 +513,6 @@ def main():
     if test_mode:
         # Remove --test from sys.argv so LiveKit CLI doesn't see it
         sys.argv = [arg for arg in sys.argv if arg != "--test"]
-
-        # Run with LiveKit
-        if not LIVEKIT_AVAILABLE:
-            print("❌ Error: LiveKit not installed.")
-            print("   Install with: pip install livekit livekit-agents")
-            print(
-                "   Also install plugins: pip install livekit-plugins-deepgram livekit-plugins-cartesia"
-            )
-            sys.exit(1)
 
         # Check for required API keys
         missing_keys = []

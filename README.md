@@ -239,6 +239,7 @@ For complete details and examples, see the [LangChain Integration Guide](docs/LA
 Automatically trace LiveKit agent sessions with complete observability:
 
 ```python
+import noveum_trace
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.plugins import deepgram, cartesia
 from noveum_trace.integrations.livekit import setup_livekit_tracing
