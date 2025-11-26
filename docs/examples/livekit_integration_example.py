@@ -89,8 +89,8 @@ except ImportError:
 
 # Import LiveKit wrappers
 from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
-from noveum_trace.integrations.livekit_utils import extract_job_context
-from noveum_trace.integrations.livekit_session import setup_livekit_tracing
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 
 # =============================================================================
 # MENU & ORDER MANAGEMENT
@@ -144,6 +144,7 @@ class Order:
 @dataclass
 class Userdata:
     """User data for the agent session."""
+
     order: Order
 
 
@@ -279,7 +280,8 @@ Be concise and friendly. Keep responses short (1-2 sentences)."""
 
             if item.lower() not in MENU:
                 raise ToolError(
-                    f"error: {item} is not on the menu. Available items: {', '.join(available_items)}")
+                    f"error: {item} is not on the menu. Available items: {', '.join(available_items)}"
+                )
 
             success = ctx.userdata.order.add_item(item.lower(), quantity)
             if not success:
@@ -326,7 +328,11 @@ class DriveThruAgentText:
                     quantity = 1
                     words = text_lower.split()
                     for i, word in enumerate(words):
-                        if word.isdigit() and i + 1 < len(words) and words[i + 1] == item:
+                        if (
+                            word.isdigit()
+                            and i + 1 < len(words)
+                            and words[i + 1] == item
+                        ):
                             quantity = int(word)
                             break
 
@@ -513,7 +519,9 @@ async def run_text_simulation():
         print("   - LLM spans for each conversation turn")
         print("   - Order processing spans")
         print()
-        print("💡 To run with actual voice agent, use: python livekit_integration_example.py --test")
+        print(
+            "💡 To run with actual voice agent, use: python livekit_integration_example.py --test"
+        )
 
 
 # =============================================================================
@@ -541,7 +549,8 @@ def main():
             print("❌ Error: LiveKit not installed.")
             print("   Install with: pip install livekit livekit-agents")
             print(
-                "   Also install plugins: pip install livekit-plugins-deepgram livekit-plugins-cartesia")
+                "   Also install plugins: pip install livekit-plugins-deepgram livekit-plugins-cartesia"
+            )
             sys.exit(1)
 
         # Check for required API keys
