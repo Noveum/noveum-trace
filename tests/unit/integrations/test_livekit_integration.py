@@ -101,8 +101,7 @@ class MockSpeechStream:
             SpeechEvent(
                 type=SpeechEventType.INTERIM_TRANSCRIPT,
                 request_id="test-request-1",
-                alternatives=[SpeechData(
-                    language="en", text="Hello", confidence=0.8)],
+                alternatives=[SpeechData(language="en", text="Hello", confidence=0.8)],
             ),
             SpeechEvent(
                 type=SpeechEventType.FINAL_TRANSCRIPT,

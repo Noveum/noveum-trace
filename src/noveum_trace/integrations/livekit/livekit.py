@@ -179,8 +179,7 @@ class LiveKitSTTWrapper:
                 )
 
                 # Create and finish span
-                span = client.start_span(
-                    name="stt.recognize", attributes=attributes)
+                span = client.start_span(name="stt.recognize", attributes=attributes)
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
 
@@ -284,8 +283,7 @@ class _WrappedSpeechStream:
             self._counter_ref[0] += 1
 
             # Generate audio filename
-            audio_filename = generate_audio_filename(
-                "stt", self._counter_ref[0])
+            audio_filename = generate_audio_filename("stt", self._counter_ref[0])
             audio_path = self._audio_dir / audio_filename
 
             # Save buffered audio
@@ -332,8 +330,7 @@ class _WrappedSpeechStream:
                     )
 
                     # Create and finish span
-                    span = client.start_span(
-                        name="stt.stream", attributes=attributes)
+                    span = client.start_span(name="stt.stream", attributes=attributes)
                     span.set_status(SpanStatus.OK)
                     client.finish_span(span)
 
@@ -595,8 +592,7 @@ class _WrappedSynthesizeStream:
             self._counter_ref[0] += 1
 
             # Generate audio filename
-            audio_filename = generate_audio_filename(
-                "tts", self._counter_ref[0])
+            audio_filename = generate_audio_filename("tts", self._counter_ref[0])
             audio_path = self._audio_dir / audio_filename
 
             # Save buffered audio
@@ -653,8 +649,7 @@ class _WrappedSynthesizeStream:
                     )
 
                     # Create and finish span
-                    span = client.start_span(
-                        name="tts.stream", attributes=attributes)
+                    span = client.start_span(name="tts.stream", attributes=attributes)
                     span.set_status(SpanStatus.OK)
                     client.finish_span(span)
 
@@ -805,8 +800,7 @@ class _WrappedChunkedStream:
                 )
 
                 # Create and finish span
-                span = client.start_span(
-                    name="tts.synthesize", attributes=attributes)
+                span = client.start_span(name="tts.synthesize", attributes=attributes)
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
 

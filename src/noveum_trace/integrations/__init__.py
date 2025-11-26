@@ -18,7 +18,7 @@ try:
     __all__.append("NoveumTraceCallbackHandler")
 except ImportError as e:
     # LangChain not installed
-    print("LangChain not installed - {}".format(e))
+    print(f"LangChain not installed - {e}")
     pass
 
 # LiveKit integration
@@ -45,5 +45,15 @@ except ImportError as e:
     logger.error(
         "Failed to import LiveKit session tracing integration. "
         "LiveKit session tracing features will not be available.",
+        exc_info=e,
+    )
+try:
+    from noveum_trace.integrations.livekit import extract_job_context
+
+    __all__.append("extract_job_context")
+except ImportError as e:
+    logger.error(
+        "Failed to import LiveKit job context extraction. "
+        "LiveKit job context extraction features will not be available.",
         exc_info=e,
     )

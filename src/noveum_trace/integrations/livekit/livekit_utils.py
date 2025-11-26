@@ -28,7 +28,7 @@ except ImportError as e:
         exc_info=e,
     )
     # Define a dummy type for when LiveKit is not available
-    AudioBuffer = Any  # type: ignore
+    AudioBuffer = Any
 
 
 def save_audio_frames(frames: list[Any], output_path: Path) -> None:
