@@ -97,19 +97,19 @@ class TestLiveKitSTTWrapper:
     @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", False)
     def test_init_without_livekit(self, mock_stt_provider):
         """Test STT wrapper initialization when LiveKit is not available."""
-        # When LiveKit is unavailable, wrapper returns early and may not initialize
-        # Just verify it doesn't raise an error
-        try:
-            LiveKitSTTWrapper(
-                stt=mock_stt_provider,
-                session_id="session_123",
-            )
-            # If it gets here, it didn't crash - that's what we're testing
-            assert True
-        except RecursionError:
-            # If recursion happens, that's expected when accessing properties
-            # Skip property access when LiveKit unavailable
-            pass
+        # When LiveKit is unavailable, wrapper should initialize gracefully without errors
+        wrapper = LiveKitSTTWrapper(
+            stt=mock_stt_provider,
+            session_id="session_123",
+        )
+        # Verify wrapper was created successfully
+        assert wrapper is not None
+        # Verify attributes are initialized
+        assert wrapper._base_stt == mock_stt_provider
+        assert wrapper._session_id == "session_123"
+        # Audio directory is always created regardless of LiveKit availability
+        assert wrapper._audio_dir is not None
+        assert wrapper._audio_dir.name == "session_123"
 
     @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
     def test_properties(self, mock_stt_provider, tmp_path):

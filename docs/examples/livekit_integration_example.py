@@ -57,7 +57,7 @@ except ImportError:
     # python-dotenv not installed, will use system environment variables only
     pass
 
-import openai
+from openai import OpenAI
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -160,7 +160,8 @@ def call_llm(prompt: str, system_prompt: Optional[str] = None) -> str:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    response = openai.chat.completions.create(
+    client = OpenAI()
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
         max_tokens=150,

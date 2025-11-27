@@ -187,3 +187,4 @@ chatbot_traces/
 example_traces/
 test_traces/
 SCRATCH.md
+.cursor/

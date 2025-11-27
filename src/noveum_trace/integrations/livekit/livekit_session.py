@@ -5,6 +5,8 @@ This module provides automatic tracing for LiveKit agent sessions, creating
 traces at session.start() and spans for each event that fires.
 """
 
+from __future__ import annotations
+
 import asyncio
 import functools
 import logging
@@ -563,15 +565,9 @@ class _LiveKitTracingManager:
             enabled: Whether tracing is enabled
             trace_name_prefix: Optional prefix for trace names
         """
-        if not LIVEKIT_AVAILABLE:
-            logger.error(
-                "Cannot initialize LiveKit tracing manager: LiveKit is not available. "
-                "Install it with: pip install livekit livekit-agents"
-            )
-            return
-
+        # Always initialize fields so manager is safe to use when LiveKit is unavailable
         self.session = session
-        self.enabled = enabled
+        self.enabled = enabled and LIVEKIT_AVAILABLE
         self.trace_name_prefix = trace_name_prefix or "livekit"
         self._original_start: Optional[Callable[..., Any]] = None
         self._trace: Optional[Trace] = None
@@ -584,6 +580,13 @@ class _LiveKitTracingManager:
         self._last_agent_state_changed_span_id: Optional[str] = None
         # Track finished speech spans by speech_handle.id for later attribute updates
         self._speech_spans: dict[str, Any] = {}  # speech_id -> Span
+
+        if not LIVEKIT_AVAILABLE:
+            logger.error(
+                "Cannot initialize LiveKit tracing manager: LiveKit is not available. "
+                "Install it with: pip install livekit livekit-agents"
+            )
+            return
 
     def _wrap_start_method(self) -> None:
         """Wrap session.start() method to create trace."""
@@ -1012,6 +1015,9 @@ def setup_livekit_tracing(
     manager = _LiveKitTracingManager(
         session, enabled=enabled, trace_name_prefix=trace_name_prefix
     )
+
+    if not manager.enabled:
+        return manager
 
     # Wrap start method
     manager._wrap_start_method()

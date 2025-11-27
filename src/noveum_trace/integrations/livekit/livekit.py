@@ -83,6 +83,15 @@ class LiveKitSTTWrapper:
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
         """
+        # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
+        self._base_stt = stt
+        self._session_id = session_id
+        self._job_context = job_context or {}
+        self._counter_ref = [0]  # Mutable reference for sharing with streams
+
+        # Always create audio directory (doesn't require LiveKit)
+        self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
+
         if not LIVEKIT_AVAILABLE:
             logger.error(
                 "Cannot initialize LiveKitSTTWrapper: LiveKit is not available. "
@@ -90,30 +99,35 @@ class LiveKitSTTWrapper:
             )
             return
 
-        self._base_stt = stt
-        self._session_id = session_id
-        self._job_context = job_context or {}
-        self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
-        self._counter_ref = [0]  # Mutable reference for sharing with streams
-
     @property
     def capabilities(self) -> STTCapabilities:
         """Get STT capabilities from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_stt is None:
+            raise RuntimeError(
+                "LiveKit is not available. Cannot access capabilities. "
+                "Install it with: pip install livekit livekit-agents"
+            )
         return self._base_stt.capabilities
 
     @property
     def model(self) -> str:
         """Get model name from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_stt is None:
+            return "unknown"
         return getattr(self._base_stt, "model", "unknown")
 
     @property
     def provider(self) -> str:
         """Get provider name from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_stt is None:
+            return "unknown"
         return getattr(self._base_stt, "provider", "unknown")
 
     @property
     def label(self) -> str:
         """Get label from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_stt is None:
+            return "LiveKitSTTWrapper"
         return getattr(self._base_stt, "label", self._base_stt.__class__.__name__)
 
     async def _recognize_impl(self, buffer: AudioBuffer, **kwargs: Any) -> SpeechEvent:
@@ -431,6 +445,15 @@ class LiveKitTTSWrapper:
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
         """
+        # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
+        self._base_tts = tts
+        self._session_id = session_id
+        self._job_context = job_context or {}
+        self._counter_ref = [0]  # Mutable reference for sharing with streams
+
+        # Always create audio directory (doesn't require LiveKit)
+        self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
+
         if not LIVEKIT_AVAILABLE:
             logger.error(
                 "Cannot initialize LiveKitTTSWrapper: LiveKit is not available. "
@@ -438,40 +461,55 @@ class LiveKitTTSWrapper:
             )
             return
 
-        self._base_tts = tts
-        self._session_id = session_id
-        self._job_context = job_context or {}
-        self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
-        self._counter_ref = [0]  # Mutable reference for sharing with streams
-
     @property
     def capabilities(self) -> TTSCapabilities:
         """Get TTS capabilities from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            raise RuntimeError(
+                "LiveKit is not available. Cannot access capabilities. "
+                "Install it with: pip install livekit livekit-agents"
+            )
         return self._base_tts.capabilities
 
     @property
     def model(self) -> str:
         """Get model name from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            return "unknown"
         return getattr(self._base_tts, "model", "unknown")
 
     @property
     def provider(self) -> str:
         """Get provider name from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            return "unknown"
         return getattr(self._base_tts, "provider", "unknown")
 
     @property
     def label(self) -> str:
         """Get label from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            return "LiveKitTTSWrapper"
         return getattr(self._base_tts, "label", self._base_tts.__class__.__name__)
 
     @property
     def sample_rate(self) -> int:
         """Get sample rate from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            raise RuntimeError(
+                "LiveKit is not available. Cannot access sample_rate. "
+                "Install it with: pip install livekit livekit-agents"
+            )
         return self._base_tts.sample_rate
 
     @property
     def num_channels(self) -> int:
         """Get number of channels from base provider."""
+        if not LIVEKIT_AVAILABLE or self._base_tts is None:
+            raise RuntimeError(
+                "LiveKit is not available. Cannot access num_channels. "
+                "Install it with: pip install livekit livekit-agents"
+            )
         return self._base_tts.num_channels
 
     def synthesize(self, text: str, **kwargs: Any) -> "_WrappedChunkedStream":
