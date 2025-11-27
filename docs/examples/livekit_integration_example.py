@@ -57,7 +57,6 @@ except ImportError:
     # python-dotenv not installed, will use system environment variables only
     pass
 
-from openai import OpenAI
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -70,6 +69,7 @@ from livekit.agents import (
 from livekit.agents.voice import AgentSession
 from livekit.plugins import cartesia, deepgram
 from livekit.plugins import openai as openai_plugin
+from openai import OpenAI
 
 import noveum_trace
 
