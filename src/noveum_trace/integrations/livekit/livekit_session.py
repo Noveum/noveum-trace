@@ -110,6 +110,7 @@ class _LiveKitTracingManager:
                 assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
 
+            # Try to create trace first (separate from calling original start)
             try:
                 # Get client
                 from noveum_trace import get_client
@@ -173,27 +174,6 @@ class _LiveKitTracingManager:
                 # Set trace in context
                 set_current_trace(self._trace)
 
-                # Call original start
-                try:
-                    assert self._original_start is not None
-                    result = await self._original_start(agent, **kwargs)
-
-                    # Check for RealtimeSession after start (with retry)
-                    # agent_activity might not be immediately available
-                    # Small delay to let session initialize
-                    await asyncio.sleep(0.1)
-                    self._setup_realtime_handlers()
-
-                    return result
-                except Exception as e:
-                    # End trace on error
-                    if self._trace:
-                        self._trace.set_status(SpanStatus.ERROR, str(e))
-                        client.finish_trace(self._trace)
-                        set_current_trace(None)
-                        self._trace = None
-                    raise
-
             except Exception as e:
                 logger.warning(
                     f"Failed to create trace in session.start(): {e}", exc_info=True
@@ -201,6 +181,27 @@ class _LiveKitTracingManager:
                 # Fallback to original start without tracing
                 assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
+
+            # Trace was successfully created, now call original start
+            try:
+                assert self._original_start is not None
+                result = await self._original_start(agent, **kwargs)
+
+                # Check for RealtimeSession after start (with retry)
+                # agent_activity might not be immediately available
+                # Small delay to let session initialize
+                await asyncio.sleep(0.1)
+                self._setup_realtime_handlers()
+
+                return result
+            except Exception as e:
+                # End trace on error from original start
+                if self._trace:
+                    self._trace.set_status(SpanStatus.ERROR, str(e))
+                    client.finish_trace(self._trace)
+                    set_current_trace(None)
+                    self._trace = None
+                raise
 
         # Replace method
         self.session.start = wrapped_start

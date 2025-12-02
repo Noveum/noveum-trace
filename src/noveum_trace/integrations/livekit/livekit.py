@@ -1061,9 +1061,13 @@ class _WrappedChunkedStream:
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
 
-            except Exception:  # noqa: S110 - broad exception for graceful degradation
+            except (
+                Exception
+            ) as e:  # noqa: S110 - broad exception for graceful degradation
                 # Gracefully handle span creation errors
-                pass
+                logger.warning(
+                    f"Failed to create/finish tts.synthesize span: {e}", exc_info=True
+                )
 
     def __aiter__(self) -> _WrappedChunkedStream:
         """Return self as async iterator."""

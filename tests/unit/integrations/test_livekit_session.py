@@ -28,7 +28,7 @@ try:
     )
 
     LIVEKIT_SESSION_AVAILABLE = True
-except (ImportError, NameError, AttributeError):
+except ImportError:
     LIVEKIT_SESSION_AVAILABLE = False
 
 
