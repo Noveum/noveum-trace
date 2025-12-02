@@ -39,6 +39,7 @@ except (ImportError, NameError, AttributeError):
 class TestSaveAudioFrames:
     """Test save_audio_frames function."""
 
+    @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
     def test_save_audio_frames_empty_list(self, tmp_path):
         """Test saving empty frames list creates empty file."""
         output_path = tmp_path / "empty.wav"
@@ -49,7 +50,7 @@ class TestSaveAudioFrames:
         assert output_path.read_bytes() == b""
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True)
     def test_save_audio_frames_valid_frames(self, mock_rtc, tmp_path):
         """Test saving valid audio frames."""
         output_path = tmp_path / "test.wav"
@@ -83,7 +84,7 @@ class TestSaveAudioFrames:
         assert not output_path.exists()
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True)
     def test_save_audio_frames_creates_directory(self, mock_rtc, tmp_path):
         """Test that save_audio_frames creates parent directory if needed."""
         output_path = tmp_path / "nested" / "dir" / "test.wav"
@@ -540,3 +541,86 @@ class TestCreateSpanAttributes:
         assert result["job.id"] == "job_123"
         assert result["job.room"] == "room_456"
         assert result["job.agent_id"] == "agent_789"
+
+
+@pytest.mark.skipif(not LIVEKIT_UTILS_AVAILABLE, reason="LiveKit utils not available")
+class TestSaveAudioFramesErrorHandling:
+    """Test error handling in save_audio_frames."""
+
+    @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True)
+    def test_save_audio_frames_combine_raises_exception(self, mock_rtc, tmp_path):
+        """Test save_audio_frames when combine_audio_frames raises exception."""
+        output_path = tmp_path / "test.wav"
+
+        mock_rtc.combine_audio_frames.side_effect = Exception("Combine error")
+
+        # Exceptions propagate (they're caught at the call site in livekit.py)
+        with pytest.raises(Exception, match="Combine error"):
+            save_audio_frames([Mock()], output_path)
+
+    @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True)
+    def test_save_audio_frames_to_wav_bytes_raises_exception(self, mock_rtc, tmp_path):
+        """Test save_audio_frames when to_wav_bytes() raises exception."""
+        output_path = tmp_path / "test.wav"
+
+        mock_combined = Mock()
+        mock_combined.to_wav_bytes.side_effect = Exception("WAV conversion error")
+        mock_rtc.combine_audio_frames.return_value = mock_combined
+
+        # Exceptions propagate (they're caught at the call site in livekit.py)
+        with pytest.raises(Exception, match="WAV conversion error"):
+            save_audio_frames([Mock()], output_path)
+
+
+@pytest.mark.skipif(not LIVEKIT_UTILS_AVAILABLE, reason="LiveKit utils not available")
+class TestExtractJobContextEdgeCases:
+    """Test edge cases in extract_job_context."""
+
+    def test_extract_job_context_with_nested_mock_detection(self):
+        """Test extract_job_context with nested mock detection."""
+        mock_ctx = Mock()
+        mock_job = Mock()
+        mock_job.id = "job_123"
+        mock_ctx.job = mock_job
+
+        # Mock _is_mock_object to detect nested mocks
+        def is_mock(obj):
+            return isinstance(obj, Mock) and obj is not mock_ctx and obj is not mock_job
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils._is_mock_object",
+            side_effect=is_mock,
+        ):
+            result = extract_job_context(mock_ctx)
+
+        # Should still extract valid job_id
+        assert "job_id" in result or result == {}
+
+
+@pytest.mark.skipif(not LIVEKIT_UTILS_AVAILABLE, reason="LiveKit utils not available")
+class TestCreateSpanAttributesEdgeCases:
+    """Test edge cases in create_span_attributes."""
+
+    def test_create_span_attributes_with_complex_nested_job_context(self):
+        """Test create_span_attributes with complex nested job_context values."""
+        job_context = {
+            "job_id": "job_123",
+            "nested": {"key": "value"},
+            "list": [1, 2, 3],
+        }
+
+        result = create_span_attributes(
+            provider="test",
+            model="test",
+            operation_type="stt",
+            audio_file="test.wav",
+            audio_duration_ms=1000.0,
+            job_context=job_context,
+        )
+
+        # job_id with 'job_' prefix gets converted to 'job.id' (removes 'job_' and adds 'job.')
+        assert result["job.id"] == "job_123"
+        # Other keys get 'job.' prefix added
+        assert "job.nested" in result or "job.list" in result

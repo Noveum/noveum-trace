@@ -330,13 +330,14 @@ class TestWrappedSpeechStream:
         """Test __anext__ creates span on FINAL_TRANSCRIPT event."""
         from noveum_trace.integrations.livekit.livekit import _WrappedSpeechStream
 
-        # Mock SpeechEventType
+        # Mock SpeechEventType - patch at the import location
         mock_speech_event_type = MagicMock()
         mock_speech_event_type.FINAL_TRANSCRIPT = "FINAL_TRANSCRIPT"
 
         with patch(
             "noveum_trace.integrations.livekit.livekit.SpeechEventType",
             mock_speech_event_type,
+            create=True,
         ):
             mock_base_stream = AsyncMock()
             mock_event = Mock()
@@ -385,17 +386,26 @@ class TestWrappedSpeechStream:
         mock_event.type = "INTERIM_TRANSCRIPT"  # Not FINAL_TRANSCRIPT
         mock_base_stream.__anext__ = AsyncMock(return_value=mock_event)
 
-        stream = _WrappedSpeechStream(
-            base_stream=mock_base_stream,
-            session_id="session_123",
-            job_context={},
-            provider="deepgram",
-            model="nova-2",
-            counter_ref=[0],
-            audio_dir=tmp_path,
-        )
+        # Patch SpeechEventType to avoid NameError
+        mock_speech_event_type = MagicMock()
+        mock_speech_event_type.FINAL_TRANSCRIPT = "FINAL_TRANSCRIPT"
 
-        result = await stream.__anext__()
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.SpeechEventType",
+            mock_speech_event_type,
+            create=True,
+        ):
+            stream = _WrappedSpeechStream(
+                base_stream=mock_base_stream,
+                session_id="session_123",
+                job_context={},
+                provider="deepgram",
+                model="nova-2",
+                counter_ref=[0],
+                audio_dir=tmp_path,
+            )
+
+            result = await stream.__anext__()
 
         assert result == mock_event
         # Buffer should not be cleared for non-final events
@@ -765,3 +775,615 @@ class TestWrappedChunkedStream:
 
             mock_create_span.assert_called_once()
             mock_base_stream.aclose.assert_called_once()
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+)
+class TestLiveKitSTTWrapperErrorHandling:
+    """Test error handling in LiveKitSTTWrapper."""
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit.save_audio_buffer")
+    @patch("noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms")
+    @pytest.mark.asyncio
+    async def test_recognize_impl_audio_save_fails(
+        self,
+        mock_calc_duration,
+        mock_save_buffer,
+        mock_get_client,
+        mock_get_trace,
+        mock_stt_provider,
+        mock_trace,
+        mock_client,
+        tmp_path,
+    ):
+        """Test _recognize_impl when audio save fails."""
+        wrapper = LiveKitSTTWrapper(
+            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
+        )
+
+        mock_event = Mock()
+        mock_alternative = Mock()
+        mock_alternative.text = "Hello"
+        mock_alternative.confidence = 0.9
+        mock_event.alternatives = [mock_alternative]
+        mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
+
+        mock_save_buffer.side_effect = Exception("Save error")
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+        mock_calc_duration.return_value = 1000.0
+
+        # Should not raise exception
+        result = await wrapper.recognize([Mock()])
+
+        assert result == mock_event
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_recognize_impl_span_creation_fails(
+        self,
+        mock_get_client,
+        mock_get_trace,
+        mock_stt_provider,
+        mock_trace,
+        mock_client,
+        tmp_path,
+    ):
+        """Test _recognize_impl when span creation fails."""
+        wrapper = LiveKitSTTWrapper(
+            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
+        )
+
+        mock_event = Mock()
+        mock_alternative = Mock()
+        mock_alternative.text = "Hello"
+        mock_alternative.confidence = 0.9
+        mock_event.alternatives = [mock_alternative]
+        mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.side_effect = Exception("Client error")
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            # Should not raise exception
+            result = await wrapper.recognize([Mock()])
+
+        assert result == mock_event
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+)
+class TestWrappedSpeechStreamErrorHandling:
+    """Test error handling in _WrappedSpeechStream."""
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit.save_audio_frames")
+    @pytest.mark.asyncio
+    async def test_anext_audio_save_fails(
+        self,
+        mock_save_frames,
+        mock_get_client,
+        mock_get_trace,
+        tmp_path,
+        mock_trace,
+        mock_client,
+    ):
+        """Test __anext__ when audio save fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSpeechStream
+
+        mock_speech_event_type = MagicMock()
+        mock_speech_event_type.FINAL_TRANSCRIPT = "FINAL_TRANSCRIPT"
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.SpeechEventType",
+            mock_speech_event_type,
+            create=True,
+        ):
+            mock_base_stream = AsyncMock()
+            mock_event = Mock()
+            mock_event.type = "FINAL_TRANSCRIPT"
+            mock_event.alternatives = []
+            mock_base_stream.__anext__ = AsyncMock(return_value=mock_event)
+
+            stream = _WrappedSpeechStream(
+                base_stream=mock_base_stream,
+                session_id="session_123",
+                job_context={},
+                provider="deepgram",
+                model="nova-2",
+                counter_ref=[0],
+                audio_dir=tmp_path,
+            )
+
+            stream._buffered_frames = [Mock()]
+
+            mock_save_frames.side_effect = Exception("Save error")
+            mock_get_trace.return_value = mock_trace
+            mock_get_client.return_value = mock_client
+
+            # Patch calculate_audio_duration_ms to avoid duration issues
+            with patch(
+                "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+                return_value=1000.0,
+            ):
+                # Should not raise exception
+                result = await stream.__anext__()
+
+            assert result == mock_event
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_anext_span_creation_fails(
+        self, mock_get_client, mock_get_trace, tmp_path, mock_trace
+    ):
+        """Test __anext__ when span creation fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSpeechStream
+
+        mock_speech_event_type = MagicMock()
+        mock_speech_event_type.FINAL_TRANSCRIPT = "FINAL_TRANSCRIPT"
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.SpeechEventType",
+            mock_speech_event_type,
+            create=True,
+        ):
+            mock_base_stream = AsyncMock()
+            mock_event = Mock()
+            mock_event.type = "FINAL_TRANSCRIPT"
+            mock_event.alternatives = []
+            mock_base_stream.__anext__ = AsyncMock(return_value=mock_event)
+
+            stream = _WrappedSpeechStream(
+                base_stream=mock_base_stream,
+                session_id="session_123",
+                job_context={},
+                provider="deepgram",
+                model="nova-2",
+                counter_ref=[0],
+                audio_dir=tmp_path,
+            )
+
+            stream._buffered_frames = [Mock()]
+
+            mock_get_trace.return_value = mock_trace
+            mock_get_client.side_effect = Exception("Client error")
+
+            # Patch calculate_audio_duration_ms to avoid duration issues
+            with patch(
+                "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+                return_value=1000.0,
+            ):
+                # Should not raise exception
+                result = await stream.__anext__()
+
+            assert result == mock_event
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_aexit_fallback_to_aclose(self, tmp_path):
+        """Test __aexit__ fallback to aclose when no __aexit__."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSpeechStream
+
+        mock_base_stream = Mock()
+        # No __aexit__ method
+        mock_base_stream.aclose = AsyncMock()
+
+        stream = _WrappedSpeechStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="deepgram",
+            model="nova-2",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        await stream.__aexit__(None, None, None)
+
+        mock_base_stream.aclose.assert_called_once()
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_flush(self, tmp_path):
+        """Test flush method."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSpeechStream
+
+        mock_base_stream = Mock()
+        mock_base_stream.flush = AsyncMock()
+
+        stream = _WrappedSpeechStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="deepgram",
+            model="nova-2",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        await stream.flush()
+
+        mock_base_stream.flush.assert_called_once()
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+)
+class TestWrappedSynthesizeStreamErrorHandling:
+    """Test error handling in _WrappedSynthesizeStream."""
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit.save_audio_frames")
+    @pytest.mark.asyncio
+    async def test_anext_audio_save_fails(
+        self,
+        mock_save_frames,
+        mock_get_client,
+        mock_get_trace,
+        tmp_path,
+        mock_trace,
+        mock_client,
+    ):
+        """Test __anext__ when audio save fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = AsyncMock()
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._input_text = "Hello"
+        stream._buffered_frames = [Mock()]
+
+        mock_save_frames.side_effect = Exception("Save error")
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            # Should not raise exception
+            result = await stream.__anext__()
+
+        assert result == mock_audio
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_anext_span_creation_fails(
+        self, mock_get_client, mock_get_trace, tmp_path, mock_trace
+    ):
+        """Test __anext__ when span creation fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = AsyncMock()
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._input_text = "Hello"
+        stream._buffered_frames = [Mock()]
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.side_effect = Exception("Client error")
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            # Should not raise exception
+            result = await stream.__anext__()
+
+        assert result == mock_audio
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_anext_with_delta_text_fallback(
+        self, mock_get_client, mock_get_trace, tmp_path, mock_trace, mock_client
+    ):
+        """Test __anext__ with empty input_text and delta_text fallback."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = AsyncMock()
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_audio.delta_text = "Delta text"
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._input_text = ""  # Empty
+        stream._buffered_frames = [Mock()]
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            result = await stream.__anext__()
+
+        assert result == mock_audio
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_anext_with_unknown_fallback(
+        self, mock_get_client, mock_get_trace, tmp_path, mock_trace, mock_client
+    ):
+        """Test __anext__ with input_text='unknown' fallback."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = AsyncMock()
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        # No delta_text
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._input_text = ""  # Empty
+        stream._buffered_frames = [Mock()]
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            result = await stream.__anext__()
+
+        assert result == mock_audio
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_aexit_fallback_to_aclose(self, tmp_path):
+        """Test __aexit__ fallback to aclose when no __aexit__."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = Mock()
+        # No __aexit__ method
+        mock_base_stream.aclose = AsyncMock()
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        await stream.__aexit__(None, None, None)
+
+        mock_base_stream.aclose.assert_called_once()
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_flush(self, tmp_path):
+        """Test flush method."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedSynthesizeStream
+
+        mock_base_stream = Mock()
+        mock_base_stream.flush = AsyncMock()
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        await stream.flush()
+
+        mock_base_stream.flush.assert_called_once()
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+)
+class TestWrappedChunkedStreamErrorHandling:
+    """Test error handling in _WrappedChunkedStream."""
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit.save_audio_frames")
+    @pytest.mark.asyncio
+    async def test_create_span_audio_save_fails(
+        self,
+        mock_save_frames,
+        mock_get_client,
+        mock_get_trace,
+        tmp_path,
+        mock_trace,
+        mock_client,
+    ):
+        """Test _create_span when audio save fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedChunkedStream
+
+        mock_base_stream = AsyncMock()
+        stream = _WrappedChunkedStream(
+            base_stream=mock_base_stream,
+            input_text="Hello",
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        # Create mock frame with duration attribute
+        mock_frame = Mock()
+        mock_frame.duration = 0.1
+        stream._buffered_frames = [mock_frame]
+
+        mock_save_frames.side_effect = Exception("Save error")
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+
+        # Should not raise exception
+        stream._create_span()
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @pytest.mark.asyncio
+    async def test_create_span_span_creation_fails(
+        self, mock_get_client, mock_get_trace, tmp_path, mock_trace
+    ):
+        """Test _create_span when span creation fails."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedChunkedStream
+
+        mock_base_stream = AsyncMock()
+        stream = _WrappedChunkedStream(
+            base_stream=mock_base_stream,
+            input_text="Hello",
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._buffered_frames = [Mock()]
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.side_effect = Exception("Client error")
+
+        # Patch calculate_audio_duration_ms to avoid duration issues
+        with patch(
+            "noveum_trace.integrations.livekit.livekit.calculate_audio_duration_ms",
+            return_value=1000.0,
+        ):
+            # Should not raise exception
+            stream._create_span()
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_anext_non_final_no_span(self, tmp_path):
+        """Test __anext__ with non-final audio (buffer frames but no span)."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedChunkedStream
+
+        mock_base_stream = AsyncMock()
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = False
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedChunkedStream(
+            base_stream=mock_base_stream,
+            input_text="Hello",
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        result = await stream.__anext__()
+
+        assert result == mock_audio
+        assert len(stream._buffered_frames) == 1
+        assert stream._span_created is False
+
+    @patch("noveum_trace.integrations.livekit.livekit.LIVEKIT_AVAILABLE", True)
+    @pytest.mark.asyncio
+    async def test_aclose_when_span_already_created(self, tmp_path):
+        """Test aclose when span already created."""
+        from noveum_trace.integrations.livekit.livekit import _WrappedChunkedStream
+
+        mock_base_stream = AsyncMock()
+        mock_base_stream.aclose = AsyncMock()
+
+        stream = _WrappedChunkedStream(
+            base_stream=mock_base_stream,
+            input_text="Hello",
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+            audio_dir=tmp_path,
+        )
+
+        stream._span_created = True
+
+        await stream.aclose()
+
+        mock_base_stream.aclose.assert_called_once()
