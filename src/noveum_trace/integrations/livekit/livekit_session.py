@@ -46,7 +46,7 @@ try:
     LIVEKIT_AVAILABLE = True
 except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    logger.error(
+    logger.debug(
         "LiveKit is not importable. LiveKit session tracing features will not be available. "
         "Install it with: pip install livekit livekit-agents",
         exc_info=e,

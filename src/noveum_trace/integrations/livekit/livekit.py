@@ -5,6 +5,8 @@ This module provides wrapper classes that automatically trace LiveKit STT and TT
 operations, capturing audio files and metadata as span attributes.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -30,7 +32,7 @@ try:
     LIVEKIT_AVAILABLE = True
 except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    logger.error(
+    logger.debug(
         "LiveKit is not importable. LiveKit integration features will not be available. "
         "Install it with: pip install livekit livekit-agents",
         exc_info=e,
@@ -216,7 +218,7 @@ class LiveKitSTTWrapper:
         """
         return await self._recognize_impl(buffer, **kwargs)
 
-    def stream(self, **kwargs: Any) -> "_WrappedSpeechStream":
+    def stream(self, **kwargs: Any) -> _WrappedSpeechStream:
         """
         Create a streaming recognition interface.
 
@@ -359,11 +361,11 @@ class _WrappedSpeechStream:
 
         return event
 
-    def __aiter__(self) -> "_WrappedSpeechStream":
+    def __aiter__(self) -> _WrappedSpeechStream:
         """Return self as async iterator."""
         return self
 
-    async def __aenter__(self) -> "_WrappedSpeechStream":
+    async def __aenter__(self) -> _WrappedSpeechStream:
         """Enter async context manager."""
         # If base stream is an async context manager, enter it
         if hasattr(self._base_stream, "__aenter__"):
@@ -512,7 +514,7 @@ class LiveKitTTSWrapper:
             )
         return self._base_tts.num_channels
 
-    def synthesize(self, text: str, **kwargs: Any) -> "_WrappedChunkedStream":
+    def synthesize(self, text: str, **kwargs: Any) -> _WrappedChunkedStream:
         """
         Synthesize text to speech (batch mode).
 
@@ -535,7 +537,7 @@ class LiveKitTTSWrapper:
             audio_dir=self._audio_dir,
         )
 
-    def stream(self, **kwargs: Any) -> "_WrappedSynthesizeStream":
+    def stream(self, **kwargs: Any) -> _WrappedSynthesizeStream:
         """
         Create a streaming synthesis interface.
 
@@ -703,11 +705,11 @@ class _WrappedSynthesizeStream:
 
         return audio
 
-    def __aiter__(self) -> "_WrappedSynthesizeStream":
+    def __aiter__(self) -> _WrappedSynthesizeStream:
         """Return self as async iterator."""
         return self
 
-    async def __aenter__(self) -> "_WrappedSynthesizeStream":
+    async def __aenter__(self) -> _WrappedSynthesizeStream:
         """Enter async context manager."""
         # If base stream is an async context manager, enter it
         if hasattr(self._base_stream, "__aenter__"):
@@ -846,7 +848,7 @@ class _WrappedChunkedStream:
                 # Gracefully handle span creation errors
                 pass
 
-    def __aiter__(self) -> "_WrappedChunkedStream":
+    def __aiter__(self) -> _WrappedChunkedStream:
         """Return self as async iterator."""
         return self
 

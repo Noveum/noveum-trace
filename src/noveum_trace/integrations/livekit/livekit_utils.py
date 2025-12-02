@@ -5,6 +5,8 @@ This module provides helper functions for audio handling, file management,
 and context extraction for LiveKit integration with noveum-trace.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from pathlib import Path
@@ -22,7 +24,7 @@ try:
     LIVEKIT_AVAILABLE = True
 except ImportError as e:
     LIVEKIT_AVAILABLE = False
-    logger.error(
+    logger.debug(
         "LiveKit is not importable. LiveKit utility functions will not work properly. "
         "Install it with: pip install livekit livekit-agents",
         exc_info=e,
@@ -68,7 +70,7 @@ def save_audio_frames(frames: list[Any], output_path: Path) -> None:
     output_path.write_bytes(wav_bytes)
 
 
-def save_audio_buffer(buffer: "AudioBuffer", output_path: Path) -> None:
+def save_audio_buffer(buffer: AudioBuffer, output_path: Path) -> None:
     """
     Save AudioBuffer (list of frames) as WAV file.
 

@@ -208,6 +208,7 @@ ignore = [
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
     "UP007",  # Use `X | Y` for type annotations (not supported in Python 3.9)
+    "UP045",  # Use `X | None` for type annotations - allow Optional[X]
 ]
 
 [tool.ruff.lint.per-file-ignores]
