@@ -13,6 +13,21 @@ from typing import Any, Optional, Union
 
 from noveum_trace.core.context import get_current_trace
 from noveum_trace.core.span import SpanStatus
+from noveum_trace.integrations.livekit.livekit_constants import (
+    STT_CONFIDENCE_DEFAULT_VALUE,
+    STT_END_TIME_DEFAULT_VALUE,
+    STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE,
+    STT_LANGUAGE_DEFAULT_VALUE,
+    STT_SPEAKER_ID_DEFAULT_VALUE,
+    STT_START_TIME_DEFAULT_VALUE,
+    STT_TRANSCRIPT_DEFAULT_VALUE,
+    TTS_DELTA_TEXT_DEFAULT_VALUE,
+    TTS_INPUT_TEXT_DEFAULT_VALUE,
+    TTS_NUM_CHANNELS_DEFAULT_VALUE,
+    TTS_REQUEST_ID_DEFAULT_VALUE,
+    TTS_SAMPLE_RATE_DEFAULT_VALUE,
+    TTS_SEGMENT_ID_DEFAULT_VALUE,
+)
 from noveum_trace.integrations.livekit.livekit_utils import (
     calculate_audio_duration_ms,
     create_span_attributes,
@@ -153,9 +168,11 @@ class LiveKitSTTWrapper:
         # Save audio buffer
         try:
             save_audio_buffer(buffer, audio_path)
-        except Exception:  # noqa: S110 - broad exception for graceful degradation
+        except Exception as e:  # noqa: S110 - broad exception for graceful degradation
             # Log but don't fail if audio save fails
-            pass
+            logger.warning(
+                f"Failed to save audio buffer to {audio_path}: {e}", exc_info=True
+            )
 
         # Call base STT (access to protected member is intentional for wrapping)
         event = await self._base_stt._recognize_impl(buffer, **kwargs)  # noqa: SLF001
@@ -171,12 +188,56 @@ class LiveKitSTTWrapper:
             try:
                 client = get_client()
 
-                # Get transcript text
-                transcript = ""
-                confidence = 0.0
+                # Get transcript text and additional attributes
+                transcript = STT_TRANSCRIPT_DEFAULT_VALUE
+                confidence = STT_CONFIDENCE_DEFAULT_VALUE
+                language = STT_LANGUAGE_DEFAULT_VALUE
+                start_time = STT_START_TIME_DEFAULT_VALUE
+                end_time = STT_END_TIME_DEFAULT_VALUE
+                speaker_id = STT_SPEAKER_ID_DEFAULT_VALUE
+                is_primary_speaker = STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE
+
                 if event.alternatives and len(event.alternatives) > 0:
-                    transcript = event.alternatives[0].text
-                    confidence = event.alternatives[0].confidence
+                    first_alternative = event.alternatives[0]
+                    transcript = first_alternative.text
+                    confidence = first_alternative.confidence
+                    language = first_alternative.language
+                    start_time = first_alternative.start_time
+                    end_time = first_alternative.end_time
+                    speaker_id = first_alternative.speaker_id
+                    is_primary_speaker = first_alternative.is_primary_speaker
+
+                # Build additional attributes
+                additional_attrs = {
+                    "stt.transcript": transcript,
+                    "stt.confidence": confidence,
+                    "stt.is_final": True,
+                    "stt.mode": "batch",
+                    "stt.event_type": event.type.value,
+                }
+
+                if event.request_id:
+                    additional_attrs["stt.request_id"] = event.request_id
+
+                if language:
+                    additional_attrs["stt.language"] = language
+
+                if start_time is not None:
+                    additional_attrs["stt.start_time"] = start_time
+
+                if end_time is not None:
+                    additional_attrs["stt.end_time"] = end_time
+
+                if speaker_id is not None:
+                    additional_attrs["stt.speaker_id"] = speaker_id
+
+                if is_primary_speaker is not None:
+                    additional_attrs["stt.is_primary_speaker"] = is_primary_speaker
+
+                if event.recognition_usage and event.recognition_usage.audio_duration:
+                    additional_attrs["stt.recognition_usage.audio_duration"] = (
+                        event.recognition_usage.audio_duration
+                    )
 
                 # Create span attributes
                 attributes = create_span_attributes(
@@ -186,12 +247,7 @@ class LiveKitSTTWrapper:
                     audio_file=audio_filename,
                     audio_duration_ms=duration_ms,
                     job_context=self._job_context,
-                    **{
-                        "stt.transcript": transcript,
-                        "stt.confidence": confidence,
-                        "stt.is_final": True,
-                        "stt.mode": "batch",
-                    },
+                    **additional_attrs,
                 )
 
                 # Create and finish span
@@ -199,9 +255,13 @@ class LiveKitSTTWrapper:
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
 
-            except Exception:  # noqa: S110 - broad exception for graceful degradation
+            except (
+                Exception
+            ) as e:  # noqa: S110 - broad exception for graceful degradation
                 # Gracefully handle span creation errors
-                pass
+                logger.warning(
+                    f"Failed to create span for STT recognition: {e}", exc_info=True
+                )
 
         return event
 
@@ -306,9 +366,13 @@ class _WrappedSpeechStream:
             try:
                 if self._buffered_frames:
                     save_audio_frames(self._buffered_frames, audio_path)
-            except Exception:  # noqa: S110 - broad exception for graceful degradation
+            except (
+                Exception
+            ) as e:  # noqa: S110 - broad exception for graceful degradation
                 # Log but don't fail if audio save fails
-                pass
+                logger.warning(
+                    f"Failed to save audio frames to {audio_path}: {e}", exc_info=True
+                )
 
             # Calculate duration
             duration_ms = calculate_audio_duration_ms(self._buffered_frames)
@@ -321,12 +385,59 @@ class _WrappedSpeechStream:
                 try:
                     client = get_client()
 
-                    # Get transcript text
-                    transcript = ""
-                    confidence = 0.0
+                    # Get transcript text and additional attributes
+                    transcript = STT_TRANSCRIPT_DEFAULT_VALUE
+                    confidence = STT_CONFIDENCE_DEFAULT_VALUE
+                    language = STT_LANGUAGE_DEFAULT_VALUE
+                    start_time = STT_START_TIME_DEFAULT_VALUE
+                    end_time = STT_END_TIME_DEFAULT_VALUE
+                    speaker_id = STT_SPEAKER_ID_DEFAULT_VALUE
+                    is_primary_speaker = STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE
+
                     if event.alternatives and len(event.alternatives) > 0:
-                        transcript = event.alternatives[0].text
-                        confidence = event.alternatives[0].confidence
+                        first_alternative = event.alternatives[0]
+                        transcript = first_alternative.text
+                        confidence = first_alternative.confidence
+                        language = first_alternative.language
+                        start_time = first_alternative.start_time
+                        end_time = first_alternative.end_time
+                        speaker_id = first_alternative.speaker_id
+                        is_primary_speaker = first_alternative.is_primary_speaker
+
+                    # Build additional attributes
+                    additional_attrs = {
+                        "stt.transcript": transcript,
+                        "stt.confidence": confidence,
+                        "stt.is_final": True,
+                        "stt.mode": "streaming",
+                        "stt.event_type": event.type.value,
+                    }
+
+                    if event.request_id:
+                        additional_attrs["stt.request_id"] = event.request_id
+
+                    if language:
+                        additional_attrs["stt.language"] = language
+
+                    if start_time is not None:
+                        additional_attrs["stt.start_time"] = start_time
+
+                    if end_time is not None:
+                        additional_attrs["stt.end_time"] = end_time
+
+                    if speaker_id is not None:
+                        additional_attrs["stt.speaker_id"] = speaker_id
+
+                    if is_primary_speaker is not None:
+                        additional_attrs["stt.is_primary_speaker"] = is_primary_speaker
+
+                    if (
+                        event.recognition_usage
+                        and event.recognition_usage.audio_duration
+                    ):
+                        additional_attrs["stt.recognition_usage.audio_duration"] = (
+                            event.recognition_usage.audio_duration
+                        )
 
                     # Create span attributes
                     attributes = create_span_attributes(
@@ -336,13 +447,7 @@ class _WrappedSpeechStream:
                         audio_file=audio_filename,
                         audio_duration_ms=duration_ms,
                         job_context=self._job_context,
-                        **{
-                            "stt.transcript": transcript,
-                            "stt.confidence": confidence,
-                            "stt.is_final": True,
-                            "stt.mode": "streaming",
-                            "stt.request_id": event.request_id,
-                        },
+                        **additional_attrs,
                     )
 
                     # Create and finish span
@@ -352,9 +457,11 @@ class _WrappedSpeechStream:
 
                 except (
                     Exception
-                ):  # noqa: S110 - broad exception for graceful degradation
+                ) as e:  # noqa: S110 - broad exception for graceful degradation
                     # Gracefully handle span creation errors
-                    pass
+                    logger.warning(
+                        f"Failed to create span for STT streaming: {e}", exc_info=True
+                    )
 
             # Clear buffer for next utterance
             self._buffered_frames = []
@@ -639,9 +746,13 @@ class _WrappedSynthesizeStream:
             try:
                 if self._buffered_frames:
                     save_audio_frames(self._buffered_frames, audio_path)
-            except Exception:  # noqa: S110 - broad exception for graceful degradation
+            except (
+                Exception
+            ) as e:  # noqa: S110 - broad exception for graceful degradation
                 # Log but don't fail if audio save fails
-                pass
+                logger.warning(
+                    f"Failed to save audio frames to {audio_path}: {e}", exc_info=True
+                )
 
             # Calculate duration
             duration_ms = calculate_audio_duration_ms(self._buffered_frames)
@@ -655,9 +766,14 @@ class _WrappedSynthesizeStream:
                     client = get_client()
 
                     # Use accumulated input_text if available, otherwise use fallback
-                    input_text = self._input_text.strip() if self._input_text else ""
+                    input_text = (
+                        self._input_text.strip()
+                        if self._input_text
+                        else TTS_INPUT_TEXT_DEFAULT_VALUE
+                    )
 
                     # Try to get text from audio.delta_text if input_text is empty
+                    delta_text = TTS_DELTA_TEXT_DEFAULT_VALUE
                     if (
                         not input_text
                         and hasattr(audio, "delta_text")
@@ -672,6 +788,50 @@ class _WrappedSynthesizeStream:
                     if not input_text:
                         input_text = "unknown"
 
+                    # Get additional attributes from audio
+                    segment_id = (
+                        self._segment_id
+                        if self._segment_id
+                        else TTS_SEGMENT_ID_DEFAULT_VALUE
+                    )
+                    request_id = (
+                        self._current_request_id
+                        if self._current_request_id
+                        else TTS_REQUEST_ID_DEFAULT_VALUE
+                    )
+                    sample_rate = (
+                        audio.frame.sample_rate
+                        if hasattr(audio.frame, "sample_rate")
+                        else TTS_SAMPLE_RATE_DEFAULT_VALUE
+                    )
+                    num_channels = (
+                        audio.frame.num_channels
+                        if hasattr(audio.frame, "num_channels")
+                        else TTS_NUM_CHANNELS_DEFAULT_VALUE
+                    )
+
+                    # Build additional attributes
+                    additional_attrs = {
+                        "tts.input_text": input_text,
+                        "tts.mode": "streaming",
+                        "tts.is_final": audio.is_final,
+                    }
+
+                    if segment_id is not None:
+                        additional_attrs["tts.segment_id"] = segment_id
+
+                    if request_id is not None:
+                        additional_attrs["tts.request_id"] = request_id
+
+                    if delta_text is not None:
+                        additional_attrs["tts.delta_text"] = delta_text
+
+                    if sample_rate is not None:
+                        additional_attrs["tts.sample_rate"] = sample_rate
+
+                    if num_channels is not None:
+                        additional_attrs["tts.num_channels"] = num_channels
+
                     # Create span attributes
                     attributes = create_span_attributes(
                         provider=self._provider,
@@ -680,12 +840,7 @@ class _WrappedSynthesizeStream:
                         audio_file=audio_filename,
                         audio_duration_ms=duration_ms,
                         job_context=self._job_context,
-                        **{
-                            "tts.input_text": input_text,
-                            "tts.segment_id": self._segment_id or "",
-                            "tts.request_id": self._current_request_id or "",
-                            "tts.mode": "streaming",
-                        },
+                        **additional_attrs,
                     )
 
                     # Create and finish span
@@ -695,9 +850,11 @@ class _WrappedSynthesizeStream:
 
                 except (
                     Exception
-                ):  # noqa: S110 - broad exception for graceful degradation
+                ) as e:  # noqa: S110 - broad exception for graceful degradation
                     # Gracefully handle span creation errors
-                    pass
+                    logger.warning(
+                        f"Failed to create span for TTS streaming: {e}", exc_info=True
+                    )
 
             # Clear buffer for next segment
             self._buffered_frames = []
@@ -813,9 +970,11 @@ class _WrappedChunkedStream:
         try:
             if self._buffered_frames:
                 save_audio_frames(self._buffered_frames, audio_path)
-        except Exception:  # noqa: S110 - broad exception for graceful degradation
+        except Exception as e:  # noqa: S110 - broad exception for graceful degradation
             # Log but don't fail if audio save fails
-            pass
+            logger.warning(
+                f"Failed to save audio frames to {audio_path}: {e}", exc_info=True
+            )
 
         # Calculate duration
         duration_ms = calculate_audio_duration_ms(self._buffered_frames)
@@ -828,6 +987,64 @@ class _WrappedChunkedStream:
             try:
                 client = get_client()
 
+                # Get additional attributes from first audio
+                input_text = (
+                    self._input_text.strip()
+                    if self._input_text
+                    else TTS_INPUT_TEXT_DEFAULT_VALUE
+                )
+                request_id = (
+                    self._first_audio.request_id
+                    if self._first_audio and self._first_audio.request_id
+                    else TTS_REQUEST_ID_DEFAULT_VALUE
+                )
+                segment_id = (
+                    self._first_audio.segment_id
+                    if self._first_audio and self._first_audio.segment_id
+                    else TTS_SEGMENT_ID_DEFAULT_VALUE
+                )
+                delta_text = (
+                    self._first_audio.delta_text
+                    if self._first_audio and self._first_audio.delta_text
+                    else TTS_DELTA_TEXT_DEFAULT_VALUE
+                )
+                sample_rate = (
+                    self._first_audio.frame.sample_rate
+                    if self._first_audio
+                    and hasattr(self._first_audio.frame, "sample_rate")
+                    else TTS_SAMPLE_RATE_DEFAULT_VALUE
+                )
+                num_channels = (
+                    self._first_audio.frame.num_channels
+                    if self._first_audio
+                    and hasattr(self._first_audio.frame, "num_channels")
+                    else TTS_NUM_CHANNELS_DEFAULT_VALUE
+                )
+
+                # Build additional attributes
+                additional_attrs = {
+                    "tts.input_text": input_text,
+                    "tts.mode": "batch",
+                    "tts.is_final": (
+                        self._first_audio.is_final if self._first_audio else True
+                    ),
+                }
+
+                if request_id is not None:
+                    additional_attrs["tts.request_id"] = request_id
+
+                if segment_id is not None:
+                    additional_attrs["tts.segment_id"] = segment_id
+
+                if delta_text is not None:
+                    additional_attrs["tts.delta_text"] = delta_text
+
+                if sample_rate is not None:
+                    additional_attrs["tts.sample_rate"] = sample_rate
+
+                if num_channels is not None:
+                    additional_attrs["tts.num_channels"] = num_channels
+
                 # Create span attributes
                 attributes = create_span_attributes(
                     provider=self._provider,
@@ -836,7 +1053,7 @@ class _WrappedChunkedStream:
                     audio_file=audio_filename,
                     audio_duration_ms=duration_ms,
                     job_context=self._job_context,
-                    **{"tts.input_text": self._input_text, "tts.mode": "batch"},
+                    **additional_attrs,
                 )
 
                 # Create and finish span

@@ -17,12 +17,14 @@ import pytest
 # Skip all tests if LiveKit is not available
 try:
     from noveum_trace.integrations.livekit.livekit_session import (
-        _create_event_span,
         _LiveKitTracingManager,
+        setup_livekit_tracing,
+    )
+    from noveum_trace.integrations.livekit.livekit_utils import (
         _serialize_chat_items,
         _serialize_event_data,
         _serialize_value,
-        setup_livekit_tracing,
+        create_event_span,
     )
 
     LIVEKIT_SESSION_AVAILABLE = True
@@ -286,11 +288,11 @@ class TestSerializeChatItems:
     not LIVEKIT_SESSION_AVAILABLE, reason="LiveKit session not available"
 )
 class TestCreateEventSpan:
-    """Test _create_event_span function."""
+    """Test create_event_span function."""
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_create_event_span_with_trace(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -302,25 +304,25 @@ class TestCreateEventSpan:
         # Create event as a simple dict-like object
         event = type("Event", (), {"field": "value"})()
 
-        span = _create_event_span("test_event", event)
+        span = create_event_span("test_event", event)
 
         assert span is not None
         mock_client.start_span.assert_called_once()
         mock_client.finish_span.assert_called_once()
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     def test_create_event_span_without_trace(self, mock_get_trace):
         """Test span creation when no trace exists."""
         mock_get_trace.return_value = None
 
         event = Mock()
-        span = _create_event_span("test_event", event)
+        span = create_event_span("test_event", event)
 
         assert span is None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_create_event_span_with_parent(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -336,7 +338,7 @@ class TestCreateEventSpan:
         # Create event as a simple object
         event = type("Event", (), {})()
 
-        span = _create_event_span("test_event", event)
+        span = create_event_span("test_event", event)
 
         assert span is not None
         # Check that parent_span_id was passed
@@ -462,7 +464,7 @@ class TestLiveKitTracingManager:
         assert manager._realtime_session == mock_realtime_session
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_event_handler_creates_span(self, mock_create_span, mock_session):
         """Test that event handler creates span."""
@@ -699,36 +701,36 @@ class TestSerializeChatItemsEdgeCases:
     not LIVEKIT_SESSION_AVAILABLE, reason="LiveKit session not available"
 )
 class TestCreateEventSpanErrorHandling:
-    """Test error handling in _create_event_span."""
+    """Test error handling in create_event_span."""
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
     def test_create_event_span_get_client_fails(
         self, mock_get_client, mock_get_trace, mock_trace
     ):
-        """Test _create_event_span when get_client() fails."""
+        """Test create_event_span when get_client() fails."""
         mock_get_trace.return_value = mock_trace
         mock_get_client.side_effect = Exception("Client error")
 
         event = Mock()
-        span = _create_event_span("test_event", event)
+        span = create_event_span("test_event", event)
 
         assert span is None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_create_event_span_exception_handling(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
-        """Test _create_event_span exception handling."""
+        """Test create_event_span exception handling."""
         mock_get_trace.return_value = mock_trace
         mock_get_client.return_value = mock_client
         mock_get_span.return_value = None
         mock_client.start_span.side_effect = Exception("Span creation error")
 
         event = Mock()
-        span = _create_event_span("test_event", event)
+        span = create_event_span("test_event", event)
 
         assert span is None
 
@@ -737,11 +739,11 @@ class TestCreateEventSpanErrorHandling:
     not LIVEKIT_SESSION_AVAILABLE, reason="LiveKit session not available"
 )
 class TestCreateEventSpanParentResolution:
-    """Test parent span resolution logic in _create_event_span."""
+    """Test parent span resolution logic in create_event_span."""
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_metrics_collected_with_agent_state_span(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -754,15 +756,15 @@ class TestCreateEventSpanParentResolution:
         manager._last_agent_state_changed_span_id = "agent_span_123"
 
         event = Mock()
-        span = _create_event_span("metrics_collected", event, manager=manager)
+        span = create_event_span("metrics_collected", event, manager=manager)
 
         assert span is not None
         call_args = mock_client.start_span.call_args
         assert call_args is not None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_metrics_collected_without_agent_state_span(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -775,16 +777,16 @@ class TestCreateEventSpanParentResolution:
         manager._last_agent_state_changed_span_id = None
 
         event = Mock()
-        span = _create_event_span("metrics_collected", event, manager=manager)
+        span = create_event_span("metrics_collected", event, manager=manager)
 
         assert span is not None
         # Should use trace.create_span directly
         mock_trace.create_span.assert_called_once()
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
-    @patch("noveum_trace.integrations.livekit.livekit_session.asyncio.create_task")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.asyncio.create_task")
     def test_speech_created_with_metrics_current_span(
         self,
         mock_create_task,
@@ -817,13 +819,13 @@ class TestCreateEventSpanParentResolution:
         # Ensure event can be serialized
         event.__dict__ = {"field": "value"}
 
-        span = _create_event_span("speech_created", event, manager=manager)
+        span = create_event_span("speech_created", event, manager=manager)
 
         assert span is not None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_speech_created_normal_parent(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -837,13 +839,13 @@ class TestCreateEventSpanParentResolution:
         mock_get_span.return_value = mock_current_span
 
         event = Mock()
-        span = _create_event_span("speech_created", event)
+        span = create_event_span("speech_created", event)
 
         assert span is not None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_span")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_span")
     def test_other_event_with_metrics_current_span(
         self, mock_get_span, mock_get_client, mock_get_trace, mock_trace, mock_client
     ):
@@ -860,11 +862,11 @@ class TestCreateEventSpanParentResolution:
         manager._last_agent_state_changed_span_id = "agent_span_123"
 
         event = Mock()
-        span = _create_event_span("user_state_changed", event, manager=manager)
+        span = create_event_span("user_state_changed", event, manager=manager)
 
         assert span is not None
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_utils.get_current_trace")
     @patch("noveum_trace.get_client")
     def test_error_event_sets_error_status(
         self, mock_get_client, mock_get_trace, mock_trace, mock_client
@@ -881,7 +883,7 @@ class TestCreateEventSpanParentResolution:
         event = Mock()
         event.error = "Test error"
 
-        span = _create_event_span("error", event)
+        span = create_event_span("error", event)
 
         assert span is not None
         mock_span.set_status.assert_called_once()
@@ -894,7 +896,7 @@ class TestEventHandlers:
     """Test all event handlers."""
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_user_state_changed(self, mock_create_span, mock_session):
         """Test _on_user_state_changed handler."""
@@ -909,7 +911,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_agent_state_changed(self, mock_create_span, mock_session):
         """Test _on_agent_state_changed handler with additional work."""
@@ -926,7 +928,7 @@ class TestEventHandlers:
         manager._try_setup_realtime_handlers_later.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_user_input_transcribed(self, mock_create_span, mock_session):
         """Test _on_user_input_transcribed handler."""
@@ -941,7 +943,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_conversation_item_added(self, mock_create_span, mock_session):
         """Test _on_conversation_item_added handler."""
@@ -956,7 +958,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_agent_false_interruption(self, mock_create_span, mock_session):
         """Test _on_agent_false_interruption handler."""
@@ -971,7 +973,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_function_tools_executed(self, mock_create_span, mock_session):
         """Test _on_function_tools_executed handler."""
@@ -986,7 +988,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_metrics_collected(self, mock_create_span, mock_session):
         """Test _on_metrics_collected handler."""
@@ -1001,34 +1003,7 @@ class TestEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session._update_speech_span_with_chat_items"
-    )
-    @pytest.mark.asyncio
-    async def test_on_speech_created_with_speech_handle(
-        self, mock_update_speech, mock_create_span, mock_session
-    ):
-        """Test _on_speech_created handler with speech handle tracking."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        event = Mock()
-        speech_handle = Mock()
-        speech_handle.id = "speech_123"
-        event.speech_handle = speech_handle
-
-        mock_span = Mock()
-        mock_create_span.return_value = mock_span
-
-        manager._on_speech_created(event)
-
-        await asyncio.sleep(0.01)
-        mock_create_span.assert_called_once_with(
-            "speech_created", event, manager=manager
-        )
-        assert "speech_123" in manager._speech_spans
-
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_error(self, mock_create_span, mock_session):
         """Test _on_error handler."""
@@ -1048,7 +1023,7 @@ class TestRealtimeEventHandlers:
     """Test RealtimeSession event handlers."""
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_input_speech_started(self, mock_create_span, mock_session):
         """Test _on_input_speech_started handler."""
@@ -1063,7 +1038,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_input_speech_stopped(self, mock_create_span, mock_session):
         """Test _on_input_speech_stopped handler."""
@@ -1078,7 +1053,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_input_audio_transcription_completed(
         self, mock_create_span, mock_session
@@ -1095,7 +1070,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_generation_created(self, mock_create_span, mock_session):
         """Test _on_generation_created handler."""
@@ -1110,7 +1085,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_session_reconnected(self, mock_create_span, mock_session):
         """Test _on_session_reconnected handler."""
@@ -1125,7 +1100,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_realtime_metrics_collected(self, mock_create_span, mock_session):
         """Test _on_realtime_metrics_collected handler."""
@@ -1140,7 +1115,7 @@ class TestRealtimeEventHandlers:
         )
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_realtime_error(self, mock_create_span, mock_session):
         """Test _on_realtime_error handler."""
@@ -1162,14 +1137,14 @@ class TestBackgroundTasks:
     """Test background task functions."""
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._serialize_chat_items")
+    @patch("noveum_trace.integrations.livekit.livekit_utils._serialize_chat_items")
     @pytest.mark.asyncio
     async def test_update_speech_span_with_chat_items_success(
         self, mock_serialize, mock_session
     ):
-        """Test _update_speech_span_with_chat_items successful update."""
-        from noveum_trace.integrations.livekit.livekit_session import (
-            _update_speech_span_with_chat_items,
+        """Test update_speech_span_with_chat_items successful update."""
+        from noveum_trace.integrations.livekit.livekit_utils import (
+            update_speech_span_with_chat_items,
         )
 
         manager = _LiveKitTracingManager(session=mock_session)
@@ -1186,7 +1161,7 @@ class TestBackgroundTasks:
 
         mock_serialize.return_value = {"chat.item": "value"}
 
-        await _update_speech_span_with_chat_items(speech_handle, span, manager)
+        await update_speech_span_with_chat_items(speech_handle, span, manager)
 
         assert "speech_123" not in manager._speech_spans
         assert "chat.item" in span.attributes
@@ -1194,9 +1169,9 @@ class TestBackgroundTasks:
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @pytest.mark.asyncio
     async def test_update_speech_span_with_chat_items_empty(self, mock_session):
-        """Test _update_speech_span_with_chat_items with empty chat_items."""
-        from noveum_trace.integrations.livekit.livekit_session import (
-            _update_speech_span_with_chat_items,
+        """Test update_speech_span_with_chat_items with empty chat_items."""
+        from noveum_trace.integrations.livekit.livekit_utils import (
+            update_speech_span_with_chat_items,
         )
 
         manager = _LiveKitTracingManager(session=mock_session)
@@ -1211,16 +1186,16 @@ class TestBackgroundTasks:
 
         manager._speech_spans["speech_123"] = span
 
-        await _update_speech_span_with_chat_items(speech_handle, span, manager)
+        await update_speech_span_with_chat_items(speech_handle, span, manager)
 
         assert "speech_123" not in manager._speech_spans
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @pytest.mark.asyncio
     async def test_update_speech_span_with_chat_items_exception(self, mock_session):
-        """Test _update_speech_span_with_chat_items exception handling."""
-        from noveum_trace.integrations.livekit.livekit_session import (
-            _update_speech_span_with_chat_items,
+        """Test update_speech_span_with_chat_items exception handling."""
+        from noveum_trace.integrations.livekit.livekit_utils import (
+            update_speech_span_with_chat_items,
         )
 
         manager = _LiveKitTracingManager(session=mock_session)
@@ -1236,7 +1211,7 @@ class TestBackgroundTasks:
 
         manager._speech_spans["speech_123"] = span
 
-        await _update_speech_span_with_chat_items(speech_handle, span, manager)
+        await update_speech_span_with_chat_items(speech_handle, span, manager)
 
         # Should still remove from tracking
         assert "speech_123" not in manager._speech_spans
@@ -1244,9 +1219,9 @@ class TestBackgroundTasks:
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @pytest.mark.asyncio
     async def test_update_speech_span_not_in_tracking(self, mock_session):
-        """Test _update_speech_span_with_chat_items when not in tracking dict."""
-        from noveum_trace.integrations.livekit.livekit_session import (
-            _update_speech_span_with_chat_items,
+        """Test update_speech_span_with_chat_items when not in tracking dict."""
+        from noveum_trace.integrations.livekit.livekit_utils import (
+            update_speech_span_with_chat_items,
         )
 
         manager = _LiveKitTracingManager(session=mock_session)
@@ -1260,7 +1235,7 @@ class TestBackgroundTasks:
         span.attributes = {}
 
         # Not in tracking dict
-        await _update_speech_span_with_chat_items(speech_handle, span, manager)
+        await update_speech_span_with_chat_items(speech_handle, span, manager)
 
         # Should not raise error
 
@@ -1274,7 +1249,7 @@ class TestBackgroundTasks:
         self, mock_sleep, mock_session
     ):
         """Test _update_span_with_system_prompt successful extraction."""
-        from noveum_trace.integrations.livekit.livekit_session import (
+        from noveum_trace.integrations.livekit.livekit_utils import (
             _update_span_with_system_prompt,
         )
 
@@ -1302,7 +1277,7 @@ class TestBackgroundTasks:
         self, mock_sleep, mock_session
     ):
         """Test _update_span_with_system_prompt timeout scenario."""
-        from noveum_trace.integrations.livekit.livekit_session import (
+        from noveum_trace.integrations.livekit.livekit_utils import (
             _update_span_with_system_prompt,
         )
 
@@ -1332,7 +1307,7 @@ class TestBackgroundTasks:
         self, mock_sleep, mock_session
     ):
         """Test _update_span_with_system_prompt via _activity attribute."""
-        from noveum_trace.integrations.livekit.livekit_session import (
+        from noveum_trace.integrations.livekit.livekit_utils import (
             _update_span_with_system_prompt,
         )
 
@@ -1362,7 +1337,7 @@ class TestBackgroundTasks:
         self, mock_sleep, mock_session
     ):
         """Test _update_span_with_system_prompt when no system prompt found."""
-        from noveum_trace.integrations.livekit.livekit_session import (
+        from noveum_trace.integrations.livekit.livekit_utils import (
             _update_span_with_system_prompt,
         )
 
@@ -1391,7 +1366,7 @@ class TestBackgroundTasks:
         self, mock_sleep, mock_session
     ):
         """Test _update_span_with_system_prompt exception handling."""
-        from noveum_trace.integrations.livekit.livekit_session import (
+        from noveum_trace.integrations.livekit.livekit_utils import (
             _update_span_with_system_prompt,
         )
 
@@ -1412,7 +1387,7 @@ class TestCloseEventHandling:
     """Test close event handling."""
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @patch("noveum_trace.get_client")
     @pytest.mark.asyncio
     async def test_on_close_with_error_reason(
@@ -1445,7 +1420,7 @@ class TestCloseEventHandling:
         mock_trace.set_status.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @patch("noveum_trace.get_client")
     @pytest.mark.asyncio
     async def test_on_close_with_job_shutdown(
@@ -1477,7 +1452,7 @@ class TestCloseEventHandling:
         mock_trace.set_status.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @patch("noveum_trace.get_client")
     @pytest.mark.asyncio
     async def test_on_close_without_livekit(
@@ -1507,7 +1482,7 @@ class TestCloseEventHandling:
             manager._trace.set_status.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session._create_event_span")
+    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @patch("noveum_trace.get_client")
     @pytest.mark.asyncio
     async def test_on_close_exception_handling(

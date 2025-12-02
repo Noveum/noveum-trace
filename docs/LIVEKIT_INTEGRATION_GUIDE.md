@@ -44,11 +44,6 @@ pip install noveum-trace
 pip install livekit livekit-agents
 
 # Install your preferred STT/TTS providers
-# Examples:
-pip install livekit-plugins-deepgram   # For Deepgram STT
-pip install livekit-plugins-cartesia   # For Cartesia TTS
-pip install livekit-plugins-openai     # For OpenAI Whisper/TTS
-pip install livekit-plugins-elevenlabs # For ElevenLabs TTS
 ```
 
 ### Step 2: Set Environment Variables
