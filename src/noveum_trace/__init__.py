@@ -30,7 +30,7 @@ Example:
 
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
