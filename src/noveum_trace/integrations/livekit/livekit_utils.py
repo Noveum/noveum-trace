@@ -18,8 +18,21 @@ from noveum_trace.core.context import get_current_span, get_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.livekit.livekit_constants import (
     AUDIO_DURATION_MS_DEFAULT_VALUE,
+    STT_CONFIDENCE_DEFAULT_VALUE,
+    STT_END_TIME_DEFAULT_VALUE,
+    STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE,
+    STT_LANGUAGE_DEFAULT_VALUE,
+    STT_SPEAKER_ID_DEFAULT_VALUE,
+    STT_START_TIME_DEFAULT_VALUE,
+    STT_TRANSCRIPT_DEFAULT_VALUE,
     SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS,
     SYSTEM_PROMPT_MAX_WAIT_SECONDS,
+    TTS_DELTA_TEXT_DEFAULT_VALUE,
+    TTS_INPUT_TEXT_DEFAULT_VALUE,
+    TTS_NUM_CHANNELS_DEFAULT_VALUE,
+    TTS_REQUEST_ID_DEFAULT_VALUE,
+    TTS_SAMPLE_RATE_DEFAULT_VALUE,
+    TTS_SEGMENT_ID_DEFAULT_VALUE,
 )
 
 if TYPE_CHECKING:
@@ -41,6 +54,41 @@ except ImportError as e:
     )
     # Define a dummy type for when LiveKit is not available
     AudioBuffer = Any
+
+
+def create_constants_metadata() -> dict[str, Any]:
+    """
+    Create metadata dictionary containing all LiveKit constants as defaults.
+
+    Returns:
+        Dictionary with structure: {"config": {"defaults": {...all constants...}}}
+    """
+    return {
+        "config": {
+            "defaults": {
+                # STT constants
+                "STT_TRANSCRIPT_DEFAULT_VALUE": STT_TRANSCRIPT_DEFAULT_VALUE,
+                "STT_CONFIDENCE_DEFAULT_VALUE": STT_CONFIDENCE_DEFAULT_VALUE,
+                "STT_LANGUAGE_DEFAULT_VALUE": STT_LANGUAGE_DEFAULT_VALUE,
+                "STT_START_TIME_DEFAULT_VALUE": STT_START_TIME_DEFAULT_VALUE,
+                "STT_END_TIME_DEFAULT_VALUE": STT_END_TIME_DEFAULT_VALUE,
+                "STT_SPEAKER_ID_DEFAULT_VALUE": STT_SPEAKER_ID_DEFAULT_VALUE,
+                "STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE": STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE,
+                # TTS constants
+                "TTS_INPUT_TEXT_DEFAULT_VALUE": TTS_INPUT_TEXT_DEFAULT_VALUE,
+                "TTS_SEGMENT_ID_DEFAULT_VALUE": TTS_SEGMENT_ID_DEFAULT_VALUE,
+                "TTS_REQUEST_ID_DEFAULT_VALUE": TTS_REQUEST_ID_DEFAULT_VALUE,
+                "TTS_DELTA_TEXT_DEFAULT_VALUE": TTS_DELTA_TEXT_DEFAULT_VALUE,
+                "TTS_SAMPLE_RATE_DEFAULT_VALUE": TTS_SAMPLE_RATE_DEFAULT_VALUE,
+                "TTS_NUM_CHANNELS_DEFAULT_VALUE": TTS_NUM_CHANNELS_DEFAULT_VALUE,
+                # Audio duration constants
+                "AUDIO_DURATION_MS_DEFAULT_VALUE": AUDIO_DURATION_MS_DEFAULT_VALUE,
+                # System prompt timing constants
+                "SYSTEM_PROMPT_MAX_WAIT_SECONDS": SYSTEM_PROMPT_MAX_WAIT_SECONDS,
+                "SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS": SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS,
+            }
+        }
+    }
 
 
 def save_audio_frames(frames: list[Any], output_path: Path) -> None:
@@ -303,6 +351,10 @@ def create_span_attributes(
         # Otherwise, add 'job.' prefix
         else:
             attributes[f"job.{key}"] = value
+
+    # Add constants metadata
+    constants_metadata = create_constants_metadata()
+    attributes["metadata"] = constants_metadata
 
     # Add extra attributes
     attributes.update(extra_attributes)
@@ -685,6 +737,10 @@ def create_event_span(
 
         # Add event type as attribute
         attributes["event.type"] = event_type
+
+        # Add constants metadata
+        constants_metadata = create_constants_metadata()
+        attributes["metadata"] = constants_metadata
 
         # Create span name
         span_name = f"livekit.{event_type}"

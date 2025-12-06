@@ -58,8 +58,7 @@ LIVEKIT_API_SECRET=your-livekit-api-secret
 
 # Noveum credentials
 NOVEUM_API_KEY=your-noveum-api-key
-
-# Optional: Specify project and environment
+#Specify project and environment
 NOVEUM_PROJECT=my-livekit-agent
 NOVEUM_ENVIRONMENT=production
 ```
@@ -79,7 +78,11 @@ from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapp
 from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 # Initialize noveum-trace (do this once at startup)
-noveum_trace.init(project="my-livekit-agent")
+noveum_trace.init(
+    project="my-livekit-agent",
+    api_key="your-noveum-api-key",
+    environment="production"
+)
 
 async def entrypoint(ctx: JobContext):
     # Extract job context for span attributes
@@ -170,7 +173,11 @@ from noveum_trace.integrations.livekit import setup_livekit_tracing
 import noveum_trace
 
 # Initialize once
-noveum_trace.init(project="my-agent")
+noveum_trace.init(
+    project="my-agent",
+    api_key="your-noveum-api-key",
+    environment="production"
+)
 
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
@@ -397,27 +404,35 @@ async def entrypoint(ctx: JobContext):
 
 ### Job Context
 
-The `job_context` parameter allows you to attach metadata to every span. Include any relevant information:
+The `job_context` parameter allows you to attach metadata to every span. Use `extract_job_context()` to get the standard fields, then add any additional information:
+
+#### Extract Job Context Automatically
+
+Use the utility function to extract context from LiveKit's JobContext:
 
 ```python
-job_context = {
-    # Required
-    "job_id": ctx.job.id,
-    
-    # Recommended
-    "room_name": ctx.room.name,
-    "room_sid": ctx.room.sid,
-    "participant_identity": ctx.participant.identity,
-    
-    # Optional - add whatever is useful
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
+
+job_context = extract_job_context(ctx)
+# Automatically extracts: job_id, room_name, room_sid, agent_id, worker_id, etc.
+```
+
+#### Adding Custom Fields
+
+```python
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
+
+# Get standard fields automatically
+job_context = extract_job_context(ctx)
+
+# Add your custom metadata
+job_context.update({
     "agent_version": "1.2.3",
     "deployment": "us-west-2",
     "customer_id": "cust_123",
     "conversation_type": "support",
-}
+})
 ```
-
-These will appear in spans as `job.job_id`, `job.room_name`, etc.
 
 ### Custom Audio Directory
 
@@ -432,17 +447,6 @@ traced_stt = LiveKitSTTWrapper(
     job_context=job_context,
     audio_base_dir=Path("/mnt/audio_storage")  # Custom directory
 )
-```
-
-### Extract Job Context Automatically
-
-Use the utility function to extract context from LiveKit's JobContext:
-
-```python
-from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
-
-job_context = extract_job_context(ctx)
-# Automatically extracts: job_id, room_name, room_sid, agent_id, worker_id, etc.
 ```
 
 ---
@@ -680,62 +684,6 @@ async def entrypoint(ctx: JobContext):
    pip install livekit livekit-agents
    ```
 
-### Issue: Span Not Created
-
-**Problem**: STT/TTS works but no spans are created.
-
-**Solutions**:
-
-1. **Check if trace exists**:
-   ```python
-   from noveum_trace import get_current_trace
-   
-   async def entrypoint(ctx: JobContext):
-       trace = get_current_trace()
-       if not trace:
-           logger.warning("No active trace!")
-       
-       # Always use context manager
-       with noveum_trace.start_trace(...):
-           # Create wrappers inside the context
-           traced_stt = LiveKitSTTWrapper(...)
-   ```
-
-2. **Check for exceptions**:
-   - The wrapper silently catches exceptions to not disrupt your agent
-   - Check logs for any errors
-
-### Issue: High Disk Usage
-
-**Problem**: Audio files taking up too much space.
-
-**Solutions**:
-
-1. **Implement cleanup**:
-   ```python
-   import os
-   import time
-   from pathlib import Path
-   
-   def cleanup_old_audio(max_age_hours=24):
-       """Delete audio files older than max_age_hours"""
-       audio_dir = Path("audio_files")
-       cutoff = time.time() - (max_age_hours * 3600)
-       
-       for session_dir in audio_dir.iterdir():
-           if session_dir.is_dir():
-               for audio_file in session_dir.glob("*.wav"):
-                   if audio_file.stat().st_mtime < cutoff:
-                       audio_file.unlink()
-   
-   # Run periodically
-   cleanup_old_audio(max_age_hours=24)
-   ```
-
-2. **Use external storage** (future enhancement):
-   - Currently audio is saved locally
-   - Consider syncing to S3/cloud storage separately
-
 ### Issue: Session Tracing Not Working
 
 **Problem**: No trace or spans created when using `setup_livekit_tracing()`.
@@ -771,7 +719,11 @@ async def entrypoint(ctx: JobContext):
    import noveum_trace
    from noveum_trace import is_initialized
    
-   noveum_trace.init(project="my-agent", api_key="...")
+   noveum_trace.init(
+       project="my-agent",
+       api_key="...",
+       environment="production"
+   )
    assert is_initialized(), "Noveum trace not initialized"
    ```
 
@@ -799,33 +751,6 @@ async def entrypoint(ctx: JobContext):
    ```python
    # Check logs for: "RealtimeSession handlers registered"
    ```
-
-### Issue: Performance Impact
-
-**Problem**: Agent feels slower with tracing.
-
-**Solutions**:
-
-1. **Audio saving is asynchronous** - shouldn't impact performance
-2. **Check disk I/O**:
-   ```bash
-   iostat -x 1
-   # Monitor disk utilization
-   ```
-
-3. **Use faster storage** if needed (SSD recommended)
-
-4. **Disable audio saving temporarily**:
-   ```python
-   # Patch save functions for testing
-   from unittest.mock import patch
-   
-   with patch("noveum_trace.integrations.livekit.save_audio_frames"):
-       traced_stt = LiveKitSTTWrapper(...)
-       # Audio won't be saved, but spans still created
-   ```
-
----
 
 ## Complete Examples
 
@@ -923,24 +848,6 @@ if __name__ == "__main__":
 - **Email**: [support@noveum.ai](mailto:support@noveum.ai)
 
 ---
-
-## Summary Checklist
-
-### Complete Solution Setup:
-- [ ] Install `noveum-trace` and LiveKit packages
-- [ ] Set environment variables (API keys)
-- [ ] Initialize `noveum_trace.init()` at startup
-- [ ] Import `setup_livekit_tracing` from `noveum_trace.integrations.livekit`
-- [ ] Import wrapper classes from `noveum_trace.integrations.livekit`
-- [ ] Wrap STT provider with `LiveKitSTTWrapper`
-- [ ] Wrap TTS provider with `LiveKitTTSWrapper`
-- [ ] Create session with wrapped providers
-- [ ] Call `setup_livekit_tracing(session)` before `session.start()`
-- [ ] Test and verify traces in Noveum dashboard
-- [ ] Verify audio files are saved to `audio_files/{session_id}/`
-- [ ] Deploy and monitor in production
-
-Happy tracing! 🎉
 
 ## Related Documentation
 
