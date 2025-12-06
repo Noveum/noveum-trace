@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
 try:  # pragma: no cover - optional dependency
     import tiktoken
@@ -83,7 +83,7 @@ def _infer_provider(model: str | None) -> str | None:
 @lru_cache(maxsize=32)
 def _get_tiktoken_encoding(
     model: str | None,
-) -> Optional[Any]:  # pragma: no cover - cache  # noqa: UP045
+) -> Any | None:  # pragma: no cover - cache  # noqa: UP045
     if tiktoken is None:
         return None
 
@@ -101,7 +101,7 @@ def _get_tiktoken_encoding(
 
 @lru_cache(maxsize=1)
 def _get_anthropic_tokenizer() -> (
-    Optional[Any]  # noqa: UP045
+    Any | None  # noqa: UP045
 ):  # pragma: no cover - optional dependency
     if AnthropicTokenizer is None:
         return None
@@ -114,7 +114,7 @@ def _get_anthropic_tokenizer() -> (
 @lru_cache(maxsize=8)
 def _get_gemini_model(
     model: str | None,
-) -> Optional[Any]:  # pragma: no cover - optional dependency  # noqa: UP045
+) -> Any | None:  # pragma: no cover - optional dependency  # noqa: UP045
     if google_genai is None or not model:
         return None
 

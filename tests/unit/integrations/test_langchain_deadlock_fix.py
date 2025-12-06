@@ -16,10 +16,11 @@ import pytest
 
 # Skip all tests if LangChain is not available
 try:
-    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+    # Import directly from the module to avoid issues with other integrations
+    from noveum_trace.integrations.langchain.langchain import NoveumTraceCallbackHandler
 
     LANGCHAIN_AVAILABLE = True
-except ImportError:
+except (ImportError, NameError, AttributeError):
     LANGCHAIN_AVAILABLE = False
 
 
@@ -349,7 +350,9 @@ class TestCleanupCorrectness:
             handler._set_parent(child_id, root_id)
 
         # Cleanup should remove 5 entries (not counting root since it has no parent entry)
-        with patch("noveum_trace.integrations.langchain.logger") as mock_logger:
+        with patch(
+            "noveum_trace.integrations.langchain.langchain.logger"
+        ) as mock_logger:
             handler._cleanup_trace_tracking(root_id)
 
             # Check that debug was called with correct count

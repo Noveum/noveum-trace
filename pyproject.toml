@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noveum-trace"
-version = "0.4.1"
+version = "1.0.1"
 description = "Cloud-first, decorator-based tracing SDK for LLM applications and multi-agent systems"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -52,6 +52,7 @@ dependencies = [
 openai = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.3.0"]
 langchain = ["langchain-core>=0.1.0"]
+livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 
 # Development dependencies
 dev = [
@@ -119,8 +120,11 @@ Changelog = "https://github.com/Noveum/noveum-trace/blob/main/CHANGELOG.md"
 minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "timeout: marks tests with timeout requirements",
     "llm: marks tests as LLM-related",
     "agent: marks tests as agent-related",
     "opentelemetry: marks tests as OpenTelemetry-related",
@@ -205,6 +209,8 @@ ignore = [
     "E501",  # line too long, handled by black
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "UP007",  # Use `X | Y` for type annotations (not supported in Python 3.9)
+    "UP045",  # Use `X | None` for type annotations - allow Optional[X]
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -240,6 +246,7 @@ module = [
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",
+    "livekit.*",
     "google",
     "google.*",
     "google.generativeai",
@@ -259,7 +266,7 @@ skips = ["B101", "B601"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.4.1"
+version = "1.0.1"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

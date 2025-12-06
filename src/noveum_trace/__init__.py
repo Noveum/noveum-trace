@@ -30,7 +30,7 @@ Example:
 
 """
 
-__version__ = "0.4.1"
+__version__ = "1.0.1"
 __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
@@ -335,6 +335,17 @@ try:
     _integration_exports.append("NoveumTraceCallbackHandler")
 except ImportError:
     # LangChain not installed
+    pass
+
+try:
+    from noveum_trace.integrations.livekit import (
+        LiveKitSTTWrapper,
+        LiveKitTTSWrapper,
+    )
+
+    _integration_exports.extend(["LiveKitSTTWrapper", "LiveKitTTSWrapper"])
+except ImportError:
+    # LiveKit not installed
     pass
 
 # Export public API

@@ -15,10 +15,11 @@ import pytest
 
 # Skip all tests if LangChain is not available
 try:
-    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+    # Import directly from the module to avoid issues with other integrations
+    from noveum_trace.integrations.langchain.langchain import NoveumTraceCallbackHandler
 
     LANGCHAIN_AVAILABLE = True
-except ImportError:
+except (ImportError, NameError, AttributeError):
     LANGCHAIN_AVAILABLE = False
 
 
@@ -256,7 +257,9 @@ class TestGetOrCreateTraceContext:
         # Mock _find_root_run_id to return the run_id itself
         with (
             patch.object(handler, "_find_root_run_id", return_value=run_id),
-            patch("noveum_trace.integrations.langchain.logger") as mock_logger,
+            patch(
+                "noveum_trace.integrations.langchain.langchain.logger"
+            ) as mock_logger,
         ):
 
             trace, should_manage = handler._get_or_create_trace_context(
@@ -320,7 +323,9 @@ class TestGetOrCreateTraceContext:
         root_run_id = uuid4()
         with (
             patch.object(handler, "_find_root_run_id", return_value=root_run_id),
-            patch("noveum_trace.integrations.langchain.logger") as mock_logger,
+            patch(
+                "noveum_trace.integrations.langchain.langchain.logger"
+            ) as mock_logger,
         ):
 
             trace, should_manage = handler._get_or_create_trace_context(
