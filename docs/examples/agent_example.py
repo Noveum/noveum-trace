@@ -22,7 +22,7 @@ except ImportError:
     pass
 
 import noveum_trace
-from noveum_trace.agents import (
+from noveum_trace import (
     create_agent,
     create_agent_graph,
     create_agent_workflow,

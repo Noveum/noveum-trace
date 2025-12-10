@@ -22,7 +22,7 @@ except ImportError:
     pass
 
 import noveum_trace
-from noveum_trace.streaming import (
+from noveum_trace import (
     create_openai_streaming_callback,
     streaming_llm,
     trace_streaming,

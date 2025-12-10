@@ -21,7 +21,7 @@ except ImportError:
     pass
 
 import noveum_trace
-from noveum_trace.threads import create_thread, trace_thread_llm
+from noveum_trace import create_thread, trace_thread_llm
 
 # Initialize the SDK
 noveum_trace.init(

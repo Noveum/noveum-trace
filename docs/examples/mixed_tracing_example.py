@@ -27,8 +27,11 @@ import time
 from dotenv import load_dotenv
 
 import noveum_trace
-from noveum_trace import NoveumTraceCallbackHandler
-from noveum_trace.context_managers import trace_agent, trace_operation
+from noveum_trace import (
+    NoveumTraceCallbackHandler,
+    trace_agent_operation,
+    trace_operation,
+)
 
 load_dotenv()
 
@@ -58,7 +61,7 @@ def mixed_tracing_example():
         print("1. Starting agent_operation context...")
 
         # Use agent_operation context manager
-        with trace_agent(
+        with trace_agent_operation(
             agent_type="research_agent",
             operation="knowledge_retrieval",
             capabilities=["web_search", "analysis", "synthesis"],
@@ -136,7 +139,7 @@ def mixed_tracing_example():
             print("\n4. Starting agent_task context...")
 
             # Use agent_task context manager (nested within agent_operation)
-            with trace_agent(
+            with trace_agent_operation(
                 agent_type="analysis_agent",
                 operation="content_analysis",
                 capabilities=["text_analysis", "summarization"],
@@ -254,7 +257,7 @@ def advanced_mixed_tracing_example():
         print("1. Starting complex agent workflow...")
 
         # Main agent operation
-        with trace_agent(
+        with trace_agent_operation(
             agent_type="workflow_agent",
             operation="complex_analysis",
             capabilities=["multi_step_analysis", "error_handling", "chaining"],
@@ -311,7 +314,7 @@ def advanced_mixed_tracing_example():
                     raise
 
             # Step 3: Nested agent task for validation
-            with trace_agent(
+            with trace_agent_operation(
                 agent_type="validation_agent",
                 operation="result_validation",
                 capabilities=["validation", "quality_check"],

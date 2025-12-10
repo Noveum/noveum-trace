@@ -28,7 +28,7 @@ from openai import OpenAI
 import noveum_trace
 
 # Import the new flexible tracing approaches
-from noveum_trace.context_managers import trace_llm, trace_operation
+from noveum_trace import trace_llm_call, trace_operation
 
 # Validate required environment variables
 noveum_api_key = os.getenv("NOVEUM_API_KEY")
@@ -72,7 +72,7 @@ def process_user_query_with_context_manager(user_query: str) -> dict[str, Any]:
     cleaned_query = user_query.strip().lower()
 
     # Step 2: Enhance the query with LLM (traced)
-    with trace_llm(model="gpt-3.5-turbo", operation="query_enhancement") as span:
+    with trace_llm_call(model="gpt-3.5-turbo", provider="openai") as span:
         try:
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -128,7 +128,7 @@ def process_user_query_with_context_manager(user_query: str) -> dict[str, Any]:
         )
 
     # Step 4: Generate response with LLM (traced)
-    with trace_llm(model="gpt-4", operation="response_generation") as span:
+    with trace_llm_call(model="gpt-4", provider="openai") as span:
         try:
             context = json.dumps(search_results[:2])
 
@@ -184,7 +184,7 @@ def legacy_function_with_manual_spans(query: str):
 
     # Create a trace if none exists
     trace = None
-    if not noveum_trace.core.context.get_current_trace():
+    if not noveum_trace.get_current_trace():
         trace = client.start_trace("manual_trace")
 
     # Create span for the operation
@@ -315,7 +315,7 @@ def complex_workflow_mixed_approach(user_input: str):
             client.finish_span(legacy_span)
 
         # Step 3: Use context manager for final LLM call
-        with trace_llm(model="gpt-3.5-turbo", operation="final_processing") as llm_span:
+        with trace_llm_call(model="gpt-3.5-turbo", provider="openai") as llm_span:
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             response = openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",

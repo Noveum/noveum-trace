@@ -64,6 +64,94 @@ def call_openai(prompt: str) -> str:
         return response.choices[0].message.content
 ```
 
+## 📦 Import Patterns
+
+Noveum Trace supports multiple import patterns. Choose the one that best fits your coding style:
+
+### Recommended: Direct Imports from Package Root
+
+This is the recommended approach for most use cases:
+
+```python
+from noveum_trace import init, trace_context, trace, NoveumClient
+from noveum_trace import trace_llm, trace_agent, trace_tool, trace_retrieval
+from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
+from noveum_trace import create_agent, get_agent, create_agent_graph
+from noveum_trace import ThreadContext, trace_streaming
+```
+
+**Available imports from root:**
+- **Core functions**: `init`, `shutdown`, `flush`, `configure`, `get_config`, `get_client`
+- **Decorators**: `trace`, `trace_llm`, `trace_agent`, `trace_tool`, `trace_retrieval`
+- **Context managers**: `trace_context`, `trace_llm_call`, `trace_operation`, `trace_agent_operation`, `trace_batch_operation`, `trace_pipeline_stage`, `create_child_span`, `trace_function_calls`
+- **Core classes**: `NoveumClient`, `Trace`, `Span`, `ContextualTrace`
+- **Agents**: `create_agent`, `get_agent`, `create_agent_graph`, `get_agent_graph`, `create_agent_workflow`, `get_agent_workflow`, `AgentNode`, `AgentGraph`, `AgentWorkflow`
+- **Threads**: `ThreadContext`, `create_thread`, `get_thread`, `delete_thread`, `list_threads`, `trace_thread_llm`
+- **Streaming**: `trace_streaming`, `streaming_llm`, `create_openai_streaming_callback`, `create_anthropic_streaming_callback`
+
+### Alternative: Module-Level Imports
+
+For simple scripts or when you prefer namespace qualification:
+
+```python
+import noveum_trace
+
+# Initialize
+noveum_trace.init(project="my-app", api_key="your-api-key")
+
+# Use context managers
+with noveum_trace.trace_llm_call(model="gpt-4") as span:
+    # Your code here
+    pass
+
+# Flush traces
+noveum_trace.flush()
+```
+
+### Submodule Imports (When Needed)
+
+For advanced use cases or when importing items not in the root `__all__`:
+
+```python
+# Decorators submodule
+from noveum_trace.decorators import trace
+
+# Integrations (conditional - requires langchain/livekit)
+from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
+
+# Core submodules (also valid, but root imports preferred)
+from noveum_trace.core.client import NoveumClient
+from noveum_trace.core.span import Span, SpanStatus
+from noveum_trace.core.trace import Trace
+```
+
+### What Doesn't Work
+
+These import patterns will fail:
+
+```python
+# ❌ NoveumTrace class doesn't exist
+from noveum_trace import NoveumTrace  # ModuleNotFoundError
+
+# ❌ Wrong path - should be core.client or root import
+from noveum_trace.client import NoveumClient  # ModuleNotFoundError
+# ✅ Correct:
+from noveum_trace import NoveumClient
+# or
+from noveum_trace.core.client import NoveumClient
+```
+
+### Quick Reference Table
+
+| What to Import | Recommended Import | Alternative |
+|---------------|-------------------|-------------|
+| Initialize SDK | `from noveum_trace import init` | `import noveum_trace` then `noveum_trace.init()` |
+| Basic decorator | `from noveum_trace import trace` | `from noveum_trace.decorators import trace` |
+| LLM tracing | `from noveum_trace import trace_llm_call` | `import noveum_trace` then `noveum_trace.trace_llm_call()` |
+| Client class | `from noveum_trace import NoveumClient` | `from noveum_trace.core.client import NoveumClient` |
+| LangChain integration | `from noveum_trace.integrations import NoveumTraceCallbackHandler` | (only available from integrations) |
+
 ## ⚙️ Setup
 
 ### Core Configuration
