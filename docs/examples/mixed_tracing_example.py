@@ -36,7 +36,7 @@ from noveum_trace import (
 load_dotenv()
 
 
-def mixed_tracing_example():
+def mixed_tracing_example() -> None:
     """Example: Mixed tracing with SDK context managers and LangChain."""
     print("=== Mixed Tracing Example ===")
     print("Demonstrating agent_operation -> LangChain -> agent_task flow")
@@ -227,7 +227,7 @@ def mixed_tracing_example():
         traceback.print_exc()
 
 
-def advanced_mixed_tracing_example():
+def advanced_mixed_tracing_example() -> None:
     """Advanced example with more complex nesting and error handling."""
     print("\n" + "=" * 60)
     print("=== Advanced Mixed Tracing Example ===")
@@ -375,7 +375,7 @@ def advanced_mixed_tracing_example():
         traceback.print_exc()
 
 
-def main():
+def main() -> None:
     """Run all mixed tracing examples."""
     print("Noveum Trace - Mixed Tracing Examples")
     print("=" * 50)

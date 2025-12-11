@@ -171,7 +171,7 @@ def process_user_query_with_context_manager(user_query: str) -> dict[str, Any]:
 # =============================================================================
 
 
-def legacy_function_with_manual_spans(query: str):
+def legacy_function_with_manual_spans(query: str) -> str:
     """
     Demonstrate manual span creation for legacy code.
 
@@ -256,7 +256,7 @@ def legacy_function_with_manual_spans(query: str):
 # =============================================================================
 
 
-def complex_workflow_mixed_approach(user_input: str):
+def complex_workflow_mixed_approach(user_input: str) -> dict[str, Any]:
     """
     Demonstrate a mixed approach for complex workflows.
 
@@ -353,7 +353,7 @@ def complex_workflow_mixed_approach(user_input: str):
 # =============================================================================
 
 
-def run_flexible_tracing_examples():
+def run_flexible_tracing_examples() -> None:
     """Run all flexible tracing examples."""
     print("🎯 Demonstrating Flexible Tracing Approaches with Noveum Trace SDK\n")
 

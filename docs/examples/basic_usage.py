@@ -3,12 +3,12 @@
 Basic usage example for Noveum Trace SDK.
 
 This example demonstrates the core functionality of the SDK
-including initialization, decorators, and basic tracing.
+including initialization and context manager-based tracing.
 """
 
 import os
 import time
-from typing import Any
+from typing import Any, cast
 
 # Load environment variables (install python-dotenv if needed)
 try:
@@ -23,10 +23,10 @@ except ImportError:
 
 # Import Noveum Trace SDK
 import noveum_trace
-from noveum_trace import trace, trace_agent, trace_llm, trace_tool
+from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
 
 
-def main():
+def main() -> None:
     """Main example function."""
 
     # Initialize the SDK
@@ -39,8 +39,8 @@ def main():
 
     noveum_trace.init(
         api_key=api_key,
-        project="example-project",
-        environment="development",
+        project="example-project-testing-basic-usage",
+        environment="dev-aman",
     )
 
     print("Noveum Trace SDK initialized!")
@@ -70,10 +70,9 @@ def main():
     print("All traces sent!")
 
 
-@trace(capture_performance=True)
 def process_data(data: str) -> dict[str, Any]:
     """
-    Example function with basic tracing.
+    Example function with basic tracing using context managers.
 
     Args:
         data: Input data to process
@@ -81,20 +80,25 @@ def process_data(data: str) -> dict[str, Any]:
     Returns:
         Processed data dictionary
     """
-    # Simulate some processing
-    time.sleep(0.1)
+    with trace_operation("process_data") as span:
+        # Simulate some processing
+        time.sleep(0.1)
 
-    return {
-        "original": data,
-        "processed": data.upper(),
-        "length": len(data),
-    }
+        result = {
+            "original": data,
+            "processed": data.upper(),
+            "length": len(data),
+        }
+
+        span.set_attribute("data.length", len(data))
+        span.set_attribute("data.processed", result["processed"])
+
+        return result
 
 
-@trace_llm(capture_tokens=True, estimate_costs=True)
 def call_llm(prompt: str) -> str:
     """
-    Example LLM call with automatic tracing.
+    Example LLM call with context manager-based tracing.
 
     Args:
         prompt: Input prompt for the LLM
@@ -102,21 +106,22 @@ def call_llm(prompt: str) -> str:
     Returns:
         LLM response
     """
-    # Simulate LLM call
-    time.sleep(0.5)
+    with trace_llm_call(model="gpt-4", provider="openai") as span:
+        # Simulate LLM call
+        time.sleep(0.5)
 
-    # In a real implementation, this would call an actual LLM
-    return f"Mock LLM response to: {prompt}"
+        # In a real implementation, this would call an actual LLM
+        response = f"Mock LLM response to: {prompt}"
+
+        span.set_attribute("llm.prompt", prompt)
+        span.set_attribute("llm.response", response)
+
+        return response
 
 
-@trace_agent(
-    agent_id="researcher",
-    role="information_gatherer",
-    capabilities=["web_search", "document_analysis"],
-)
 def research_agent(query: str) -> dict[str, Any]:
     """
-    Example agent operation with tracing.
+    Example agent operation with context manager-based tracing.
 
     Args:
         query: Research query
@@ -124,25 +129,34 @@ def research_agent(query: str) -> dict[str, Any]:
     Returns:
         Research results
     """
-    # Simulate research process
-    time.sleep(0.3)
+    with trace_agent_operation(
+        agent_type="researcher", operation="information_gathering"
+    ) as span:
+        # Simulate research process
+        time.sleep(0.3)
 
-    # Use a tool within the agent
-    search_results = search_web(f"research: {query}")
+        # Use a tool within the agent
+        search_results = search_web(f"research: {query}")
 
-    return {
-        "query": query,
-        "findings": f"Research findings for: {query}",
-        "sources": ["source1.com", "source2.com"],
-        "confidence": 0.85,
-        "search_results": search_results,
-    }
+        result = {
+            "query": query,
+            "findings": f"Research findings for: {query}",
+            "sources": ["source1.com", "source2.com"],
+            "confidence": 0.85,
+            "search_results": search_results,
+        }
+
+        span.set_attribute("agent.query", query)
+        span.set_attribute("agent.confidence", 0.85)
+        sources = cast(list[str], result["sources"])
+        span.set_attribute("agent.sources_count", len(sources))
+
+        return result
 
 
-@trace_tool(tool_name="web_search", tool_type="api")
 def search_web(query: str) -> list[dict[str, str]]:
     """
-    Example tool usage with tracing.
+    Example tool usage with context manager-based tracing.
 
     Args:
         query: Search query
@@ -150,20 +164,26 @@ def search_web(query: str) -> list[dict[str, str]]:
     Returns:
         Search results
     """
-    # Simulate web search
-    time.sleep(0.2)
+    with trace_operation("web_search") as span:
+        # Simulate web search
+        time.sleep(0.2)
 
-    return [
-        {"title": f"Result 1 for {query}", "url": "https://example1.com"},
-        {"title": f"Result 2 for {query}", "url": "https://example2.com"},
-        {"title": f"Result 3 for {query}", "url": "https://example3.com"},
-    ]
+        results = [
+            {"title": f"Result 1 for {query}", "url": "https://example1.com"},
+            {"title": f"Result 2 for {query}", "url": "https://example2.com"},
+            {"title": f"Result 3 for {query}", "url": "https://example3.com"},
+        ]
+
+        span.set_attribute("tool.name", "web_search")
+        span.set_attribute("tool.query", query)
+        span.set_attribute("tool.results_count", len(results))
+
+        return results
 
 
-@trace(name="multi_agent_workflow")
 def run_multi_agent_workflow(task: str) -> dict[str, Any]:
     """
-    Example multi-agent workflow with tracing.
+    Example multi-agent workflow with context manager-based tracing.
 
     Args:
         task: The task to be processed by agents
@@ -171,29 +191,31 @@ def run_multi_agent_workflow(task: str) -> dict[str, Any]:
     Returns:
         Combined results from all agents
     """
-    # Research phase
-    research_data = research_agent(task)
+    with trace_operation("multi_agent_workflow") as span:
+        # Research phase
+        research_data = research_agent(task)
 
-    # Analysis phase
-    analysis_result = analysis_agent(research_data)
+        # Analysis phase
+        analysis_result = analysis_agent(research_data)
 
-    # Synthesis phase
-    final_report = report_agent(analysis_result)
+        # Synthesis phase
+        final_report = report_agent(analysis_result)
 
-    return {
-        "task": task,
-        "research": research_data,
-        "analysis": analysis_result,
-        "final_report": final_report,
-        "workflow_status": "completed",
-    }
+        result = {
+            "task": task,
+            "research": research_data,
+            "analysis": analysis_result,
+            "final_report": final_report,
+            "workflow_status": "completed",
+        }
+
+        span.set_attribute("workflow.task", task)
+        span.set_attribute("workflow.status", "completed")
+        span.set_attribute("workflow.steps", 3)
+
+        return result
 
 
-@trace_agent(
-    agent_id="analyst",
-    role="data_analyzer",
-    capabilities=["statistical_analysis", "trend_detection"],
-)
 def analysis_agent(data: dict[str, Any]) -> dict[str, Any]:
     """
     Analysis agent that processes research data.
@@ -204,21 +226,23 @@ def analysis_agent(data: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Analysis results
     """
-    time.sleep(0.4)
+    with trace_agent_operation(agent_type="analyst", operation="data_analysis") as span:
+        time.sleep(0.4)
 
-    return {
-        "trends": ["trend1", "trend2", "trend3"],
-        "insights": f"Key insights from {data['query']}",
-        "confidence": 0.92,
-        "methodology": "statistical_analysis",
-    }
+        result = {
+            "trends": ["trend1", "trend2", "trend3"],
+            "insights": f"Key insights from {data['query']}",
+            "confidence": 0.92,
+            "methodology": "statistical_analysis",
+        }
+
+        span.set_attribute("agent.confidence", result["confidence"])
+        trends = cast(list[str], result["trends"])
+        span.set_attribute("agent.trends_count", len(trends))
+
+        return result
 
 
-@trace_agent(
-    agent_id="reporter",
-    role="report_generator",
-    capabilities=["document_generation", "visualization"],
-)
 def report_agent(analysis: dict[str, Any]) -> dict[str, Any]:
     """
     Report agent that creates final reports.
@@ -229,15 +253,25 @@ def report_agent(analysis: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Final report
     """
-    time.sleep(0.3)
+    with trace_agent_operation(
+        agent_type="reporter", operation="report_generation"
+    ) as span:
+        time.sleep(0.3)
 
-    return {
-        "report_type": "market_analysis",
-        "summary": "Executive summary of findings",
-        "recommendations": ["rec1", "rec2", "rec3"],
-        "charts": ["chart1.png", "chart2.png"],
-        "confidence": analysis["confidence"],
-    }
+        result = {
+            "report_type": "market_analysis",
+            "summary": "Executive summary of findings",
+            "recommendations": ["rec1", "rec2", "rec3"],
+            "charts": ["chart1.png", "chart2.png"],
+            "confidence": analysis["confidence"],
+        }
+
+        span.set_attribute("agent.report_type", result["report_type"])
+        span.set_attribute(
+            "agent.recommendations_count", len(result["recommendations"])
+        )
+
+        return result
 
 
 if __name__ == "__main__":

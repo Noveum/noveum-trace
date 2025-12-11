@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from noveum_trace import init as noveum_init
-from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 # Load environment variables
 load_dotenv()

@@ -1,6 +1,9 @@
 """
 Thread Example for Noveum Trace SDK.
 
+⚠️  NOTE: This example uses thread APIs that are currently not actively maintained.
+For production use, please use context managers or LangChain/LangGraph integrations instead.
+
 This example demonstrates how to trace conversation threads,
 allowing tracking of multi-turn conversations and thread context.
 """
