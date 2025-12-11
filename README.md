@@ -73,21 +73,15 @@ Noveum Trace supports multiple import patterns. Choose the one that best fits yo
 This is the recommended approach for most use cases:
 
 ```python
-from noveum_trace import init, trace_context, trace, NoveumClient
-from noveum_trace import trace_llm, trace_agent, trace_tool, trace_retrieval
+from noveum_trace import init, trace_context, NoveumClient
 from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
-from noveum_trace import create_agent, get_agent, create_agent_graph
-from noveum_trace import ThreadContext, trace_streaming
 ```
 
 **Available imports from root:**
 - **Core functions**: `init`, `shutdown`, `flush`, `configure`, `get_config`, `get_client`
-- **Decorators**: `trace`, `trace_llm`, `trace_agent`, `trace_tool`, `trace_retrieval`
 - **Context managers**: `trace_context`, `trace_llm_call`, `trace_operation`, `trace_agent_operation`, `trace_batch_operation`, `trace_pipeline_stage`, `create_child_span`, `trace_function_calls`
 - **Core classes**: `NoveumClient`, `Trace`, `Span`, `ContextualTrace`
-- **Agents**: `create_agent`, `get_agent`, `create_agent_graph`, `get_agent_graph`, `create_agent_workflow`, `get_agent_workflow`, `AgentNode`, `AgentGraph`, `AgentWorkflow`
-- **Threads**: `ThreadContext`, `create_thread`, `get_thread`, `delete_thread`, `list_threads`, `trace_thread_llm`
-- **Streaming**: `trace_streaming`, `streaming_llm`, `create_openai_streaming_callback`, `create_anthropic_streaming_callback`
+- **Integrations**: `NoveumTraceCallbackHandler` (LangChain integration)
 
 ### Alternative: Module-Level Imports
 
@@ -113,12 +107,13 @@ noveum_trace.flush()
 For advanced use cases or when importing items not in the root `__all__`:
 
 ```python
-# Decorators submodule
-from noveum_trace.decorators import trace
-
 # Integrations (conditional - requires langchain/livekit)
-from noveum_trace.integrations import NoveumTraceCallbackHandler
-from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
+from noveum_trace.integrations.livekit import (
+    LiveKitSTTWrapper,
+    LiveKitTTSWrapper,
+    setup_livekit_tracing,
+)
 
 # Core submodules (also valid, but root imports preferred)
 from noveum_trace.core.client import NoveumClient
@@ -147,10 +142,10 @@ from noveum_trace.core.client import NoveumClient
 | What to Import | Recommended Import | Alternative |
 |---------------|-------------------|-------------|
 | Initialize SDK | `from noveum_trace import init` | `import noveum_trace` then `noveum_trace.init()` |
-| Basic decorator | `from noveum_trace import trace` | `from noveum_trace.decorators import trace` |
 | LLM tracing | `from noveum_trace import trace_llm_call` | `import noveum_trace` then `noveum_trace.trace_llm_call()` |
+| Context manager | `from noveum_trace import trace_context` | `import noveum_trace` then `noveum_trace.trace_context()` |
 | Client class | `from noveum_trace import NoveumClient` | `from noveum_trace.core.client import NoveumClient` |
-| LangChain integration | `from noveum_trace.integrations import NoveumTraceCallbackHandler` | (only available from integrations) |
+| LangChain integration | `from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler` | `from noveum_trace.integrations import NoveumTraceCallbackHandler` (also works) |
 
 ## ⚙️ Setup
 
@@ -184,9 +179,7 @@ noveum_trace/
 ├── core/              # Core tracing primitives (Trace, Span, Context)
 ├── context_managers/  # Context managers for inline tracing
 ├── transport/         # HTTP transport and batch processing
-├── integrations/      # Framework integrations (LangChain, etc.)
-├── streaming/         # Streaming LLM support
-├── threads/           # Conversation thread management
+├── integrations/      # Framework integrations (LangChain, LiveKit, etc.)
 └── utils/             # Utilities (exceptions, serialization, etc.)
 ```
 
@@ -289,7 +282,7 @@ def multi_step_workflow(task: str) -> dict:
 Noveum Trace provides seamless integration with LangChain and LangGraph applications through a simple callback handler.
 
 ```python
-from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 from langchain_openai import ChatOpenAI
 
 # Initialize Noveum Trace
@@ -330,8 +323,11 @@ Automatically trace LiveKit agent sessions with complete observability:
 import noveum_trace
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.plugins import deepgram, cartesia
-from noveum_trace.integrations.livekit import setup_livekit_tracing
-from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper
+from noveum_trace.integrations.livekit import (
+    LiveKitSTTWrapper,
+    LiveKitTTSWrapper,
+    setup_livekit_tracing,
+)
 
 # Initialize noveum-trace
 noveum_trace.init(project="livekit-agent")
@@ -380,7 +376,6 @@ async def agent_entrypoint(ctx: JobContext):
 - ✅ **Complete Observability**: Session events + detailed STT/TTS tracking
 - ✅ **Zero Configuration**: Session tracing creates trace automatically
 - ✅ Works with **any** LiveKit STT/TTS provider
-- ✅ Supports streaming and batch modes
 - ✅ Automatic audio file capture and storage
 - ✅ Rich metadata in span attributes
 - ✅ Graceful degradation (no disruption if tracing fails)
@@ -388,47 +383,6 @@ async def agent_entrypoint(ctx: JobContext):
 For step-by-step setup instructions, see the [LiveKit Integration Guide](docs/LIVEKIT_INTEGRATION_GUIDE.md).
 
 For detailed API documentation, see the [LiveKit Integration Docs](docs/LIVEKIT_INTEGRATION.md).
-
-## 🧵 Thread Management
-
-Track conversation threads and multi-turn interactions:
-
-```python
-from noveum_trace import ThreadContext
-
-# Create and manage conversation threads
-with ThreadContext(name="customer_support") as thread:
-    thread.add_message("user", "Hello, I need help with my order")
-
-    # LLM response within thread context
-    with noveum_trace.trace_llm_call(model="gpt-4") as span:
-        response = llm_client.chat.completions.create(...)
-        thread.add_message("assistant", response.choices[0].message.content)
-```
-
-## 🌊 Streaming Support
-
-Trace streaming LLM responses with real-time metrics:
-
-```python
-from noveum_trace import trace_streaming
-
-def stream_openai_response(prompt: str):
-    with trace_streaming(model="gpt-4", provider="openai") as manager:
-        stream = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            stream=True
-        )
-
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                manager.add_token(content)
-                yield content
-
-        # Streaming metrics are automatically captured
-```
 
 ## 🧪 Testing
 
@@ -475,10 +429,8 @@ python docs/examples/basic_usage.py
 Check out the [examples](docs/examples/) directory for complete working examples:
 
 - [Basic Usage](docs/examples/basic_usage.py) - Simple function tracing
-- [Agent Workflow](docs/examples/agent_workflow_example.py) - Multi-agent coordination
 - [Flexible Tracing](docs/examples/flexible_tracing_example.py) - Context managers and inline tracing
-- [Streaming Example](docs/examples/streaming_example.py) - Real-time streaming support
-- [Multimodal Examples](docs/examples/multimodal_examples.py) - Image, audio, and video tracing
+- [LangChain Integration](docs/examples/langchain_integration_example.py) - LangChain and LangGraph integration
 - [LangGraph Routing](docs/examples/langgraph_routing_example.py) - LangGraph routing decision tracking
 
 ## 🚀 Advanced Usage
