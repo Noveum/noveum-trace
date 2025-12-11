@@ -4,6 +4,27 @@ Noveum Trace SDK - Cloud-first, flexible tracing for LLM applications.
 This package provides comprehensive observability for LLM applications and
 multi-agent systems through multiple flexible tracing approaches.
 
+Import Patterns:
+    Recommended: Direct imports from package root
+
+    >>> from noveum_trace import init, trace_context, trace, NoveumClient
+    >>> from noveum_trace import trace_llm, trace_agent, trace_tool
+    >>> from noveum_trace import trace_llm_call, trace_operation
+
+    Alternative: Module-level imports
+
+    >>> import noveum_trace
+    >>> noveum_trace.init(project="my-app")
+    >>> noveum_trace.trace_context(...)
+
+    Submodule imports (when needed):
+
+    >>> from noveum_trace.decorators import trace
+    >>> from noveum_trace.integrations import NoveumTraceCallbackHandler
+    >>> from noveum_trace.core.client import NoveumClient
+
+    For complete import documentation, see README.md
+
 Example:
     Basic usage with decorators:
 
@@ -11,6 +32,15 @@ Example:
     >>> noveum_trace.init(project="my-app")
     >>>
     >>> @noveum_trace.trace
+    >>> def my_function(data: str) -> str:
+    ...     return process_data(data)
+
+    Or using direct imports:
+
+    >>> from noveum_trace import init, trace
+    >>> init(project="my-app")
+    >>>
+    >>> @trace
     >>> def my_function(data: str) -> str:
     ...     return process_data(data)
 
@@ -27,6 +57,12 @@ Example:
     ...
     ...     # Post-processing (not traced)
     ...     return format_response(response)
+
+    Or using direct imports:
+
+    >>> from noveum_trace import trace_llm_call
+    >>> with trace_llm_call(model="gpt-4") as span:
+    ...     response = openai.chat.completions.create(...)
 
 """
 

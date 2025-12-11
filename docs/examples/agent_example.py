@@ -1,6 +1,10 @@
 """
 Agent Example for Noveum Trace SDK.
 
+⚠️  NOTE: This example uses agent APIs that are currently not actively maintained.
+For production use, please use context managers (trace_agent_operation) or
+LangChain/LangGraph integrations instead.
+
 This example demonstrates how to trace complex agent interactions,
 including multi-agent systems, agent workflows, and agent graphs.
 """
@@ -22,7 +26,7 @@ except ImportError:
     pass
 
 import noveum_trace
-from noveum_trace.agents import (
+from noveum_trace import (
     create_agent,
     create_agent_graph,
     create_agent_workflow,

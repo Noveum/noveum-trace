@@ -18,7 +18,7 @@ import os
 from dotenv import load_dotenv
 
 import noveum_trace
-from noveum_trace import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 load_dotenv()
 

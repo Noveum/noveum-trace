@@ -1,6 +1,9 @@
 """
 Streaming Example for Noveum Trace SDK.
 
+⚠️  NOTE: This example uses streaming APIs that are currently not actively maintained.
+For production use, please use context managers or LangChain/LangGraph integrations instead.
+
 This example demonstrates how to trace streaming LLM responses,
 where tokens are received incrementally rather than all at once.
 """
@@ -22,7 +25,7 @@ except ImportError:
     pass
 
 import noveum_trace
-from noveum_trace.streaming import (
+from noveum_trace import (
     create_openai_streaming_callback,
     streaming_llm,
     trace_streaming,

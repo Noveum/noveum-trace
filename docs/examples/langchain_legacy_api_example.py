@@ -48,7 +48,7 @@ except ImportError:
     LANGGRAPH_AVAILABLE = False
 
 import noveum_trace
-from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 load_dotenv()
 

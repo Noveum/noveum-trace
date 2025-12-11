@@ -33,7 +33,7 @@ from langgraph.graph.message import add_messages
 import noveum_trace
 
 # Import Noveum Trace
-from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 # At the start of the file or in setup_noveum_trace()
 load_dotenv()

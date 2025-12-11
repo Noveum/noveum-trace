@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
 # Import Noveum Trace
-from noveum_trace.integrations import NoveumTraceCallbackHandler
+from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 load_dotenv()
 

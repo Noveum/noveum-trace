@@ -2,6 +2,10 @@
 """
 Agent Registry Cleanup Example for Noveum Trace SDK.
 
+⚠️  NOTE: This example uses agent APIs that are currently not actively maintained.
+For production use, please use context managers (trace_agent_operation) or
+LangChain/LangGraph integrations instead.
+
 This example demonstrates how to use the registry cleanup mechanisms
 to prevent memory leaks in long-running applications.
 """
