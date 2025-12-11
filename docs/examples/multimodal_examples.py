@@ -606,7 +606,9 @@ def generate_service_response(customer_text: str, sentiment: str) -> str:
         return response
 
 
-def process_multimodal_request(text_request: str, visual_context: list[dict[str, Any]]) -> str:
+def process_multimodal_request(
+    text_request: str, visual_context: list[dict[str, Any]]
+) -> str:
     """Process multimodal request combining text and visual information."""
     with trace_llm_call(model="gpt-4", provider="openai") as span:
         span.set_attributes(
