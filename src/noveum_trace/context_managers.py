@@ -165,7 +165,7 @@ class LLMContextManager(TraceContextManager):
     def __enter__(self) -> "LLMContextManager":
         """Enter the context and start a span, returning self for method access."""
         # Call parent to set up span
-        span = super().__enter__()
+        super().__enter__()
         # Return self so users can call capture_response() and other methods
         return self
 
@@ -403,7 +403,7 @@ def trace_llm(
             response = client.chat.completions.create(...)
             # Automatically extract tokens, costs, and model info
             span.capture_response(response)
-            
+
         # Or manually set usage attributes (costs calculated automatically)
         with trace_llm(model="gpt-4", provider="openai") as span:
             response = client.chat.completions.create(...)
