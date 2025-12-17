@@ -174,7 +174,7 @@ class TestConfig:
         assert config.api_key is None
         assert config.environment == "development"
         assert config.debug is False
-        assert config.log_level == "INFO"
+        assert config.log_level == "ERROR"
         assert isinstance(config.tracing, TracingConfig)
         assert isinstance(config.transport, TransportConfig)
         assert isinstance(config.security, SecurityConfig)

@@ -81,8 +81,8 @@ def get_log_level_from_env() -> int:
         if value in ("true", "1", "yes", "on"):
             return logging.DEBUG
 
-    # Default to INFO for SDK loggers
-    return logging.INFO
+    # Default to ERROR for SDK loggers
+    return logging.ERROR
 
 
 def setup_sdk_logging(force_level: Optional[int] = None) -> None:
