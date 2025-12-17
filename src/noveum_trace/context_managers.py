@@ -162,7 +162,7 @@ class LLMContextManager(TraceContextManager):
         self.capture_inputs = capture_inputs
         self.capture_outputs = capture_outputs
 
-    def __enter__(self) -> "LLMContextManager":
+    def __enter__(self) -> Union[Span, "NoOpSpan", "LLMContextManager"]:
         """Enter the context and start a span, returning self for method access."""
         # Call parent to set up span
         super().__enter__()
