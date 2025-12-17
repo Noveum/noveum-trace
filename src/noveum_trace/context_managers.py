@@ -14,8 +14,8 @@ from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
 from noveum_trace.decorators.base import _serialize_value
 from noveum_trace.utils.llm_utils import (
-    extract_llm_metadata,
     estimate_cost,
+    extract_llm_metadata,
 )
 
 
