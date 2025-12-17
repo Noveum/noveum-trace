@@ -13,6 +13,10 @@ from typing import Any, Callable, Optional, Union
 from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
 from noveum_trace.decorators.base import _serialize_value
+from noveum_trace.utils.llm_utils import (
+    extract_llm_metadata,
+    estimate_cost,
+)
 
 
 class TraceContextManager:
@@ -158,6 +162,13 @@ class LLMContextManager(TraceContextManager):
         self.capture_inputs = capture_inputs
         self.capture_outputs = capture_outputs
 
+    def __enter__(self) -> "LLMContextManager":
+        """Enter the context and start a span, returning self for method access."""
+        # Call parent to set up span
+        span = super().__enter__()
+        # Return self so users can call capture_response() and other methods
+        return self
+
     def set_input_attributes(self, **attributes: Any) -> None:
         """Set input-related attributes."""
         if self.span and self.capture_inputs:
@@ -177,7 +188,7 @@ class LLMContextManager(TraceContextManager):
         total_tokens: Optional[int] = None,
         cost: Optional[float] = None,
     ) -> None:
-        """Set usage-related attributes."""
+        """Set usage-related attributes and automatically calculate costs."""
         if self.span:
             usage_attrs: dict[str, Any] = {}
             if input_tokens is not None:
@@ -186,10 +197,129 @@ class LLMContextManager(TraceContextManager):
                 usage_attrs["llm.output_tokens"] = output_tokens
             if total_tokens is not None:
                 usage_attrs["llm.total_tokens"] = total_tokens
-            if cost is not None:
+            elif input_tokens is not None and output_tokens is not None:
+                # Calculate total if not provided
+                usage_attrs["llm.total_tokens"] = input_tokens + output_tokens
+
+            # Automatically calculate costs if tokens are provided and cost not explicitly set
+            if cost is None and (input_tokens is not None or output_tokens is not None):
+                model = self.span.attributes.get("llm.model")
+                if model:
+                    try:
+                        cost_info = estimate_cost(
+                            model=model,
+                            input_tokens=input_tokens or 0,
+                            output_tokens=output_tokens or 0,
+                        )
+                        usage_attrs["llm.cost.input"] = cost_info.get("input_cost", 0)
+                        usage_attrs["llm.cost.output"] = cost_info.get("output_cost", 0)
+                        usage_attrs["llm.cost.total"] = cost_info.get("total_cost", 0)
+                        usage_attrs["llm.cost.currency"] = cost_info.get("currency", "USD")
+                    except Exception:
+                        # If cost calculation fails, just set the single cost value if provided
+                        pass
+            elif cost is not None:
+                # Legacy single cost value
                 usage_attrs["llm.cost"] = cost
 
             self.span.set_attributes(usage_attrs)
+
+    def capture_response(self, response: Any) -> None:
+        """
+        Automatically extract metadata, token usage, and costs from LLM response.
+
+        This method extracts all relevant information from LLM response objects
+        (OpenAI, Anthropic, Google, etc.) and sets span attributes matching
+        the LangChain integration format.
+
+        Args:
+            response: LLM response object (OpenAI, Anthropic, Google, etc.)
+
+        Example:
+            with trace_llm(model="gpt-4", operation="ocr_cleaning") as span:
+                response = client.chat.completions.create(...)
+                span.capture_response(response)  # Automatically extracts tokens, costs, etc.
+        """
+        if not self.span:
+            return
+
+        try:
+            # Extract metadata from response using the utility function
+            metadata = extract_llm_metadata(response)
+
+            # Prepare attributes to set
+            attributes_to_set: dict[str, Any] = {}
+
+            # Update model and provider if extracted from response
+            if "llm.model" in metadata:
+                attributes_to_set["llm.model"] = metadata["llm.model"]
+            if "llm.provider" in metadata:
+                attributes_to_set["llm.provider"] = metadata["llm.provider"]
+
+            # Extract and flatten token usage (matching LangChain format)
+            input_tokens = (
+                metadata.get("llm.usage.input_tokens")
+                or metadata.get("llm.usage.prompt_tokens")
+            )
+            output_tokens = (
+                metadata.get("llm.usage.output_tokens")
+                or metadata.get("llm.usage.completion_tokens")
+            )
+            total_tokens = metadata.get("llm.usage.total_tokens")
+
+            # Set token usage attributes (flattened format like LangChain)
+            if input_tokens is not None:
+                attributes_to_set["llm.input_tokens"] = input_tokens
+            if output_tokens is not None:
+                attributes_to_set["llm.output_tokens"] = output_tokens
+            if total_tokens is not None:
+                attributes_to_set["llm.total_tokens"] = total_tokens
+            elif input_tokens is not None and output_tokens is not None:
+                attributes_to_set["llm.total_tokens"] = input_tokens + output_tokens
+
+            # Calculate costs if we have tokens and model
+            model = attributes_to_set.get("llm.model") or self.span.attributes.get(
+                "llm.model"
+            )
+            if model and (input_tokens is not None or output_tokens is not None):
+                try:
+                    cost_info = estimate_cost(
+                        model=model,
+                        input_tokens=input_tokens or 0,
+                        output_tokens=output_tokens or 0,
+                    )
+                    attributes_to_set["llm.cost.input"] = cost_info.get("input_cost", 0)
+                    attributes_to_set["llm.cost.output"] = cost_info.get("output_cost", 0)
+                    attributes_to_set["llm.cost.total"] = cost_info.get("total_cost", 0)
+                    attributes_to_set["llm.cost.currency"] = cost_info.get("currency", "USD")
+                except Exception:
+                    # If cost calculation fails, continue without cost info
+                    pass
+
+            # Add other metadata attributes
+            if "llm.context_window" in metadata:
+                attributes_to_set["llm.context_window"] = metadata["llm.context_window"]
+            if "llm.max_output_tokens" in metadata:
+                attributes_to_set["llm.max_output_tokens"] = metadata[
+                    "llm.max_output_tokens"
+                ]
+            if "llm.finish_reason" in metadata:
+                attributes_to_set["llm.finish_reason"] = metadata["llm.finish_reason"]
+            if "llm.system_fingerprint" in metadata:
+                attributes_to_set["llm.system_fingerprint"] = metadata[
+                    "llm.system_fingerprint"
+                ]
+            if "llm.created" in metadata:
+                attributes_to_set["llm.created"] = metadata["llm.created"]
+
+            # Set all attributes at once
+            if attributes_to_set:
+                self.span.set_attributes(attributes_to_set)
+
+        except Exception:
+            # If extraction fails, silently continue
+            # This ensures the context manager doesn't break user code
+            pass
 
 
 class AgentContextManager(TraceContextManager):
@@ -242,6 +372,10 @@ class NoOpSpan:
     def set_status(self, status: Any, message: Optional[str] = None) -> None:
         pass
 
+    def capture_response(self, response: Any) -> None:
+        """No-op version of capture_response for when tracing is not initialized."""
+        pass
+
 
 # Convenience functions for creating context managers
 
@@ -265,6 +399,12 @@ def trace_llm(
         LLMContextManager instance
 
     Example:
+        with trace_llm(model="gpt-4", provider="openai") as span:
+            response = client.chat.completions.create(...)
+            # Automatically extract tokens, costs, and model info
+            span.capture_response(response)
+            
+        # Or manually set usage attributes (costs calculated automatically)
         with trace_llm(model="gpt-4", provider="openai") as span:
             response = client.chat.completions.create(...)
             span.set_usage_attributes(
