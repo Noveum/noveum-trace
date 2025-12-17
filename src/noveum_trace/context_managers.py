@@ -181,6 +181,28 @@ class LLMContextManager(TraceContextManager):
             output_attrs = {f"llm.output.{k}": v for k, v in attributes.items()}
             self.span.set_attributes(output_attrs)
 
+    def _calculate_and_set_costs(
+        self,
+        attributes_dict: dict[str, Any],
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Helper to calculate and add cost attributes."""
+        try:
+            cost_info = estimate_cost(
+                model=model,
+                input_tokens=input_tokens or 0,
+                output_tokens=output_tokens or 0,
+            )
+            attributes_dict["llm.cost.input"] = cost_info.get("input_cost", 0)
+            attributes_dict["llm.cost.output"] = cost_info.get("output_cost", 0)
+            attributes_dict["llm.cost.total"] = cost_info.get("total_cost", 0)
+            attributes_dict["llm.cost.currency"] = cost_info.get("currency", "USD")
+        except Exception:
+            # If cost calculation fails, continue without cost info
+            pass
+
     def set_usage_attributes(
         self,
         input_tokens: Optional[int] = None,
@@ -205,19 +227,9 @@ class LLMContextManager(TraceContextManager):
             if cost is None and (input_tokens is not None or output_tokens is not None):
                 model = self.span.attributes.get("llm.model")
                 if model:
-                    try:
-                        cost_info = estimate_cost(
-                            model=model,
-                            input_tokens=input_tokens or 0,
-                            output_tokens=output_tokens or 0,
-                        )
-                        usage_attrs["llm.cost.input"] = cost_info.get("input_cost", 0)
-                        usage_attrs["llm.cost.output"] = cost_info.get("output_cost", 0)
-                        usage_attrs["llm.cost.total"] = cost_info.get("total_cost", 0)
-                        usage_attrs["llm.cost.currency"] = cost_info.get("currency", "USD")
-                    except Exception:
-                        # If cost calculation fails, just set the single cost value if provided
-                        pass
+                    self._calculate_and_set_costs(
+                        usage_attrs, model, input_tokens or 0, output_tokens or 0
+                    )
             elif cost is not None:
                 # Legacy single cost value
                 usage_attrs["llm.cost"] = cost
@@ -257,13 +269,11 @@ class LLMContextManager(TraceContextManager):
                 attributes_to_set["llm.provider"] = metadata["llm.provider"]
 
             # Extract and flatten token usage (matching LangChain format)
-            input_tokens = (
-                metadata.get("llm.usage.input_tokens")
-                or metadata.get("llm.usage.prompt_tokens")
+            input_tokens = metadata.get("llm.usage.input_tokens") or metadata.get(
+                "llm.usage.prompt_tokens"
             )
-            output_tokens = (
-                metadata.get("llm.usage.output_tokens")
-                or metadata.get("llm.usage.completion_tokens")
+            output_tokens = metadata.get("llm.usage.output_tokens") or metadata.get(
+                "llm.usage.completion_tokens"
             )
             total_tokens = metadata.get("llm.usage.total_tokens")
 
@@ -282,19 +292,9 @@ class LLMContextManager(TraceContextManager):
                 "llm.model"
             )
             if model and (input_tokens is not None or output_tokens is not None):
-                try:
-                    cost_info = estimate_cost(
-                        model=model,
-                        input_tokens=input_tokens or 0,
-                        output_tokens=output_tokens or 0,
-                    )
-                    attributes_to_set["llm.cost.input"] = cost_info.get("input_cost", 0)
-                    attributes_to_set["llm.cost.output"] = cost_info.get("output_cost", 0)
-                    attributes_to_set["llm.cost.total"] = cost_info.get("total_cost", 0)
-                    attributes_to_set["llm.cost.currency"] = cost_info.get("currency", "USD")
-                except Exception:
-                    # If cost calculation fails, continue without cost info
-                    pass
+                self._calculate_and_set_costs(
+                    attributes_to_set, model, input_tokens or 0, output_tokens or 0
+                )
 
             # Add other metadata attributes
             if "llm.context_window" in metadata:
