@@ -88,7 +88,7 @@ class Config:
 
     # Additional settings
     debug: bool = False
-    log_level: str = "INFO"
+    log_level: str = "ERROR"
 
     # Private field to store endpoint override
     _endpoint_override: Optional[str] = field(default=None, init=False, repr=False)
@@ -119,7 +119,7 @@ class Config:
         security: Optional[SecurityConfig] = None,
         integrations: Optional[IntegrationConfig] = None,
         debug: bool = False,
-        log_level: str = "INFO",
+        log_level: str = "ERROR",
     ) -> "Config":
         """Create a Config instance with optional endpoint override."""
         # Create the config instance
@@ -227,7 +227,7 @@ class Config:
         config.api_key = data.get("api_key")
         config.environment = data.get("environment", "development")
         config.debug = data.get("debug", False)
-        config.log_level = data.get("log_level", "INFO")
+        config.log_level = data.get("log_level", "ERROR")
 
         # Handle top-level endpoint parameter
         top_level_endpoint = data.get("endpoint")
