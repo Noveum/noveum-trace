@@ -49,6 +49,10 @@ class TransportConfig:
     batch_timeout: float = DEFAULT_BATCH_TIMEOUT
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
     compression: bool = True
+    ssl_verify: bool = (
+        True  # Set to False to disable SSL verification (NOT recommended for production)
+    )
+    ca_bundle: Optional[str] = None  # Path to custom CA bundle for corporate proxies
 
 
 @dataclass
@@ -200,6 +204,8 @@ class Config:
                 "batch_size": self.transport.batch_size,
                 "batch_timeout": self.transport.batch_timeout,
                 "compression": self.transport.compression,
+                "ssl_verify": self.transport.ssl_verify,
+                "ca_bundle": self.transport.ca_bundle,
             },
             "security": {
                 "redact_pii": self.security.redact_pii,
@@ -269,6 +275,8 @@ class Config:
                         "max_queue_size", DEFAULT_MAX_QUEUE_SIZE
                     ),
                     compression=transport_data.get("compression", False),
+                    ssl_verify=transport_data.get("ssl_verify", True),
+                    ca_bundle=transport_data.get("ca_bundle"),
                 )
             else:
                 # If transport is not a dict, use default
@@ -428,6 +436,24 @@ def _load_from_environment() -> Config:
     if os.getenv("NOVEUM_ENDPOINT"):
         # Set as top-level endpoint for consistency with programmatic API
         config_data["endpoint"] = os.getenv("NOVEUM_ENDPOINT")
+
+    # SSL configuration from environment
+    ssl_verify_env = os.getenv("NOVEUM_SSL_VERIFY")
+    if ssl_verify_env is not None:
+        if "transport" not in config_data:
+            config_data["transport"] = {}
+        config_data["transport"]["ssl_verify"] = ssl_verify_env.lower() not in (
+            "false",
+            "0",
+            "no",
+            "off",
+        )
+
+    ca_bundle_env = os.getenv("NOVEUM_CA_BUNDLE")
+    if ca_bundle_env:
+        if "transport" not in config_data:
+            config_data["transport"] = {}
+        config_data["transport"]["ca_bundle"] = ca_bundle_env
 
     debug_env = os.getenv("NOVEUM_DEBUG")
     if debug_env:
