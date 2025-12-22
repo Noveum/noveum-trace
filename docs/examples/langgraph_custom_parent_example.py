@@ -56,7 +56,8 @@ def fetch_data_node(state: DataCollectionState) -> DataCollectionState:
     # Simulate data fetching with LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
     response = llm.invoke(
-        [HumanMessage(content=f"Generate sample weather data for: {state['query']}")]
+        [HumanMessage(
+            content=f"Generate sample weather data for: {state['query']}")]
     )
 
     state["raw_data"] = response.content
@@ -248,7 +249,7 @@ def main():
 
     # ==========================================================================
     # EXECUTE GRAPH 1: DATA COLLECTION
-    # ==========================================================================
+    # =========================================================================
 
     print("\n" + "=" * 80)
     print("📊 EXECUTING GRAPH 1: DATA COLLECTION PIPELINE (Parent)")
