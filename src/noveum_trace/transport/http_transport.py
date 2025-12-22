@@ -8,7 +8,7 @@ including request formatting, authentication, and error handling.
 import time
 
 # Import for type hints
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NoReturn, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -184,6 +184,37 @@ class HttpTransport:
             return f"{response.text[:max_length]}... (truncated, total length: {len(response.text)} chars)"
 
         return response.text
+
+    def _handle_ssl_error(
+        self,
+        error: requests.exceptions.SSLError,
+        url: str,
+        **context: Any,
+    ) -> NoReturn:
+        """
+        Handle SSL errors with helpful troubleshooting information.
+
+        Args:
+            error: The SSL error that occurred
+            url: The URL that was being accessed
+            **context: Additional context for logging (e.g., trace_count)
+
+        Raises:
+            TransportError: Always raised with SSL error details
+        """
+        ssl_error_msg = str(error)
+        help_msg = (
+            f"SSL error: {ssl_error_msg}\n\n"
+            "Possible solutions:\n"
+            "1. Upgrade certifi: pip install --upgrade certifi\n"
+            "2. If behind corporate proxy (Netskope, Zscaler, etc.): "
+            "pip install pip-system-certs\n"
+            "3. Set custom CA bundle: export NOVEUM_CA_BUNDLE=/path/to/ca.crt\n"
+            "4. Disable SSL verification (debugging only): "
+            "export NOVEUM_SSL_VERIFY=false"
+        )
+        log_error_always(logger, help_msg, exc_info=True, url=url, **context)
+        raise TransportError(f"SSL error: {ssl_error_msg}") from error
 
     def export_trace(self, trace: Trace) -> None:
         """
@@ -587,18 +618,7 @@ class HttpTransport:
                 return response.json()
 
         except requests.exceptions.SSLError as e:
-            # Provide helpful SSL troubleshooting information
-            ssl_error_msg = str(e)
-            help_msg = (
-                f"SSL error: {ssl_error_msg}\n\n"
-                "Possible solutions:\n"
-                "1. Upgrade certifi: pip install --upgrade certifi\n"
-                "2. If behind corporate proxy (Netskope, Zscaler, etc.): pip install pip-system-certs\n"
-                "3. Set custom CA bundle: export NOVEUM_CA_BUNDLE=/path/to/ca.crt\n"
-                "4. Disable SSL verification (debugging only): export NOVEUM_SSL_VERIFY=false"
-            )
-            log_error_always(logger, help_msg, exc_info=True, url=url)
-            raise TransportError(f"SSL error: {ssl_error_msg}") from e
+            self._handle_ssl_error(e, url)
         except requests.exceptions.RequestException as e:
             log_error_always(
                 logger, f"HTTP request failed: {e}", exc_info=True, url=url
@@ -734,24 +754,7 @@ class HttpTransport:
                 f"Request timeout after {self.config.transport.timeout}s"
             ) from e
         except requests.exceptions.SSLError as e:
-            # Provide helpful SSL troubleshooting information
-            ssl_error_msg = str(e)
-            help_msg = (
-                f"SSL error: {ssl_error_msg}\n\n"
-                "Possible solutions:\n"
-                "1. Upgrade certifi: pip install --upgrade certifi\n"
-                "2. If behind corporate proxy (Netskope, Zscaler, etc.): pip install pip-system-certs\n"
-                "3. Set custom CA bundle: export NOVEUM_CA_BUNDLE=/path/to/ca.crt\n"
-                "4. Disable SSL verification (debugging only): export NOVEUM_SSL_VERIFY=false"
-            )
-            log_error_always(
-                logger,
-                help_msg,
-                exc_info=True,
-                url=url,
-                trace_count=len(traces),
-            )
-            raise TransportError(f"SSL error: {ssl_error_msg}") from e
+            self._handle_ssl_error(e, url, trace_count=len(traces))
         except requests.exceptions.ConnectionError as e:
             log_error_always(
                 logger,
