@@ -25,8 +25,8 @@ def setup_mock_session_if_needed(transport, config):
     """
     if isinstance(transport.session, Mock):
         # Set up basic headers that would normally be created by _create_session
+        # Note: Content-Type is NOT in session defaults; it's added per-request for JSON
         headers = {
-            "Content-Type": "application/json",
             "User-Agent": f"noveum-trace-sdk/{transport._get_sdk_version()}",
         }
 
@@ -104,7 +104,8 @@ class TestHttpTransportSessionCreation:
             setup_mock_session_if_needed(transport, config)
 
             session = transport.session
-            assert session.headers["Content-Type"] == "application/json"
+            # Content-Type is NOT in session defaults; it's added per-request for JSON
+            assert "Content-Type" not in session.headers
             assert "noveum-trace-sdk/" in session.headers["User-Agent"]
 
     def test_create_session_with_auth(self):
@@ -149,6 +150,64 @@ class TestHttpTransportSessionCreation:
             if not isinstance(transport.session, Mock):
                 assert isinstance(http_adapter, HTTPAdapter)
                 assert isinstance(https_adapter, HTTPAdapter)
+
+
+class TestHttpTransportContentTypeHeaders:
+    """Test Content-Type header handling for JSON and multipart requests."""
+
+    def test_json_request_has_content_type(self):
+        """Test that JSON requests have Content-Type header set explicitly."""
+        config = Config.create(api_key="test-key")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+            transport.session = Mock()
+            transport.session.headers = {"Authorization": "Bearer test-key"}
+
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"status": "ok"}
+            transport.session.post.return_value = mock_response
+
+            # Send a trace (JSON request)
+            trace_data = {"trace_id": "test-123", "name": "test"}
+            transport._send_request(trace_data)
+
+            # Verify post was called with Content-Type header
+            transport.session.post.assert_called_once()
+            call_kwargs = transport.session.post.call_args[1]
+            assert "headers" in call_kwargs
+            assert call_kwargs["headers"]["Content-Type"] == "application/json"
+
+    def test_file_upload_no_explicit_content_type(self):
+        """Test that file uploads don't have explicit Content-Type (allows multipart)."""
+        config = Config.create(api_key="test-key")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+            transport.session = Mock()
+            transport.session.headers = {"Authorization": "Bearer test-key"}
+
+            mock_response = Mock()
+            mock_response.status_code = 200
+            transport.session.post.return_value = mock_response
+
+            # Send audio file
+            audio_item = {
+                "audio_uuid": "test-audio",
+                "trace_id": "trace-123",
+                "span_id": "span-456",
+                "audio_data": b"fake audio data",
+                "timestamp": "2024-01-01T00:00:00Z",
+                "metadata": {},
+            }
+            transport._send_single_audio(audio_item)
+
+            # Verify post was called without Content-Type header
+            transport.session.post.assert_called_once()
+            call_kwargs = transport.session.post.call_args[1]
+            # Headers should not be in kwargs, allowing requests to set multipart Content-Type
+            assert "headers" not in call_kwargs or call_kwargs.get("headers") is None
 
 
 class TestHttpTransportURLBuilding:
@@ -724,6 +783,7 @@ class TestHttpTransportSendRequest:
             transport.session.post.assert_called_once_with(
                 "https://api.noveum.ai/api/v1/trace",
                 json=trace_data,
+                headers={"Content-Type": "application/json"},
                 timeout=transport.config.transport.timeout,
             )
 
@@ -758,6 +818,7 @@ class TestHttpTransportSendRequest:
             transport.session.post.assert_called_once_with(
                 "https://api.noveum.ai/api/v1/trace",
                 json=trace_data,
+                headers={"Content-Type": "application/json"},
                 timeout=transport.config.transport.timeout,
             )
 

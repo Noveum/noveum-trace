@@ -127,10 +127,10 @@ class TestHttpTransportErrorHandling:
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             self.transport = HttpTransport(self.config)
             # Properly mock session with headers that support iteration
+            # Note: Content-Type is NOT in session defaults; it's added per-request for JSON
             self.transport.session = Mock()
             self.transport.session.headers = {
                 "Authorization": "Bearer test-key",
-                "Content-Type": "application/json",
             }
 
     @patch("noveum_trace.transport.http_transport.logger")
@@ -237,10 +237,10 @@ class TestHttpTransportBatchExport:
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             self.transport = HttpTransport(self.config)
             # Properly mock session with headers that support iteration
+            # Note: Content-Type is NOT in session defaults; it's added per-request for JSON
             self.transport.session = Mock()
             self.transport.session.headers = {
                 "Authorization": "Bearer test-key",
-                "Content-Type": "application/json",
             }
 
     @patch("noveum_trace.transport.http_transport.logger")

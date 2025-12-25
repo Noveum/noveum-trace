@@ -357,7 +357,6 @@ if not noveum_trace.is_initialized():
         project=os.getenv("NOVEUM_PROJECT", "drive-thru-agent"),
         api_key=os.getenv("NOVEUM_API_KEY"),
         environment=os.getenv("NOVEUM_ENVIRONMENT", "production"),
-        endpoint="https://noveum.free.beeceptor.com",
     )
 
 server = AgentServer()

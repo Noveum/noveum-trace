@@ -420,9 +420,8 @@ class HttpTransport:
         """Create and configure HTTP session."""
         session = requests.Session()
 
-        # Set headers
+        # Set headers (excluding Content-Type to allow proper multipart/form-data for file uploads)
         headers = {
-            "Content-Type": "application/json",
             "User-Agent": f"noveum-trace-sdk/{self._get_sdk_version()}",
         }
 
@@ -620,10 +619,11 @@ class HttpTransport:
         )
 
         try:
-            # Send request
+            # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
                 json=trace_data,
+                headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
 
@@ -752,10 +752,11 @@ class HttpTransport:
                 )
 
         try:
-            # Send request
+            # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
                 json=payload,
+                headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
 
