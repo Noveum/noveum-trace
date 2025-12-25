@@ -229,7 +229,7 @@ class TestEndpointPathPreservation:
             {"trace_id": "trace2", "spans": [], "name": "test2"},
         ]
 
-        transport._send_batch(traces_data)
+        transport._send_batch({'type': 'traces', 'data': traces_data})
 
         # Verify the URL used includes the full path
         mock_session.post.assert_called_once()

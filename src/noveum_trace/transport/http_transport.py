@@ -44,7 +44,8 @@ try:
         NonCallableMock,
     )
 
-    _MOCK_TYPES = (Mock, MagicMock, AsyncMock, NonCallableMagicMock, NonCallableMock)
+    _MOCK_TYPES = (Mock, MagicMock, AsyncMock,
+                   NonCallableMagicMock, NonCallableMock)
 except ImportError:
     _MOCK_TYPES = ()
 
@@ -78,10 +79,13 @@ class HttpTransport:
             logger.debug("🔧 Transport configuration:")
             logger.debug(f"    endpoint: {self.config.transport.endpoint}")
             logger.debug(f"    timeout: {self.config.transport.timeout}s")
-            logger.debug(f"    retry_attempts: {self.config.transport.retry_attempts}")
+            logger.debug(
+                f"    retry_attempts: {self.config.transport.retry_attempts}")
             logger.debug(f"    batch_size: {self.config.transport.batch_size}")
-            logger.debug(f"    batch_timeout: {self.config.transport.batch_timeout}s")
-            logger.debug(f"    compression: {self.config.transport.compression}")
+            logger.debug(
+                f"    batch_timeout: {self.config.transport.batch_timeout}s")
+            logger.debug(
+                f"    compression: {self.config.transport.compression}")
             logger.debug(f"    ssl_verify: {self.config.transport.ssl_verify}")
             logger.debug(
                 f"    ca_bundle: {self.config.transport.ca_bundle or 'default (certifi)'}"
@@ -173,7 +177,8 @@ class HttpTransport:
 
         # Use provided max_length or get from config, with fallback to 1000
         if max_length is None:
-            max_length = getattr(self.config.transport, "max_response_preview", 1000)
+            max_length = getattr(self.config.transport,
+                                 "max_response_preview", 1000)
 
         # Check if response contains sensitive patterns
         if self._contains_sensitive_data(response.text):
@@ -279,18 +284,75 @@ class HttpTransport:
             logger.debug(f"    keys: {list(trace_data.keys())}")
             logger.debug(f"    sdk_info: {trace_data.get('sdk', {})}")
             logger.debug(f"    project: {trace_data.get('project', 'None')}")
-            logger.debug(f"    environment: {trace_data.get('environment', 'None')}")
+            logger.debug(
+                f"    environment: {trace_data.get('environment', 'None')}")
 
         # Add to batch processor
         try:
             self.batch_processor.add_trace(trace_data)
-            logger.info(f"✅ Trace {trace.trace_id} successfully queued for export")
+            logger.info(
+                f"✅ Trace {trace.trace_id} successfully queued for export")
         except Exception as e:
             log_error_always(
                 logger,
                 f"Failed to queue trace {trace.trace_id} for export",
                 exc_info=True,
                 trace_id=trace.trace_id,
+                error=str(e),
+            )
+            raise
+
+    def export_audio(
+        self,
+        audio_data: bytes,
+        trace_id: str,
+        span_id: str,
+        audio_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Export audio to the Noveum platform.
+
+        Args:
+            audio_data: Audio file bytes
+            trace_id: Associated trace ID
+            span_id: Associated span ID
+            audio_uuid: Unique identifier for this audio file
+            metadata: Additional metadata (duration, format, etc.)
+
+        Raises:
+            TransportError: If transport is shutdown or export fails
+        """
+        if self._shutdown:
+            log_error_always(
+                logger,
+                f"Cannot export audio {audio_uuid} - transport has been shutdown",
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError("Transport has been shutdown")
+
+        logger.info(f"📤 EXPORTING AUDIO: {audio_uuid} for trace {trace_id}")
+
+        # Format audio for export
+        audio_item = {
+            'audio_data': audio_data,
+            'trace_id': trace_id,
+            'span_id': span_id,
+            'audio_uuid': audio_uuid,
+            'metadata': metadata or {},
+            'timestamp': time.time(),
+        }
+
+        # Add to batch processor
+        try:
+            self.batch_processor.add_audio(audio_item)
+            logger.info(f"✅ Audio {audio_uuid} successfully queued for export")
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to queue audio {audio_uuid} for export",
+                exc_info=True,
+                audio_uuid=audio_uuid,
                 error=str(e),
             )
             raise
@@ -410,10 +472,12 @@ class HttpTransport:
                 try:
                     import certifi
 
-                    logger.debug(f"🔒 Using certifi CA bundle: {certifi.where()}")
+                    logger.debug(
+                        f"🔒 Using certifi CA bundle: {certifi.where()}")
                     logger.debug(f"    certifi version: {certifi.__version__}")
                 except ImportError:
-                    logger.debug("🔒 Using system CA bundle (certifi not installed)")
+                    logger.debug(
+                        "🔒 Using system CA bundle (certifi not installed)")
 
         # Configure retries
         retry_strategy = Retry(
@@ -429,8 +493,10 @@ class HttpTransport:
 
         if log_debug_enabled():
             logger.debug("🔄 HTTP session configured:")
-            logger.debug(f"    retry_attempts: {self.config.transport.retry_attempts}")
-            logger.debug(f"    retry_backoff: {self.config.transport.retry_backoff}")
+            logger.debug(
+                f"    retry_attempts: {self.config.transport.retry_attempts}")
+            logger.debug(
+                f"    retry_backoff: {self.config.transport.retry_backoff}")
             logger.debug(f"    ssl_verify: {ssl_verify}")
             logger.debug(f"    ca_bundle: {ca_bundle or 'default'}")
             logger.debug(f"    headers: {dict(session.headers)}")
@@ -490,7 +556,8 @@ class HttpTransport:
         Returns:
             Formatted trace data
         """
-        log_trace_flow(logger, "Formatting trace for export", trace_id=trace.trace_id)
+        log_trace_flow(logger, "Formatting trace for export",
+                       trace_id=trace.trace_id)
 
         trace_data = self.trace_to_dict(trace)
 
@@ -583,7 +650,8 @@ class HttpTransport:
 
             # Check response
             if response.status_code in [200, 201]:
-                logger.debug(f"Successfully sent trace: {trace_data.get('trace_id')}")
+                logger.debug(
+                    f"Successfully sent trace: {trace_data.get('trace_id')}")
                 return response.json()
             elif response.status_code == 401:
                 log_error_always(
@@ -600,7 +668,8 @@ class HttpTransport:
                     status=response.status_code,
                     url=url,
                 )
-                raise TransportError("Access forbidden - check project permissions")
+                raise TransportError(
+                    "Access forbidden - check project permissions")
             elif response.status_code == 429:
                 log_error_always(
                     logger, "Rate limit exceeded", status=response.status_code, url=url
@@ -625,7 +694,29 @@ class HttpTransport:
             )
             raise TransportError(f"HTTP request failed: {e}") from e
 
-    def _send_batch(self, traces: list[dict[str, Any]]) -> None:
+    def _send_batch(self, batch_item: dict[str, Any]) -> None:
+        """
+        Send audio or traces based on type.
+
+        Args:
+            batch_item: Dict with 'type' ('audio' or 'traces') and 'data'
+        """
+        item_type = batch_item.get('type')
+
+        if item_type == 'audio':
+            # Send single audio file
+            audio_data = batch_item['data']
+            self._send_single_audio(audio_data)
+
+        elif item_type == 'traces':
+            # Send batch of traces (existing logic)
+            traces = batch_item['data']
+            self._send_trace_batch(traces)
+
+        else:
+            logger.error(f"Unknown batch item type: {item_type}")
+
+    def _send_trace_batch(self, traces: list[dict[str, Any]]) -> None:
         """
         Send a batch of traces to the Noveum platform.
 
@@ -683,7 +774,8 @@ class HttpTransport:
             )
 
             # Log response details
-            logger.info(f"📡 HTTP RESPONSE: Status {response.status_code} from {url}")
+            logger.info(
+                f"📡 HTTP RESPONSE: Status {response.status_code} from {url}")
 
             if log_debug_enabled():
                 log_http_response(
@@ -697,7 +789,8 @@ class HttpTransport:
 
             # Check response
             if response.status_code in [200, 201]:
-                logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
+                logger.info(
+                    f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
                     safe_preview = self._get_safe_response_preview(
                         response, max_length=2000
@@ -720,7 +813,8 @@ class HttpTransport:
                     url=url,
                     trace_count=len(traces),
                 )
-                raise TransportError("Access forbidden - check project permissions")
+                raise TransportError(
+                    "Access forbidden - check project permissions")
             elif response.status_code == 429:
                 log_error_always(
                     logger,
@@ -783,6 +877,74 @@ class HttpTransport:
             )
             raise TransportError(f"Unexpected error: {e}") from e
 
+    def _send_single_audio(self, audio_item: dict[str, Any]) -> None:
+        """
+        Send a single audio file to the Noveum platform.
+
+        Args:
+            audio_item: Audio data with metadata
+        """
+        audio_uuid = audio_item.get('audio_uuid', 'unknown')
+        trace_id = audio_item.get('trace_id')
+        span_id = audio_item.get('span_id')
+
+        url = self._build_api_url("/v1/audio")
+
+        logger.info(f"🚀 SENDING AUDIO: {audio_uuid} to {url}")
+
+        try:
+            # Prepare multipart form data
+            files = {
+                'audio': (f"{audio_uuid}.wav", audio_item['audio_data'], 'audio/wav')
+            }
+
+            data = {
+                'trace_id': trace_id,
+                'span_id': span_id,
+                'audio_uuid': audio_uuid,
+                'timestamp': audio_item.get('timestamp'),
+                **audio_item.get('metadata', {}),
+            }
+
+            # Send request
+            response = self.session.post(
+                url,
+                files=files,
+                data=data,
+                timeout=self.config.transport.timeout,
+            )
+
+            # Log response
+            logger.info(f"📡 AUDIO RESPONSE: Status {response.status_code}")
+
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ Successfully sent audio {audio_uuid}")
+            else:
+                log_error_always(
+                    logger,
+                    f"Failed to send audio {audio_uuid}: {response.status_code}",
+                    status=response.status_code,
+                    audio_uuid=audio_uuid,
+                )
+                response.raise_for_status()
+
+        except requests.exceptions.Timeout as e:
+            log_error_always(
+                logger,
+                f"Audio upload timeout for {audio_uuid}",
+                exc_info=True,
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError(f"Audio upload timeout: {e}") from e
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to send audio {audio_uuid}: {e}",
+                exc_info=True,
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError(f"Audio upload failed: {e}") from e
+
     def _compress_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Compress payload if beneficial.
@@ -796,7 +958,8 @@ class HttpTransport:
         # For now, just return the payload as-is
         # In the future, we could implement gzip compression
         if log_debug_enabled():
-            logger.debug("🗜️  Payload compression requested but not implemented yet")
+            logger.debug(
+                "🗜️  Payload compression requested but not implemented yet")
         return payload
 
     def health_check(self) -> bool:

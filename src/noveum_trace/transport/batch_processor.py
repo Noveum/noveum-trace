@@ -56,7 +56,8 @@ class BatchProcessor:
         self._shutdown = False
 
         # Start background thread
-        self._thread = threading.Thread(target=self._process_batches, daemon=True)
+        self._thread = threading.Thread(
+            target=self._process_batches, daemon=True)
         self._thread.start()
 
         logger.info(
@@ -66,8 +67,10 @@ class BatchProcessor:
         if log_debug_enabled():
             logger.debug("🔧 Batch processor configuration:")
             logger.debug(f"    batch_size: {self.config.transport.batch_size}")
-            logger.debug(f"    batch_timeout: {self.config.transport.batch_timeout}s")
-            logger.debug(f"    max_queue_size: {self.config.transport.max_queue_size}")
+            logger.debug(
+                f"    batch_timeout: {self.config.transport.batch_timeout}s")
+            logger.debug(
+                f"    max_queue_size: {self.config.transport.max_queue_size}")
 
     def add_trace(self, trace_data: dict[str, Any]) -> None:
         """
@@ -109,6 +112,9 @@ class BatchProcessor:
                 trace_data_keys=list(trace_data.keys()),
             )
 
+        # Mark as trace type
+        trace_data['_item_type'] = 'trace'
+
         try:
             self._queue.put(trace_data, block=False)
             new_queue_size = self._queue.qsize()
@@ -129,6 +135,41 @@ class BatchProcessor:
             )
             raise TransportError("Trace queue is full") from e
 
+    def add_audio(self, audio_data: dict[str, Any]) -> None:
+        """
+        Add audio to the batch queue.
+
+        Args:
+            audio_data: Audio data with metadata
+
+        Raises:
+            TransportError: If processor is shutdown or queue is full
+        """
+        if self._shutdown:
+            log_error_always(
+                logger,
+                "Cannot add audio - batch processor has been shutdown",
+                audio_uuid=audio_data.get("audio_uuid", "unknown"),
+            )
+            raise TransportError("Batch processor has been shutdown")
+
+        # Mark as audio type
+        audio_data['_item_type'] = 'audio'
+
+        # Log audio addition
+        audio_uuid = audio_data.get("audio_uuid", "unknown")
+        trace_id = audio_data.get("trace_id", "unknown")
+        logger.info(
+            f"📥 ADDING AUDIO TO QUEUE: {audio_uuid} for trace {trace_id}")
+
+        try:
+            self._queue.put(audio_data, block=False)
+            logger.info(f"✅ Successfully queued audio {audio_uuid}")
+        except queue.Full as e:
+            log_error_always(
+                logger, f"Queue is full, dropping audio {audio_uuid}")
+            raise TransportError("Audio queue is full") from e
+
     def flush(self, timeout: Optional[float] = None) -> None:
         """
         Flush all pending traces.
@@ -140,7 +181,8 @@ class BatchProcessor:
             logger.debug("Batch processor already shutdown, skipping flush")
             return
 
-        log_trace_flow(logger, "Starting batch processor flush", timeout=timeout)
+        log_trace_flow(logger, "Starting batch processor flush",
+                       timeout=timeout)
 
         # Send current batch
         with self._batch_lock:
@@ -176,7 +218,8 @@ class BatchProcessor:
 
         elapsed_time = time.time() - start_time
         try:
-            logger.info(f"✅ Batch processor flush completed in {elapsed_time:.2f}s")
+            logger.info(
+                f"✅ Batch processor flush completed in {elapsed_time:.2f}s")
         except (ValueError, OSError, RuntimeError, Exception):
             # Logger may be closed during shutdown
             pass
@@ -240,16 +283,18 @@ class BatchProcessor:
 
         while not self._shutdown:
             try:
-                # Get trace from queue with timeout
+                # Get item from queue with timeout (could be trace or audio)
                 try:
-                    trace_data = self._queue.get(timeout=0.5)
-                    trace_id = trace_data.get("trace_id", "unknown")
+                    item_data = self._queue.get(timeout=0.5)
+                    item_type = item_data.get("_item_type", "trace")
+                    item_id = item_data.get("trace_id") or item_data.get(
+                        "audio_uuid", "unknown")
 
                     if log_debug_enabled():
                         log_trace_flow(
                             logger,
-                            "Background thread got trace from queue",
-                            trace_id=trace_id,
+                            f"Background thread got {item_type} from queue",
+                            item_id=item_id,
                             queue_size=self._queue.qsize(),
                         )
 
@@ -283,16 +328,16 @@ class BatchProcessor:
                                     )
                     continue
 
-                # Add to current batch
+                # Add to current batch (both audio and traces)
                 with self._batch_lock:
-                    self._batch.append(trace_data)
+                    self._batch.append(item_data)
                     batch_size = len(self._batch)
 
                     if log_debug_enabled():
                         log_trace_flow(
                             logger,
-                            "Added trace to batch",
-                            trace_id=trace_id,
+                            f"Added {item_type} to batch",
+                            item_id=item_id,
                             batch_size=batch_size,
                             max_batch_size=self.config.transport.batch_size,
                         )
@@ -324,7 +369,10 @@ class BatchProcessor:
             pass
 
     def _send_current_batch(self) -> None:
-        """Send the current batch (must be called with batch_lock held)."""
+        """
+        Send the current batch, splitting audio and traces.
+        Audio is sent first, then traces.
+        """
         if not self._batch:
             try:
                 logger.debug("_send_current_batch called but batch is empty")
@@ -332,39 +380,75 @@ class BatchProcessor:
                 pass
             return
 
-        batch_to_send = self._batch.copy()
-        batch_size = len(batch_to_send)
+        batch_to_process = self._batch.copy()
         self._batch.clear()
 
+        # Split into audio and traces
+        audio_items = [item for item in batch_to_process if item.get(
+            '_item_type') == 'audio']
+        trace_items = [item for item in batch_to_process if item.get(
+            '_item_type') == 'trace']
+
         try:
-            logger.info(f"📤 SENDING BATCH: {batch_size} traces via send_callback")
+            logger.info(
+                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(trace_items)} traces")
         except (ValueError, OSError, RuntimeError, Exception):
-            # Logger may be closed during shutdown
             pass
 
-        if log_debug_enabled():
-            # Log trace IDs in the batch
-            for i, trace in enumerate(batch_to_send):
-                trace_id = trace.get("trace_id", "unknown")
-                trace_name = trace.get("name", "unnamed")
-                logger.debug(f"    [{i+1}] {trace_name} (ID: {trace_id})")
-
-        try:
-            self.send_callback(batch_to_send)
+        # Send ALL audio first (individually)
+        if audio_items:
             try:
                 logger.info(
-                    f"✅ Successfully sent batch of {batch_size} traces via callback"
-                )
+                    f"🎵 Sending {len(audio_items)} audio files first...")
             except (ValueError, OSError, RuntimeError, Exception):
-                # Logger may be closed during shutdown
                 pass
-        except Exception as e:
-            log_error_always(
-                logger,
-                f"Failed to send batch of {batch_size} traces",
-                exc_info=True,
-                batch_size=batch_size,
-                error=str(e),
-            )
-            # In a production implementation, we might want to retry or
-            # implement a dead letter queue here
+
+            for audio_item in audio_items:
+                # Remove internal marker before sending
+                audio_item.pop('_item_type', None)
+                try:
+                    self.send_callback({'type': 'audio', 'data': audio_item})
+                except Exception as e:
+                    log_error_always(
+                        logger,
+                        f"Failed to send audio {audio_item.get('audio_uuid')}",
+                        exc_info=True,
+                        error=str(e),
+                    )
+
+        # Then send traces (batched)
+        if trace_items:
+            try:
+                logger.info(f"📦 Sending {len(trace_items)} traces...")
+            except (ValueError, OSError, RuntimeError, Exception):
+                pass
+
+            # Remove internal marker from traces
+            for item in trace_items:
+                item.pop('_item_type', None)
+
+            if log_debug_enabled():
+                # Log trace IDs in the batch
+                for i, trace in enumerate(trace_items):
+                    trace_id = trace.get("trace_id", "unknown")
+                    trace_name = trace.get("name", "unnamed")
+                    logger.debug(f"    [{i+1}] {trace_name} (ID: {trace_id})")
+
+            try:
+                self.send_callback({'type': 'traces', 'data': trace_items})
+                try:
+                    logger.info(
+                        f"✅ Successfully sent batch of {len(trace_items)} traces via callback"
+                    )
+                except (ValueError, OSError, RuntimeError, Exception):
+                    pass
+            except Exception as e:
+                log_error_always(
+                    logger,
+                    f"Failed to send batch of {len(trace_items)} traces",
+                    exc_info=True,
+                    batch_size=len(trace_items),
+                    error=str(e),
+                )
+                # In a production implementation, we might want to retry or
+                # implement a dead letter queue here

@@ -161,6 +161,81 @@ def calculate_audio_duration_ms(frames: list[Any]) -> float:
     return total_duration_sec * 1000.0
 
 
+def upload_audio_frames(
+    frames: list[Any],
+    audio_uuid: str,
+    audio_type: str,
+    trace_id: str,
+    span_id: str,
+) -> bool:
+    """
+    Upload audio frames to Noveum platform.
+
+    This utility function handles the complete audio upload workflow:
+    - Converts audio frames to WAV bytes
+    - Gets the current client
+    - Calculates audio duration
+    - Uploads audio with metadata
+
+    Args:
+        frames: List of rtc.AudioFrame objects
+        audio_uuid: Unique identifier for the audio file
+        audio_type: Type of audio ('stt' or 'tts')
+        trace_id: Trace ID to associate audio with
+        span_id: Span ID to associate audio with
+
+    Returns:
+        True if upload was successful, False otherwise
+    """
+    try:
+        if not LIVEKIT_AVAILABLE:
+            logger.debug("LiveKit not available, skipping audio upload")
+            return False
+
+        if not frames:
+            logger.debug("No frames to upload")
+            return False
+
+        # Convert frames to WAV bytes
+        combined = rtc.combine_audio_frames(frames)
+        audio_bytes = combined.to_wav_bytes()
+
+        # Get client
+        from noveum_trace import get_client
+
+        client = get_client()
+        if not client:
+            logger.info("No client available, skipping audio upload")
+            return False
+
+        # Calculate duration
+        duration_ms = calculate_audio_duration_ms(frames)
+
+        # Prepare metadata
+        metadata = {
+            'duration_ms': duration_ms,
+            'format': 'wav',
+            'type': audio_type,
+        }
+
+        # Export audio (non-blocking, queued)
+        client.export_audio(
+            audio_data=audio_bytes,
+            trace_id=trace_id,
+            span_id=span_id,
+            audio_uuid=audio_uuid,
+            metadata=metadata,
+        )
+
+        logger.debug(f"Queued audio upload: {audio_uuid}")
+        return True
+
+    except Exception as e:  # noqa: S110 - broad exception for graceful degradation
+        logger.warning(
+            f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
+        return False
+
+
 def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> Path:
     """
     Ensure audio storage directory exists for a session.
@@ -392,7 +467,8 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
             data = asdict(event)
         # Handle objects with __dict__
         elif hasattr(event, "__dict__"):
-            data = {k: v for k, v in event.__dict__.items() if not k.startswith("_")}
+            data = {k: v for k, v in event.__dict__.items()
+                    if not k.startswith("_")}
         # Handle dictionaries
         elif isinstance(event, dict):
             data = event
@@ -534,7 +610,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                             text_parts.append(str(part.text))
                         elif isinstance(part, dict) and "text" in part:
                             text_parts.append(str(part["text"]))
-                    text_content = "\n".join(text_parts) if text_parts else None
+                    text_content = "\n".join(
+                        text_parts) if text_parts else None
                 elif isinstance(content, str):
                     text_content = content
 
@@ -557,7 +634,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                 {
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "arguments": (
-                        str(item.arguments) if hasattr(item, "arguments") else None
+                        str(item.arguments) if hasattr(
+                            item, "arguments") else None
                     ),
                 }
             )
@@ -569,7 +647,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "output": str(item.output) if hasattr(item, "output") else None,
                     "is_error": (
-                        bool(item.is_error) if hasattr(item, "is_error") else False
+                        bool(item.is_error) if hasattr(
+                            item, "is_error") else False
                     ),
                 }
             )
@@ -697,7 +776,8 @@ async def _update_span_with_system_prompt(
             await asyncio.sleep(check_interval)
 
     except Exception as e:
-        logger.debug(f"Failed to update span with system prompt: {e}", exc_info=True)
+        logger.debug(
+            f"Failed to update span with system prompt: {e}", exc_info=True)
 
 
 def create_event_span(
@@ -854,7 +934,8 @@ def create_event_span(
             # Check if we already have system prompt in attributes
             if "llm.system_prompt" not in attributes:
                 # Start background task to wait for agent_activity and update span
-                asyncio.create_task(_update_span_with_system_prompt(span, manager))
+                asyncio.create_task(
+                    _update_span_with_system_prompt(span, manager))
 
         return span
 

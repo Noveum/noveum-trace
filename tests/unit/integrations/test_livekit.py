@@ -140,8 +140,7 @@ class TestLiveKitSTTWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_stt.save_audio_buffer")
-    @patch("noveum_trace.integrations.livekit.livekit_stt.generate_audio_filename")
+    @patch("noveum_trace.integrations.livekit.livekit_stt.upload_audio_frames")
     @patch("noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms")
     @patch("noveum_trace.integrations.livekit.livekit_stt.create_span_attributes")
     @pytest.mark.asyncio
@@ -149,8 +148,7 @@ class TestLiveKitSTTWrapper:
         self,
         mock_create_attrs,
         mock_calc_duration,
-        mock_gen_filename,
-        mock_save_buffer,
+        mock_upload_audio,
         mock_get_client,
         mock_get_trace,
         mock_stt_provider,
@@ -168,7 +166,16 @@ class TestLiveKitSTTWrapper:
         mock_alternative = Mock()
         mock_alternative.text = "Hello world"
         mock_alternative.confidence = 0.95
+        mock_alternative.language = "en"
+        mock_alternative.start_time = 0.0
+        mock_alternative.end_time = 1.5
+        mock_alternative.speaker_id = None
+        mock_alternative.is_primary_speaker = None
         mock_event.alternatives = [mock_alternative]
+        mock_event.type = Mock()
+        mock_event.type.value = "FINAL_TRANSCRIPT"
+        mock_event.request_id = "req_123"
+        mock_event.recognition_usage = None
         mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
 
         # Mock audio buffer
@@ -177,15 +184,21 @@ class TestLiveKitSTTWrapper:
         # Setup mocks
         mock_get_trace.return_value = mock_trace
         mock_get_client.return_value = mock_client
-        mock_gen_filename.return_value = "stt_0001_123.wav"
+        mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 1500.0
         mock_create_attrs.return_value = {"stt.provider": "deepgram"}
+        
+        # Mock span with trace_id and span_id
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
 
         result = await wrapper.recognize(mock_buffer)
 
         assert result == mock_event
         mock_stt_provider._recognize_impl.assert_called_once_with(mock_buffer)
-        mock_save_buffer.assert_called_once()
+        mock_upload_audio.assert_called_once()
         mock_client.start_span.assert_called_once()
         mock_client.finish_span.assert_called_once()
 
@@ -538,8 +551,7 @@ class TestWrappedSynthesizeStream:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.save_audio_frames")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.generate_audio_filename")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.upload_audio_frames")
     @patch("noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms")
     @patch("noveum_trace.integrations.livekit.livekit_tts.create_span_attributes")
     @pytest.mark.asyncio
@@ -547,8 +559,7 @@ class TestWrappedSynthesizeStream:
         self,
         mock_create_attrs,
         mock_calc_duration,
-        mock_gen_filename,
-        mock_save_frames,
+        mock_upload_audio,
         mock_get_client,
         mock_get_trace,
         tmp_path,
@@ -582,14 +593,20 @@ class TestWrappedSynthesizeStream:
 
         mock_get_trace.return_value = mock_trace
         mock_get_client.return_value = mock_client
-        mock_gen_filename.return_value = "tts_0001_123.wav"
+        mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 3000.0
         mock_create_attrs.return_value = {"tts.provider": "cartesia"}
+        
+        # Mock span with trace_id and span_id
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
 
         result = await stream.__anext__()
 
         assert result == mock_audio
-        mock_save_frames.assert_called_once()
+        mock_upload_audio.assert_called_once()
         mock_client.start_span.assert_called_once()
         assert len(stream._buffered_frames) == 0  # Buffer cleared
         assert stream._input_text == ""  # Text cleared
@@ -633,8 +650,7 @@ class TestWrappedChunkedStream:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.save_audio_frames")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.generate_audio_filename")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.upload_audio_frames")
     @patch("noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms")
     @patch("noveum_trace.integrations.livekit.livekit_tts.create_span_attributes")
     @pytest.mark.asyncio
@@ -642,8 +658,7 @@ class TestWrappedChunkedStream:
         self,
         mock_create_attrs,
         mock_calc_duration,
-        mock_gen_filename,
-        mock_save_frames,
+        mock_upload_audio,
         mock_get_client,
         mock_get_trace,
         tmp_path,
@@ -672,15 +687,21 @@ class TestWrappedChunkedStream:
 
         mock_get_trace.return_value = mock_trace
         mock_get_client.return_value = mock_client
-        mock_gen_filename.return_value = "tts_0001_123.wav"
+        mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 2500.0
         mock_create_attrs.return_value = {"tts.provider": "cartesia"}
+        
+        # Mock span with trace_id and span_id
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
 
         result = await stream.__anext__()
 
         assert result == mock_audio
         assert stream._span_created is True
-        mock_save_frames.assert_called_once()
+        mock_upload_audio.assert_called_once()
         mock_client.start_span.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
@@ -718,45 +739,6 @@ class TestWrappedChunkedStream:
 )
 class TestLiveKitSTTWrapperErrorHandling:
     """Test error handling in LiveKitSTTWrapper."""
-
-    @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_stt.save_audio_buffer")
-    @patch("noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms")
-    @pytest.mark.asyncio
-    async def test_recognize_impl_audio_save_fails(
-        self,
-        mock_calc_duration,
-        mock_save_buffer,
-        mock_get_client,
-        mock_get_trace,
-        mock_stt_provider,
-        mock_trace,
-        mock_client,
-        tmp_path,
-    ):
-        """Test _recognize_impl when audio save fails."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
-
-        mock_event = Mock()
-        mock_alternative = Mock()
-        mock_alternative.text = "Hello"
-        mock_alternative.confidence = 0.9
-        mock_event.alternatives = [mock_alternative]
-        mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
-
-        mock_save_buffer.side_effect = Exception("Save error")
-        mock_get_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
-        mock_calc_duration.return_value = 1000.0
-
-        # Should not raise exception
-        result = await wrapper.recognize([Mock()])
-
-        assert result == mock_event
 
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
@@ -802,63 +784,6 @@ class TestLiveKitSTTWrapperErrorHandling:
 )
 class TestWrappedSpeechStreamErrorHandling:
     """Test error handling in _WrappedSpeechStream."""
-
-    @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_stt.save_audio_frames")
-    @pytest.mark.asyncio
-    async def test_anext_audio_save_fails(
-        self,
-        mock_save_frames,
-        mock_get_client,
-        mock_get_trace,
-        tmp_path,
-        mock_trace,
-        mock_client,
-    ):
-        """Test __anext__ when audio save fails."""
-        from noveum_trace.integrations.livekit.livekit_stt import _WrappedSpeechStream
-
-        mock_speech_event_type = MagicMock()
-        mock_speech_event_type.FINAL_TRANSCRIPT = "FINAL_TRANSCRIPT"
-
-        with patch(
-            "noveum_trace.integrations.livekit.livekit_stt.SpeechEventType",
-            mock_speech_event_type,
-            create=True,
-        ):
-            mock_base_stream = AsyncMock()
-            mock_event = Mock()
-            mock_event.type = "FINAL_TRANSCRIPT"
-            mock_event.alternatives = []
-            mock_base_stream.__anext__ = AsyncMock(return_value=mock_event)
-
-            stream = _WrappedSpeechStream(
-                base_stream=mock_base_stream,
-                session_id="session_123",
-                job_context={},
-                provider="deepgram",
-                model="nova-2",
-                counter_ref=[0],
-                audio_dir=tmp_path,
-            )
-
-            stream._buffered_frames = [Mock()]
-
-            mock_save_frames.side_effect = Exception("Save error")
-            mock_get_trace.return_value = mock_trace
-            mock_get_client.return_value = mock_client
-
-            # Patch calculate_audio_duration_ms to avoid duration issues
-            with patch(
-                "noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms",
-                return_value=1000.0,
-            ):
-                # Should not raise exception
-                result = await stream.__anext__()
-
-            assert result == mock_event
 
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
@@ -962,58 +887,6 @@ class TestWrappedSpeechStreamErrorHandling:
 )
 class TestWrappedSynthesizeStreamErrorHandling:
     """Test error handling in _WrappedSynthesizeStream."""
-
-    @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.save_audio_frames")
-    @pytest.mark.asyncio
-    async def test_anext_audio_save_fails(
-        self,
-        mock_save_frames,
-        mock_get_client,
-        mock_get_trace,
-        tmp_path,
-        mock_trace,
-        mock_client,
-    ):
-        """Test __anext__ when audio save fails."""
-        from noveum_trace.integrations.livekit.livekit_tts import (
-            _WrappedSynthesizeStream,
-        )
-
-        mock_base_stream = AsyncMock()
-        mock_audio = Mock()
-        mock_audio.frame = Mock()
-        mock_audio.is_final = True
-        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
-
-        stream = _WrappedSynthesizeStream(
-            base_stream=mock_base_stream,
-            session_id="session_123",
-            job_context={},
-            provider="cartesia",
-            model="sonic",
-            counter_ref=[0],
-            audio_dir=tmp_path,
-        )
-
-        stream._input_text = "Hello"
-        stream._buffered_frames = [Mock()]
-
-        mock_save_frames.side_effect = Exception("Save error")
-        mock_get_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
-
-        # Patch calculate_audio_duration_ms to avoid duration issues
-        with patch(
-            "noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms",
-            return_value=1000.0,
-        ):
-            # Should not raise exception
-            result = await stream.__anext__()
-
-        assert result == mock_audio
 
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
@@ -1204,47 +1077,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
 )
 class TestWrappedChunkedStreamErrorHandling:
     """Test error handling in _WrappedChunkedStream."""
-
-    @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_tts.save_audio_frames")
-    @pytest.mark.asyncio
-    async def test_create_span_audio_save_fails(
-        self,
-        mock_save_frames,
-        mock_get_client,
-        mock_get_trace,
-        tmp_path,
-        mock_trace,
-        mock_client,
-    ):
-        """Test _create_span when audio save fails."""
-        from noveum_trace.integrations.livekit.livekit_tts import _WrappedChunkedStream
-
-        mock_base_stream = AsyncMock()
-        stream = _WrappedChunkedStream(
-            base_stream=mock_base_stream,
-            input_text="Hello",
-            session_id="session_123",
-            job_context={},
-            provider="cartesia",
-            model="sonic",
-            counter_ref=[0],
-            audio_dir=tmp_path,
-        )
-
-        # Create mock frame with duration attribute
-        mock_frame = Mock()
-        mock_frame.duration = 0.1
-        stream._buffered_frames = [mock_frame]
-
-        mock_save_frames.side_effect = Exception("Save error")
-        mock_get_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
-
-        # Should not raise exception
-        stream._create_span()
 
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")

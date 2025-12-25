@@ -8,6 +8,7 @@ operations, capturing audio files and metadata as span attributes.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -26,9 +27,7 @@ from noveum_trace.integrations.livekit.livekit_utils import (
     calculate_audio_duration_ms,
     create_span_attributes,
     ensure_audio_directory,
-    generate_audio_filename,
-    save_audio_buffer,
-    save_audio_frames,
+    upload_audio_frames,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,19 +153,6 @@ class LiveKitSTTWrapper:
         # Increment counter
         self._counter_ref[0] += 1
 
-        # Generate audio filename
-        audio_filename = generate_audio_filename("stt", self._counter_ref[0])
-        audio_path = self._audio_dir / audio_filename
-
-        # Save audio buffer
-        try:
-            save_audio_buffer(buffer, audio_path)
-        except Exception as e:  # noqa: S110 - broad exception for graceful degradation
-            # Log but don't fail if audio save fails
-            logger.warning(
-                f"Failed to save audio buffer to {audio_path}: {e}", exc_info=True
-            )
-
         # Call base STT (access to protected member is intentional for wrapping)
         event = await self._base_stt._recognize_impl(buffer, **kwargs)  # noqa: SLF001
 
@@ -180,6 +166,9 @@ class LiveKitSTTWrapper:
 
             try:
                 client = get_client()
+
+                # Generate audio UUID
+                audio_uuid = str(uuid.uuid4())
 
                 # Get transcript text and additional attributes
                 transcript = STT_TRANSCRIPT_DEFAULT_VALUE
@@ -237,14 +226,21 @@ class LiveKitSTTWrapper:
                     provider=self.provider,
                     model=self.model,
                     operation_type="stt",
-                    audio_file=audio_filename,
+                    audio_file=audio_uuid,
                     audio_duration_ms=duration_ms,
                     job_context=self._job_context,
                     **additional_attrs,
                 )
 
                 # Create and finish span
-                span = client.start_span(name="stt.recognize", attributes=attributes)
+                span = client.start_span(
+                    name="stt.recognize", attributes=attributes)
+
+                # Upload audio frames with explicit span context
+                upload_audio_frames(
+                    list(buffer), audio_uuid, 'stt', span.trace_id, span.span_id
+                )
+
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
 
@@ -351,22 +347,6 @@ class _WrappedSpeechStream:
             # Increment counter
             self._counter_ref[0] += 1
 
-            # Generate audio filename
-            audio_filename = generate_audio_filename("stt", self._counter_ref[0])
-            audio_path = self._audio_dir / audio_filename
-
-            # Save buffered audio
-            try:
-                if self._buffered_frames:
-                    save_audio_frames(self._buffered_frames, audio_path)
-            except (
-                Exception
-            ) as e:  # noqa: S110 - broad exception for graceful degradation
-                # Log but don't fail if audio save fails
-                logger.warning(
-                    f"Failed to save audio frames to {audio_path}: {e}", exc_info=True
-                )
-
             # Calculate duration
             duration_ms = calculate_audio_duration_ms(self._buffered_frames)
 
@@ -377,6 +357,9 @@ class _WrappedSpeechStream:
 
                 try:
                     client = get_client()
+
+                    # Generate audio UUID
+                    audio_uuid = str(uuid.uuid4())
 
                     # Get transcript text and additional attributes
                     transcript = STT_TRANSCRIPT_DEFAULT_VALUE
@@ -437,14 +420,21 @@ class _WrappedSpeechStream:
                         provider=self._provider,
                         model=self._model,
                         operation_type="stt",
-                        audio_file=audio_filename,
+                        audio_file=audio_uuid,
                         audio_duration_ms=duration_ms,
                         job_context=self._job_context,
                         **additional_attrs,
                     )
 
                     # Create and finish span
-                    span = client.start_span(name="stt.stream", attributes=attributes)
+                    span = client.start_span(
+                        name="stt.stream", attributes=attributes)
+
+                    # Upload audio frames with explicit span context
+                    upload_audio_frames(
+                        self._buffered_frames, audio_uuid, 'stt', span.trace_id, span.span_id
+                    )
+
                     span.set_status(SpanStatus.OK)
                     client.finish_span(span)
 
