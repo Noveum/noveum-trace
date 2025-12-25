@@ -187,7 +187,7 @@ class TestLiveKitSTTWrapper:
         mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 1500.0
         mock_create_attrs.return_value = {"stt.provider": "deepgram"}
-        
+
         # Mock span with trace_id and span_id
         mock_span = Mock()
         mock_span.trace_id = "trace-123"
@@ -596,7 +596,7 @@ class TestWrappedSynthesizeStream:
         mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 3000.0
         mock_create_attrs.return_value = {"tts.provider": "cartesia"}
-        
+
         # Mock span with trace_id and span_id
         mock_span = Mock()
         mock_span.trace_id = "trace-123"
@@ -690,7 +690,7 @@ class TestWrappedChunkedStream:
         mock_upload_audio.return_value = True
         mock_calc_duration.return_value = 2500.0
         mock_create_attrs.return_value = {"tts.provider": "cartesia"}
-        
+
         # Mock span with trace_id and span_id
         mock_span = Mock()
         mock_span.trace_id = "trace-123"

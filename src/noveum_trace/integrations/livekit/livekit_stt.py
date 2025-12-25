@@ -233,12 +233,11 @@ class LiveKitSTTWrapper:
                 )
 
                 # Create and finish span
-                span = client.start_span(
-                    name="stt.recognize", attributes=attributes)
+                span = client.start_span(name="stt.recognize", attributes=attributes)
 
                 # Upload audio frames with explicit span context
                 upload_audio_frames(
-                    list(buffer), audio_uuid, 'stt', span.trace_id, span.span_id
+                    list(buffer), audio_uuid, "stt", span.trace_id, span.span_id
                 )
 
                 span.set_status(SpanStatus.OK)
@@ -427,12 +426,15 @@ class _WrappedSpeechStream:
                     )
 
                     # Create and finish span
-                    span = client.start_span(
-                        name="stt.stream", attributes=attributes)
+                    span = client.start_span(name="stt.stream", attributes=attributes)
 
                     # Upload audio frames with explicit span context
                     upload_audio_frames(
-                        self._buffered_frames, audio_uuid, 'stt', span.trace_id, span.span_id
+                        self._buffered_frames,
+                        audio_uuid,
+                        "stt",
+                        span.trace_id,
+                        span.span_id,
                     )
 
                     span.set_status(SpanStatus.OK)

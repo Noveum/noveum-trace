@@ -35,14 +35,14 @@ class BatchProcessor:
 
     def __init__(
         self,
-        send_callback: Callable[[list[dict[str, Any]]], None],
+        send_callback: Callable[[dict[str, Any]], None],
         config: Optional["Config"] = None,
     ):
         """
         Initialize the batch processor.
 
         Args:
-            send_callback: Function to call when sending batches
+            send_callback: Function to call when sending batches (receives dict with 'type' and 'data')
             config: Optional configuration instance
         """
         self.config = config if config is not None else get_config()
@@ -56,8 +56,7 @@ class BatchProcessor:
         self._shutdown = False
 
         # Start background thread
-        self._thread = threading.Thread(
-            target=self._process_batches, daemon=True)
+        self._thread = threading.Thread(target=self._process_batches, daemon=True)
         self._thread.start()
 
         logger.info(
@@ -67,10 +66,8 @@ class BatchProcessor:
         if log_debug_enabled():
             logger.debug("🔧 Batch processor configuration:")
             logger.debug(f"    batch_size: {self.config.transport.batch_size}")
-            logger.debug(
-                f"    batch_timeout: {self.config.transport.batch_timeout}s")
-            logger.debug(
-                f"    max_queue_size: {self.config.transport.max_queue_size}")
+            logger.debug(f"    batch_timeout: {self.config.transport.batch_timeout}s")
+            logger.debug(f"    max_queue_size: {self.config.transport.max_queue_size}")
 
     def add_trace(self, trace_data: dict[str, Any]) -> None:
         """
@@ -113,7 +110,7 @@ class BatchProcessor:
             )
 
         # Mark as trace type
-        trace_data['_item_type'] = 'trace'
+        trace_data["_item_type"] = "trace"
 
         try:
             self._queue.put(trace_data, block=False)
@@ -154,20 +151,18 @@ class BatchProcessor:
             raise TransportError("Batch processor has been shutdown")
 
         # Mark as audio type
-        audio_data['_item_type'] = 'audio'
+        audio_data["_item_type"] = "audio"
 
         # Log audio addition
         audio_uuid = audio_data.get("audio_uuid", "unknown")
         trace_id = audio_data.get("trace_id", "unknown")
-        logger.info(
-            f"📥 ADDING AUDIO TO QUEUE: {audio_uuid} for trace {trace_id}")
+        logger.info(f"📥 ADDING AUDIO TO QUEUE: {audio_uuid} for trace {trace_id}")
 
         try:
             self._queue.put(audio_data, block=False)
             logger.info(f"✅ Successfully queued audio {audio_uuid}")
         except queue.Full as e:
-            log_error_always(
-                logger, f"Queue is full, dropping audio {audio_uuid}")
+            log_error_always(logger, f"Queue is full, dropping audio {audio_uuid}")
             raise TransportError("Audio queue is full") from e
 
     def flush(self, timeout: Optional[float] = None) -> None:
@@ -181,8 +176,7 @@ class BatchProcessor:
             logger.debug("Batch processor already shutdown, skipping flush")
             return
 
-        log_trace_flow(logger, "Starting batch processor flush",
-                       timeout=timeout)
+        log_trace_flow(logger, "Starting batch processor flush", timeout=timeout)
 
         # Send current batch
         with self._batch_lock:
@@ -218,8 +212,7 @@ class BatchProcessor:
 
         elapsed_time = time.time() - start_time
         try:
-            logger.info(
-                f"✅ Batch processor flush completed in {elapsed_time:.2f}s")
+            logger.info(f"✅ Batch processor flush completed in {elapsed_time:.2f}s")
         except (ValueError, OSError, RuntimeError, Exception):
             # Logger may be closed during shutdown
             pass
@@ -288,7 +281,8 @@ class BatchProcessor:
                     item_data = self._queue.get(timeout=0.5)
                     item_type = item_data.get("_item_type", "trace")
                     item_id = item_data.get("trace_id") or item_data.get(
-                        "audio_uuid", "unknown")
+                        "audio_uuid", "unknown"
+                    )
 
                     if log_debug_enabled():
                         log_trace_flow(
@@ -384,30 +378,32 @@ class BatchProcessor:
         self._batch.clear()
 
         # Split into audio and traces
-        audio_items = [item for item in batch_to_process if item.get(
-            '_item_type') == 'audio']
-        trace_items = [item for item in batch_to_process if item.get(
-            '_item_type') == 'trace']
+        audio_items = [
+            item for item in batch_to_process if item.get("_item_type") == "audio"
+        ]
+        trace_items = [
+            item for item in batch_to_process if item.get("_item_type") == "trace"
+        ]
 
         try:
             logger.info(
-                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(trace_items)} traces")
+                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(trace_items)} traces"
+            )
         except (ValueError, OSError, RuntimeError, Exception):
             pass
 
         # Send ALL audio first (individually)
         if audio_items:
             try:
-                logger.info(
-                    f"🎵 Sending {len(audio_items)} audio files first...")
+                logger.info(f"🎵 Sending {len(audio_items)} audio files first...")
             except (ValueError, OSError, RuntimeError, Exception):
                 pass
 
             for audio_item in audio_items:
                 # Remove internal marker before sending
-                audio_item.pop('_item_type', None)
+                audio_item.pop("_item_type", None)
                 try:
-                    self.send_callback({'type': 'audio', 'data': audio_item})
+                    self.send_callback({"type": "audio", "data": audio_item})
                 except Exception as e:
                     log_error_always(
                         logger,
@@ -425,7 +421,7 @@ class BatchProcessor:
 
             # Remove internal marker from traces
             for item in trace_items:
-                item.pop('_item_type', None)
+                item.pop("_item_type", None)
 
             if log_debug_enabled():
                 # Log trace IDs in the batch
@@ -435,7 +431,7 @@ class BatchProcessor:
                     logger.debug(f"    [{i+1}] {trace_name} (ID: {trace_id})")
 
             try:
-                self.send_callback({'type': 'traces', 'data': trace_items})
+                self.send_callback({"type": "traces", "data": trace_items})
                 try:
                     logger.info(
                         f"✅ Successfully sent batch of {len(trace_items)} traces via callback"

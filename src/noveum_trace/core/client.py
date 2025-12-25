@@ -256,8 +256,7 @@ class NoveumClient:
         if set_as_current:
             set_current_span(span)
 
-        logger.debug(
-            f"Started span: {span.span_id} in trace: {trace.trace_id}")
+        logger.debug(f"Started span: {span.span_id} in trace: {trace.trace_id}")
         return span
 
     def finish_span(

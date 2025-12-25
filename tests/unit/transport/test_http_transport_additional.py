@@ -186,7 +186,7 @@ class TestHttpTransportErrorHandling:
 
         # Should raise TransportError for authentication failure
         with pytest.raises(TransportError):
-            self.transport._send_batch({'type': 'traces', 'data': traces})
+            self.transport._send_batch({"type": "traces", "data": traces})
 
         # Verify error was logged
         mock_log_error.assert_called()
@@ -206,7 +206,7 @@ class TestHttpTransportErrorHandling:
 
         # Should raise TransportError for server error
         with pytest.raises(TransportError):
-            self.transport._send_batch({'type': 'traces', 'data': traces})
+            self.transport._send_batch({"type": "traces", "data": traces})
 
         # Verify error was logged
         mock_log_error.assert_called()
@@ -221,7 +221,7 @@ class TestHttpTransportErrorHandling:
 
         # Should raise TransportError for timeout
         with pytest.raises(TransportError):
-            self.transport._send_batch({'type': 'traces', 'data': traces})
+            self.transport._send_batch({"type": "traces", "data": traces})
 
         # Verify error was logged
         mock_log_error.assert_called()
@@ -258,7 +258,7 @@ class TestHttpTransportBatchExport:
         with patch(
             "noveum_trace.transport.http_transport.log_debug_enabled", return_value=True
         ):
-            self.transport._send_batch({'type': 'traces', 'data': traces})
+            self.transport._send_batch({"type": "traces", "data": traces})
 
         # Verify success log
         mock_logger.info.assert_called()
@@ -285,7 +285,7 @@ class TestHttpTransportBatchExport:
                 # Mock logger.level to avoid comparison issues
                 mock_logger.level = 10  # DEBUG level
 
-                self.transport._send_batch({'type': 'traces', 'data': traces})
+                self.transport._send_batch({"type": "traces", "data": traces})
 
                 # Verify sensitive data was masked in debug output
                 debug_calls = mock_logger.debug.call_args_list

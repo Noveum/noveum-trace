@@ -6,18 +6,16 @@ Tests the utility functions in livekit_utils.py, focusing on audio upload functi
 
 from unittest.mock import Mock, patch
 
-import pytest
-
 
 class TestUploadAudioFrames:
     """Test upload_audio_frames utility function."""
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms")
-    def test_successful_upload(
-        self, mock_calc_duration, mock_get_client
-    ):
+    @patch(
+        "noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms"
+    )
+    def test_successful_upload(self, mock_calc_duration, mock_get_client):
         """Test successful audio upload with all parameters."""
         from noveum_trace.integrations.livekit.livekit_utils import upload_audio_frames
 
@@ -31,8 +29,10 @@ class TestUploadAudioFrames:
         # Mock rtc.combine_audio_frames
         mock_combined = Mock()
         mock_combined.to_wav_bytes.return_value = b"fake_wav_data"
-        
-        with patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True) as mock_rtc:
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils.rtc", create=True
+        ) as mock_rtc:
             mock_rtc.combine_audio_frames.return_value = mock_combined
 
             # Mock client
@@ -116,8 +116,10 @@ class TestUploadAudioFrames:
         frames = [Mock()]
         mock_combined = Mock()
         mock_combined.to_wav_bytes.return_value = b"fake_wav_data"
-        
-        with patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True) as mock_rtc:
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils.rtc", create=True
+        ) as mock_rtc:
             mock_rtc.combine_audio_frames.return_value = mock_combined
 
             # No client available
@@ -135,10 +137,10 @@ class TestUploadAudioFrames:
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms")
-    def test_exception_handling(
-        self, mock_calc_duration, mock_get_client
-    ):
+    @patch(
+        "noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms"
+    )
+    def test_exception_handling(self, mock_calc_duration, mock_get_client):
         """Test exception handling during upload."""
         from noveum_trace.integrations.livekit.livekit_utils import upload_audio_frames
 
@@ -146,8 +148,10 @@ class TestUploadAudioFrames:
         frames = [Mock()]
         mock_combined = Mock()
         mock_combined.to_wav_bytes.return_value = b"fake_wav_data"
-        
-        with patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True) as mock_rtc:
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils.rtc", create=True
+        ) as mock_rtc:
             mock_rtc.combine_audio_frames.return_value = mock_combined
 
             # Mock client that raises exception
@@ -169,10 +173,10 @@ class TestUploadAudioFrames:
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms")
-    def test_metadata_formatting(
-        self, mock_calc_duration, mock_get_client
-    ):
+    @patch(
+        "noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms"
+    )
+    def test_metadata_formatting(self, mock_calc_duration, mock_get_client):
         """Test metadata is correctly formatted for different audio types."""
         from noveum_trace.integrations.livekit.livekit_utils import upload_audio_frames
 
@@ -180,8 +184,10 @@ class TestUploadAudioFrames:
         frames = [Mock()]
         mock_combined = Mock()
         mock_combined.to_wav_bytes.return_value = b"fake_wav_data"
-        
-        with patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True) as mock_rtc:
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils.rtc", create=True
+        ) as mock_rtc:
             mock_rtc.combine_audio_frames.return_value = mock_combined
 
             mock_client = Mock()
@@ -209,7 +215,9 @@ class TestUploadAudioFrames:
 
     @patch("noveum_trace.integrations.livekit.livekit_utils.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms")
+    @patch(
+        "noveum_trace.integrations.livekit.livekit_utils.calculate_audio_duration_ms"
+    )
     def test_trace_and_span_ids_passed_correctly(
         self, mock_calc_duration, mock_get_client
     ):
@@ -220,8 +228,10 @@ class TestUploadAudioFrames:
         frames = [Mock()]
         mock_combined = Mock()
         mock_combined.to_wav_bytes.return_value = b"fake_wav_data"
-        
-        with patch("noveum_trace.integrations.livekit.livekit_utils.rtc", create=True) as mock_rtc:
+
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_utils.rtc", create=True
+        ) as mock_rtc:
             mock_rtc.combine_audio_frames.return_value = mock_combined
 
             mock_client = Mock()

@@ -367,12 +367,15 @@ class _WrappedSynthesizeStream:
                     )
 
                     # Create and finish span
-                    span = client.start_span(
-                        name="tts.stream", attributes=attributes)
+                    span = client.start_span(name="tts.stream", attributes=attributes)
 
                     # Upload audio frames with explicit span context
                     upload_audio_frames(
-                        self._buffered_frames, audio_uuid, 'tts', span.trace_id, span.span_id
+                        self._buffered_frames,
+                        audio_uuid,
+                        "tts",
+                        span.trace_id,
+                        span.span_id,
                     )
 
                     span.set_status(SpanStatus.OK)
@@ -576,12 +579,15 @@ class _WrappedChunkedStream:
                 )
 
                 # Create and finish span
-                span = client.start_span(
-                    name="tts.synthesize", attributes=attributes)
+                span = client.start_span(name="tts.synthesize", attributes=attributes)
 
                 # Upload audio frames with explicit span context
                 upload_audio_frames(
-                    self._buffered_frames, audio_uuid, 'tts', span.trace_id, span.span_id
+                    self._buffered_frames,
+                    audio_uuid,
+                    "tts",
+                    span.trace_id,
+                    span.span_id,
                 )
 
                 span.set_status(SpanStatus.OK)

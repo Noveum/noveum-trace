@@ -24,8 +24,7 @@ except ImportError:
 import noveum_trace
 
 # Import context managers for tracing
-from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
-
+from noveum_trace import trace_agent_operation, trace_llm_call, trace_operation
 
 # Note: This example uses context managers for tracing instead of decorators.
 # All tracing is done using context managers as recommended in the README.

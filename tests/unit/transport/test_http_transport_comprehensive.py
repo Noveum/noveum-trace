@@ -912,7 +912,7 @@ class TestHttpTransportSendBatch:
 
             traces = [{"trace_id": "test-1"}, {"trace_id": "test-2"}]
 
-            transport._send_batch({'type': 'traces', 'data': traces})
+            transport._send_batch({"type": "traces", "data": traces})
 
             # Verify request was made
             transport.session.post.assert_called_once()
@@ -937,7 +937,7 @@ class TestHttpTransportSendBatch:
             traces = [{"trace_id": "test-1"}, {"trace_id": "test-2"}]
 
             # Should not raise any exception
-            transport._send_batch({'type': 'traces', 'data': traces})
+            transport._send_batch({"type": "traces", "data": traces})
 
             # Verify request was made
             transport.session.post.assert_called_once()
@@ -954,7 +954,7 @@ class TestHttpTransportSendBatch:
 
             transport.session.post = Mock()
 
-            transport._send_batch({'type': 'traces', 'data': []})
+            transport._send_batch({"type": "traces", "data": []})
 
             # Verify no request was made
             transport.session.post.assert_not_called()
@@ -978,7 +978,7 @@ class TestHttpTransportSendBatch:
 
             traces = [{"trace_id": "test-1"}]
 
-            transport._send_batch({'type': 'traces', 'data': traces})
+            transport._send_batch({"type": "traces", "data": traces})
 
             # Verify compression was called
             transport._compress_payload.assert_called_once()
@@ -999,7 +999,7 @@ class TestHttpTransportSendBatch:
             traces = [{"trace_id": "test-1"}]
 
             with pytest.raises(TransportError, match="Request timeout after 30.0s"):
-                transport._send_batch({'type': 'traces', 'data': traces})
+                transport._send_batch({"type": "traces", "data": traces})
 
     def test_send_batch_connection_error(self):
         """Test batch send with connection error."""
@@ -1016,7 +1016,7 @@ class TestHttpTransportSendBatch:
             traces = [{"trace_id": "test-1"}]
 
             with pytest.raises(TransportError, match="Connection error"):
-                transport._send_batch({'type': 'traces', 'data': traces})
+                transport._send_batch({"type": "traces", "data": traces})
 
     def test_send_batch_http_error(self):
         """Test batch send with HTTP error."""
@@ -1033,7 +1033,7 @@ class TestHttpTransportSendBatch:
             traces = [{"trace_id": "test-1"}]
 
             with pytest.raises(TransportError, match="HTTP error"):
-                transport._send_batch({'type': 'traces', 'data': traces})
+                transport._send_batch({"type": "traces", "data": traces})
 
     def test_send_batch_unexpected_error(self):
         """Test batch send with unexpected error."""
@@ -1048,7 +1048,7 @@ class TestHttpTransportSendBatch:
             traces = [{"trace_id": "test-1"}]
 
             with pytest.raises(TransportError, match="Unexpected error"):
-                transport._send_batch({'type': 'traces', 'data': traces})
+                transport._send_batch({"type": "traces", "data": traces})
 
     def test_send_batch_logs_debug_on_success(self, caplog):
         """Test send batch logs debug message on success."""
@@ -1070,7 +1070,7 @@ class TestHttpTransportSendBatch:
             # Set the logger level and caplog level
             caplog.set_level(logging.DEBUG)
             with caplog.at_level(logging.DEBUG):
-                transport._send_batch({'type': 'traces', 'data': traces})
+                transport._send_batch({"type": "traces", "data": traces})
 
             # Debug logging assertion temporarily disabled - see issue with SDK logging config
             # assert "Successfully sent batch of 2 traces" in caplog.text
