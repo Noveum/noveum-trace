@@ -11,8 +11,6 @@ import logging
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Callable, Optional, Union
 
-logger = logging.getLogger(__name__)
-
 from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
 from noveum_trace.decorators.base import _serialize_value
@@ -20,6 +18,8 @@ from noveum_trace.utils.llm_utils import (
     estimate_cost,
     extract_llm_metadata,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TraceContextManager:
