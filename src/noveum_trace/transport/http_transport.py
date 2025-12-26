@@ -314,7 +314,10 @@ class HttpTransport:
             metadata: Additional metadata (duration, format, etc.)
 
         Raises:
-            TransportError: If transport is shutdown or export fails
+            TransportError: If transport is shutdown
+
+        Note:
+            Export failures (e.g., queue full, missing audio_uuid) are logged but not raised.
         """
         if self._shutdown:
             log_error_always(
@@ -348,7 +351,7 @@ class HttpTransport:
                 audio_uuid=audio_uuid,
                 error=str(e),
             )
-            raise
+            # Exception swallowed - audio export fails silently with error log
 
     def flush(self, timeout: Optional[float] = None) -> None:
         """
@@ -867,15 +870,22 @@ class HttpTransport:
 
         Args:
             audio_item: Audio data with metadata
+
+        Raises:
+            TransportError: If audio_uuid is missing or upload fails
         """
         audio_uuid = audio_item.get("audio_uuid")
         if not audio_uuid:
+            audio_item_keys = list(audio_item.keys())
             log_error_always(
                 logger,
                 "Cannot send audio - missing audio_uuid, dropping audio file",
-                audio_item_keys=list(audio_item.keys()),
+                audio_item_keys=audio_item_keys,
             )
-            return
+            raise TransportError(
+                f"Cannot send audio - missing audio_uuid, dropping audio file. "
+                f"Available keys: {audio_item_keys}"
+            )
 
         trace_id = audio_item.get("trace_id")
         span_id = audio_item.get("span_id")

@@ -140,17 +140,21 @@ class BatchProcessor:
             audio_data: Audio data with metadata
 
         Raises:
-            TransportError: If processor is shutdown or queue is full
+            TransportError: If processor is shutdown, queue is full, or audio_uuid is missing
         """
         # Validate audio_uuid is present
         audio_uuid = audio_data.get("audio_uuid")
         if not audio_uuid:
+            audio_data_keys = list(audio_data.keys())
             log_error_always(
                 logger,
                 "Cannot add audio - missing audio_uuid, dropping audio file",
-                audio_data_keys=list(audio_data.keys()),
+                audio_data_keys=audio_data_keys,
             )
-            return
+            raise TransportError(
+                f"Cannot add audio - missing audio_uuid, dropping audio file. "
+                f"Available keys: {audio_data_keys}"
+            )
 
         if self._shutdown:
             log_error_always(
