@@ -142,11 +142,21 @@ class BatchProcessor:
         Raises:
             TransportError: If processor is shutdown or queue is full
         """
+        # Validate audio_uuid is present
+        audio_uuid = audio_data.get("audio_uuid")
+        if not audio_uuid:
+            log_error_always(
+                logger,
+                "Cannot add audio - missing audio_uuid, dropping audio file",
+                audio_data_keys=list(audio_data.keys()),
+            )
+            return
+
         if self._shutdown:
             log_error_always(
                 logger,
                 "Cannot add audio - batch processor has been shutdown",
-                audio_uuid=audio_data.get("audio_uuid", "unknown"),
+                audio_uuid=audio_uuid,
             )
             raise TransportError("Batch processor has been shutdown")
 
@@ -154,7 +164,6 @@ class BatchProcessor:
         audio_data["_item_type"] = "audio"
 
         # Log audio addition
-        audio_uuid = audio_data.get("audio_uuid", "unknown")
         trace_id = audio_data.get("trace_id", "unknown")
         logger.info(f"📥 ADDING AUDIO TO QUEUE: {audio_uuid} for trace {trace_id}")
 
@@ -280,8 +289,12 @@ class BatchProcessor:
                 try:
                     item_data = self._queue.get(timeout=0.5)
                     item_type = item_data.get("_item_type", "trace")
-                    item_id = item_data.get("trace_id") or item_data.get(
-                        "audio_uuid", "unknown"
+                    # Get appropriate ID based on item type
+                    # Note: audio_uuid validation happens in add_audio(), so it should always exist for audio items
+                    item_id = (
+                        item_data.get("trace_id")
+                        or item_data.get("audio_uuid")
+                        or "missing-id"
                     )
 
                     if log_debug_enabled():
@@ -402,14 +415,26 @@ class BatchProcessor:
             for audio_item in audio_items:
                 # Remove internal marker before sending
                 audio_item.pop("_item_type", None)
+
+                # Validate audio_uuid exists (should always exist due to add_audio validation)
+                audio_uuid = audio_item.get("audio_uuid")
+                if not audio_uuid:
+                    log_error_always(
+                        logger,
+                        "Skipping audio in batch - missing audio_uuid",
+                        audio_item_keys=list(audio_item.keys()),
+                    )
+                    continue
+
                 try:
                     self.send_callback({"type": "audio", "data": audio_item})
                 except Exception as e:
                     log_error_always(
                         logger,
-                        f"Failed to send audio {audio_item.get('audio_uuid')}",
+                        f"Failed to send audio {audio_uuid}",
                         exc_info=True,
                         error=str(e),
+                        audio_uuid=audio_uuid,
                     )
 
         # Then send traces (batched)

@@ -868,7 +868,15 @@ class HttpTransport:
         Args:
             audio_item: Audio data with metadata
         """
-        audio_uuid = audio_item.get("audio_uuid", "unknown")
+        audio_uuid = audio_item.get("audio_uuid")
+        if not audio_uuid:
+            log_error_always(
+                logger,
+                "Cannot send audio - missing audio_uuid, dropping audio file",
+                audio_item_keys=list(audio_item.keys()),
+            )
+            return
+
         trace_id = audio_item.get("trace_id")
         span_id = audio_item.get("span_id")
 
