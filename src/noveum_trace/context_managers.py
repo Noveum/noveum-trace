@@ -7,8 +7,11 @@ within functions without requiring decorators on the entire function.
 
 import functools
 import inspect
+import logging
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Callable, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
@@ -320,6 +323,54 @@ class LLMContextManager(TraceContextManager):
             # If extraction fails, silently continue
             # This ensures the context manager doesn't break user code
             pass
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        """Delegate set_attribute to underlying span."""
+        try:
+            if self.span:
+                self.span.set_attribute(key, value)
+        except Exception as e:
+            logger.debug("Failed to set attribute %s: %s", key, e, exc_info=True)
+
+    def set_attributes(self, attributes: dict[str, Any]) -> None:
+        """Delegate set_attributes to underlying span."""
+        try:
+            if self.span:
+                self.span.set_attributes(attributes)
+        except Exception as e:
+            logger.debug("Failed to set attributes: %s", e, exc_info=True)
+
+    def record_exception(
+        self, exception: Exception, capture_stack_trace: bool = True
+    ) -> None:
+        """Delegate record_exception to underlying span."""
+        try:
+            if self.span:
+                self.span.record_exception(
+                    exception, capture_stack_trace=capture_stack_trace
+                )
+        except Exception as e:
+            logger.debug("Failed to record exception: %s", e, exc_info=True)
+
+    def set_status(
+        self, status: Union[str, SpanStatus], message: Optional[str] = None
+    ) -> None:
+        """Delegate set_status to underlying span."""
+        try:
+            if self.span:
+                if isinstance(status, str):
+                    status = SpanStatus(status)
+                self.span.set_status(status, message)
+        except Exception as e:
+            logger.debug("Failed to set status %s: %s", status, e, exc_info=True)
+
+    def add_event(self, name: str, attributes: Optional[dict[str, Any]] = None) -> None:
+        """Delegate add_event to underlying span."""
+        try:
+            if self.span:
+                self.span.add_event(name, attributes)
+        except Exception as e:
+            logger.debug("Failed to add event %s: %s", name, e, exc_info=True)
 
 
 class AgentContextManager(TraceContextManager):
