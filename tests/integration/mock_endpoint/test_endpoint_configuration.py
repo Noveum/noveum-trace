@@ -129,7 +129,7 @@ class TestEndpointConfiguration:
 
                 # Test batch operation by calling _send_batch directly
                 traces = [{"trace_id": "test1"}, {"trace_id": "test2"}]
-                transport._send_batch(traces)
+                transport._send_batch({"type": "traces", "data": traces})
 
                 # Verify correct URL was called
                 expected_url = "http://localhost:8082/api/v1/v1/traces"

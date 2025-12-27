@@ -134,7 +134,7 @@ class TestHttpTransportCoverageFinal:
             {"trace_id": "trace-2", "name": "test-2", "spans": []},
         ]
 
-        transport._send_batch(traces)
+        transport._send_batch({"type": "traces", "data": traces})
         transport.session.post.assert_called_once()
 
     @patch("noveum_trace.utils.logging.log_debug_enabled", return_value=True)
@@ -152,7 +152,7 @@ class TestHttpTransportCoverageFinal:
         transport.session.post = Mock(return_value=mock_response)
 
         traces = [{"trace_id": "test"}]
-        transport._send_batch(traces)
+        transport._send_batch({"type": "traces", "data": traces})
 
     @patch("noveum_trace.utils.logging.log_debug_enabled", return_value=True)
     @patch("noveum_trace.transport.http_transport.BatchProcessor")

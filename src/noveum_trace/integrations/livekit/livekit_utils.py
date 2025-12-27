@@ -161,6 +161,80 @@ def calculate_audio_duration_ms(frames: list[Any]) -> float:
     return total_duration_sec * 1000.0
 
 
+def upload_audio_frames(
+    frames: list[Any],
+    audio_uuid: str,
+    audio_type: str,
+    trace_id: str,
+    span_id: str,
+) -> bool:
+    """
+    Upload audio frames to Noveum platform.
+
+    This utility function handles the complete audio upload workflow:
+    - Converts audio frames to WAV bytes
+    - Gets the current client
+    - Calculates audio duration
+    - Uploads audio with metadata
+
+    Args:
+        frames: List of rtc.AudioFrame objects
+        audio_uuid: Unique identifier for the audio file
+        audio_type: Type of audio ('stt' or 'tts')
+        trace_id: Trace ID to associate audio with
+        span_id: Span ID to associate audio with
+
+    Returns:
+        True if upload was successful, False otherwise
+    """
+    try:
+        if not LIVEKIT_AVAILABLE:
+            logger.debug("LiveKit not available, skipping audio upload")
+            return False
+
+        if not frames:
+            logger.debug("No frames to upload")
+            return False
+
+        # Convert frames to WAV bytes
+        combined = rtc.combine_audio_frames(frames)
+        audio_bytes = combined.to_wav_bytes()
+
+        # Get client
+        from noveum_trace import get_client
+
+        client = get_client()
+        if not client:
+            logger.info("No client available, skipping audio upload")
+            return False
+
+        # Calculate duration
+        duration_ms = calculate_audio_duration_ms(frames)
+
+        # Prepare metadata
+        metadata = {
+            "duration_ms": duration_ms,
+            "format": "wav",
+            "type": audio_type,
+        }
+
+        # Export audio (non-blocking, queued)
+        client.export_audio(
+            audio_data=audio_bytes,
+            trace_id=trace_id,
+            span_id=span_id,
+            audio_uuid=audio_uuid,
+            metadata=metadata,
+        )
+
+        logger.debug(f"Queued audio upload: {audio_uuid}")
+        return True
+
+    except Exception as e:  # noqa: S110 - broad exception for graceful degradation
+        logger.warning(f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
+        return False
+
+
 def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> Path:
     """
     Ensure audio storage directory exists for a session.

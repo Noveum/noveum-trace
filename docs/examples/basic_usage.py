@@ -23,7 +23,7 @@ except ImportError:
 
 # Import Noveum Trace SDK
 import noveum_trace
-from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
+from noveum_trace import trace_agent_operation, trace_llm_call, trace_operation
 
 
 def main() -> None:
