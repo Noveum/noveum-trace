@@ -467,6 +467,39 @@ class NoveumClient:
         except Exception as e:
             logger.error(f"Failed to export trace {trace.trace_id}: {e}")
 
+    def export_audio(
+        self,
+        audio_data: bytes,
+        trace_id: str,
+        span_id: str,
+        audio_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Export audio to the Noveum platform.
+
+        Args:
+            audio_data: Audio file bytes (WAV format)
+            trace_id: Associated trace ID
+            span_id: Associated span ID
+            audio_uuid: Unique identifier for this audio file
+            metadata: Additional metadata (duration, format, etc.)
+        """
+        if self._shutdown:
+            raise NoveumTraceError("Client has been shutdown")
+
+        try:
+            self.transport.export_audio(
+                audio_data=audio_data,
+                trace_id=trace_id,
+                span_id=span_id,
+                audio_uuid=audio_uuid,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.error(f"Failed to export audio {audio_uuid}: {e}")
+            # Don't raise - audio export failure shouldn't break tracing
+
     def _create_noop_trace(self, name: str) -> Trace:
         """
         Create a no-op trace for when tracing is disabled or sampled out.

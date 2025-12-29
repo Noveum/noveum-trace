@@ -295,6 +295,64 @@ class HttpTransport:
             )
             raise
 
+    def export_audio(
+        self,
+        audio_data: bytes,
+        trace_id: str,
+        span_id: str,
+        audio_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Export audio to the Noveum platform.
+
+        Args:
+            audio_data: Audio file bytes
+            trace_id: Associated trace ID
+            span_id: Associated span ID
+            audio_uuid: Unique identifier for this audio file
+            metadata: Additional metadata (duration, format, etc.)
+
+        Raises:
+            TransportError: If transport is shutdown
+
+        Note:
+            Export failures (e.g., queue full, missing audio_uuid) are logged but not raised.
+        """
+        if self._shutdown:
+            log_error_always(
+                logger,
+                f"Cannot export audio {audio_uuid} - transport has been shutdown",
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError("Transport has been shutdown")
+
+        logger.info(f"📤 EXPORTING AUDIO: {audio_uuid} for trace {trace_id}")
+
+        # Format audio for export
+        audio_item = {
+            "audio_data": audio_data,
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "audio_uuid": audio_uuid,
+            "metadata": metadata or {},
+            "timestamp": time.time(),
+        }
+
+        # Add to batch processor
+        try:
+            self.batch_processor.add_audio(audio_item)
+            logger.info(f"✅ Audio {audio_uuid} successfully queued for export")
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to queue audio {audio_uuid} for export",
+                exc_info=True,
+                audio_uuid=audio_uuid,
+                error=str(e),
+            )
+            # Exception swallowed - audio export fails silently with error log
+
     def flush(self, timeout: Optional[float] = None) -> None:
         """
         Flush all pending traces.
@@ -365,9 +423,8 @@ class HttpTransport:
         """Create and configure HTTP session."""
         session = requests.Session()
 
-        # Set headers
+        # Set headers (excluding Content-Type to allow proper multipart/form-data for file uploads)
         headers = {
-            "Content-Type": "application/json",
             "User-Agent": f"noveum-trace-sdk/{self._get_sdk_version()}",
         }
 
@@ -565,10 +622,11 @@ class HttpTransport:
         )
 
         try:
-            # Send request
+            # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
                 json=trace_data,
+                headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
 
@@ -625,7 +683,29 @@ class HttpTransport:
             )
             raise TransportError(f"HTTP request failed: {e}") from e
 
-    def _send_batch(self, traces: list[dict[str, Any]]) -> None:
+    def _send_batch(self, batch_item: dict[str, Any]) -> None:
+        """
+        Send audio or traces based on type.
+
+        Args:
+            batch_item: Dict with 'type' ('audio' or 'traces') and 'data'
+        """
+        item_type = batch_item.get("type")
+
+        if item_type == "audio":
+            # Send single audio file
+            audio_data = batch_item["data"]
+            self._send_single_audio(audio_data)
+
+        elif item_type == "traces":
+            # Send batch of traces (existing logic)
+            traces = batch_item["data"]
+            self._send_trace_batch(traces)
+
+        else:
+            logger.error(f"Unknown batch item type: {item_type}")
+
+    def _send_trace_batch(self, traces: list[dict[str, Any]]) -> None:
         """
         Send a batch of traces to the Noveum platform.
 
@@ -675,10 +755,11 @@ class HttpTransport:
                 )
 
         try:
-            # Send request
+            # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
                 json=payload,
+                headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
 
@@ -782,6 +863,89 @@ class HttpTransport:
                 trace_count=len(traces),
             )
             raise TransportError(f"Unexpected error: {e}") from e
+
+    def _send_single_audio(self, audio_item: dict[str, Any]) -> None:
+        """
+        Send a single audio file to the Noveum platform.
+
+        Args:
+            audio_item: Audio data with metadata
+
+        Raises:
+            TransportError: If audio_uuid is missing or upload fails
+        """
+        audio_uuid = audio_item.get("audio_uuid")
+        if not audio_uuid:
+            audio_item_keys = list(audio_item.keys())
+            log_error_always(
+                logger,
+                "Cannot send audio - missing audio_uuid, dropping audio file",
+                audio_item_keys=audio_item_keys,
+            )
+            raise TransportError(
+                f"Cannot send audio - missing audio_uuid, dropping audio file. "
+                f"Available keys: {audio_item_keys}"
+            )
+
+        trace_id = audio_item.get("trace_id")
+        span_id = audio_item.get("span_id")
+
+        url = self._build_api_url("/v1/audio")
+
+        logger.info(f"🚀 SENDING AUDIO: {audio_uuid} to {url}")
+
+        try:
+            # Prepare multipart form data
+            files = {
+                "audio": (f"{audio_uuid}.wav", audio_item["audio_data"], "audio/wav")
+            }
+
+            data = {
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "audio_uuid": audio_uuid,
+                "timestamp": audio_item.get("timestamp"),
+                **audio_item.get("metadata", {}),
+            }
+
+            # Send request
+            response = self.session.post(
+                url,
+                files=files,
+                data=data,
+                timeout=self.config.transport.timeout,
+            )
+
+            # Log response
+            logger.info(f"📡 AUDIO RESPONSE: Status {response.status_code}")
+
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ Successfully sent audio {audio_uuid}")
+            else:
+                log_error_always(
+                    logger,
+                    f"Failed to send audio {audio_uuid}: {response.status_code}",
+                    status=response.status_code,
+                    audio_uuid=audio_uuid,
+                )
+                response.raise_for_status()
+
+        except requests.exceptions.Timeout as e:
+            log_error_always(
+                logger,
+                f"Audio upload timeout for {audio_uuid}",
+                exc_info=True,
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError(f"Audio upload timeout: {e}") from e
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to send audio {audio_uuid}: {e}",
+                exc_info=True,
+                audio_uuid=audio_uuid,
+            )
+            raise TransportError(f"Audio upload failed: {e}") from e
 
     def _compress_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
