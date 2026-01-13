@@ -35,7 +35,6 @@ Environment Variables:
 import asyncio
 import os
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Optional
@@ -370,11 +369,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     This sets up STT/TTS with tracing and handles the conversation.
     """
-    # Extract job context (with timing to show it's fast)
-    start_time = time.perf_counter()
     job_context = await extract_job_context(ctx)
-    elapsed_ms = (time.perf_counter() - start_time) * 1000
-    print(f"[Performance] extract_job_context took {elapsed_ms:.2f}ms")
 
     session_id = ctx.job.id
 
