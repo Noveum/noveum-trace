@@ -106,8 +106,7 @@ class Order:
         if item.lower() in MENU:
             for _ in range(quantity):
                 self.items.append(
-                    {"name": item.lower(),
-                     "price": MENU[item.lower()]["price"]}
+                    {"name": item.lower(), "price": MENU[item.lower()]["price"]}
                 )
             return True
         return False
@@ -177,8 +176,7 @@ def create_system_prompt(order: Order) -> str:
     # Filter out "coke" from menu display since it's the same as "drink"
     menu_display = {k: v for k, v in MENU.items() if k != "coke"}
     menu_text = "\n".join(
-        [f"- {name}: ${info['price']:.2f}" for name,
-            info in menu_display.items()]
+        [f"- {name}: ${info['price']:.2f}" for name, info in menu_display.items()]
     )
     menu_text += "\n- coke: $1.99 (same as drink)"
 
@@ -334,12 +332,10 @@ class DriveThruAgentText:
 
         # Replace placeholder with actual total
         if "${:.2f}" in response:
-            response = response.replace(
-                "${:.2f}", f"${self.order.get_total():.2f}")
+            response = response.replace("${:.2f}", f"${self.order.get_total():.2f}")
 
         # Add to conversation history
-        self.conversation_history.append(
-            {"role": "agent", "content": response})
+        self.conversation_history.append({"role": "agent", "content": response})
 
         return response
 
