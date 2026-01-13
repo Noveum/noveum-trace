@@ -78,26 +78,36 @@ Solution: The LLM is aware of tools, callback handler can detect them!
 """
 
 import os
-from typing import Annotated, Literal, Optional, Type, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from dotenv import load_dotenv
 
 # Import from langchain_classic for traditional AgentExecutor patterns
 # (LangChain 1.x moved old agents to langchain_classic package)
 try:
-    from langchain_classic.agents import AgentExecutor, create_openai_functions_agent, create_react_agent
-    from langchain_classic.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+    from langchain_classic.agents import (
+        AgentExecutor,
+        create_openai_functions_agent,
+    )
+    from langchain_classic.prompts import (
+        ChatPromptTemplate,
+        MessagesPlaceholder,
+    )
 except ImportError:
     # Fallback for older LangChain versions (0.x)
-    from langchain.agents import AgentExecutor, create_openai_functions_agent, create_react_agent
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+    from langchain.agents import (
+        AgentExecutor,
+        create_openai_functions_agent,
+    )
+    from langchain.prompts import (
+        ChatPromptTemplate,
+        MessagesPlaceholder,
+    )
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, create_react_agent
 from pydantic import BaseModel, Field
 
 import noveum_trace
@@ -169,8 +179,9 @@ class WeatherInput(BaseModel):
     """Input schema for weather tool."""
 
     location: str = Field(description="City name or location")
-    unit: str = Field(default="celsius",
-                      description="Temperature unit (celsius or fahrenheit)")
+    unit: str = Field(
+        default="celsius", description="Temperature unit (celsius or fahrenheit)"
+    )
 
 
 class WeatherTool(BaseTool):
@@ -178,7 +189,7 @@ class WeatherTool(BaseTool):
 
     name: str = "weather_tool"
     description: str = "Get current weather for a location"
-    args_schema: Type[BaseModel] = WeatherInput
+    args_schema: type[BaseModel] = WeatherInput
 
     def _run(self, location: str, unit: str = "celsius") -> str:
         """Get weather for a location."""
@@ -229,19 +240,20 @@ def pattern1_openai_functions_agent():
     # Create OpenAI Functions agent
     agent = create_openai_functions_agent(llm, TOOLS, prompt)
     agent_executor = AgentExecutor(
-        agent=agent, tools=TOOLS, verbose=True, max_iterations=3)
+        agent=agent, tools=TOOLS, verbose=True, max_iterations=3
+    )
 
     # Initialize callback handler
     handler = NoveumTraceCallbackHandler()
 
     # Execute agent - tools will be auto-detected from invocation_params['functions']
-    print(f"\n🤖 Running agent with question: 'What's the weather in Paris?'")
+    print("\n🤖 Running agent with question: 'What's the weather in Paris?'")
     result = agent_executor.invoke(
         {"input": "What's the weather in Paris?"},
         config={
             "callbacks": [handler],
-            "metadata": {"noveum": {"name": "pattern1_openai_functions"}}
-        }
+            "metadata": {"noveum": {"name": "pattern1_openai_functions"}},
+        },
     )
 
     print(f"\n✅ Result: {result['output']}")
@@ -249,7 +261,8 @@ def pattern1_openai_functions_agent():
     print("   • Tools auto-detected from invocation_params['functions']")
     print("   • Check LLM spans: llm.available_tools.count = 3")
     print(
-        "   • Check LLM spans: llm.available_tools.names = ['web_search', 'calculator', 'weather_tool']")
+        "   • Check LLM spans: llm.available_tools.names = ['web_search', 'calculator', 'weather_tool']"
+    )
 
 
 # =============================================================================
@@ -287,13 +300,14 @@ def pattern2_manual_injection():
 
     agent = create_openai_functions_agent(llm, TOOLS, prompt)
     agent_executor = AgentExecutor(
-        agent=agent, tools=TOOLS, verbose=True, max_iterations=3)
+        agent=agent, tools=TOOLS, verbose=True, max_iterations=3
+    )
 
     # Initialize callback handler
     handler = NoveumTraceCallbackHandler()
 
     # Execute with explicit tool injection
-    print(f"\n🤖 Running agent with question: 'Search for Python tutorials'")
+    print("\n🤖 Running agent with question: 'Search for Python tutorials'")
     result = agent_executor.invoke(
         {"input": "Search for Python tutorials"},
         config={
@@ -370,7 +384,8 @@ def pattern3_langgraph_custom_stategraph():
 
             if hasattr(last_message, "tool_calls") and last_message.tool_calls:
                 print(
-                    f"  🔧 Tool calls requested: {[tc['name'] for tc in last_message.tool_calls]}")
+                    f"  🔧 Tool calls requested: {[tc['name'] for tc in last_message.tool_calls]}"
+                )
                 return "tools"
 
             print("  ✅ No more tool calls needed")
@@ -381,8 +396,9 @@ def pattern3_langgraph_custom_stategraph():
         workflow.add_node("agent", agent_node)
         workflow.add_node("tools", ToolNode([web_search, calculator]))
         workflow.set_entry_point("agent")
-        workflow.add_conditional_edges("agent", should_continue, {
-                                       "tools": "tools", "end": END})
+        workflow.add_conditional_edges(
+            "agent", should_continue, {"tools": "tools", "end": END}
+        )
         workflow.add_edge("tools", "agent")
 
         app = workflow.compile()
@@ -391,23 +407,28 @@ def pattern3_langgraph_custom_stategraph():
         handler = NoveumTraceCallbackHandler()
 
         # Execute
-        print(f"\n🤖 Running LangGraph agent with question: 'What is 25 * 4?'")
+        print("\n🤖 Running LangGraph agent with question: 'What is 25 * 4?'")
         result = app.invoke(
-            {"messages": [HumanMessage(
-                content="What is 25 * 4?")], "iteration_count": 0, "max_iterations": 5},
+            {
+                "messages": [HumanMessage(content="What is 25 * 4?")],
+                "iteration_count": 0,
+                "max_iterations": 5,
+            },
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": "pattern3_langgraph_stategraph"}}
+                "metadata": {"noveum": {"name": "pattern3_langgraph_stategraph"}},
             },
         )
 
         final_message = result["messages"][-1]
         print(
-            f"\n✅ Result: {final_message.content if hasattr(final_message, 'content') else final_message}")
+            f"\n✅ Result: {final_message.content if hasattr(final_message, 'content') else final_message}"
+        )
         print("\n📊 Trace Info:")
         print("   • Tools auto-detected from llm.bind_tools()")
         print(
-            "   • Extracted via kwargs['invocation_params']['tools'] in on_llm_start()")
+            "   • Extracted via kwargs['invocation_params']['tools'] in on_llm_start()"
+        )
         print("   • Full custom agent loop with StateGraph")
 
     except ImportError:
@@ -449,17 +470,20 @@ def pattern4_langgraph_react_agent():
         handler = NoveumTraceCallbackHandler()
 
         # Execute
-        print(f"\n🤖 Running ReAct agent with question: 'Search for LangGraph'")
+        print("\n🤖 Running ReAct agent with question: 'Search for LangGraph'")
         result = agent.invoke(
             {"messages": [HumanMessage(content="Search for LangGraph")]},
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": "pattern4_langgraph_react"}}
-            }
+                "metadata": {"noveum": {"name": "pattern4_langgraph_react"}},
+            },
         )
 
-        final_messages = [msg for msg in result["messages"]
-                          if isinstance(msg, AIMessage) and msg.content]
+        final_messages = [
+            msg
+            for msg in result["messages"]
+            if isinstance(msg, AIMessage) and msg.content
+        ]
         if final_messages:
             print(f"\n✅ Result: {final_messages[-1].content}")
 
@@ -528,19 +552,18 @@ def pattern5_multinode_different_tools():
                 "metadata": {
                     "noveum": {
                         "name": "researcher_node",
-                        "available_tools": [web_search]  # ✅ Only web_search
+                        "available_tools": [web_search],  # ✅ Only web_search
                     }
-                }
-            }
+                },
+            },
         )
 
-        new_results = state.get("results", []) + \
-            [f"Researcher: {response.content}"]
+        new_results = state.get("results", []) + [f"Researcher: {response.content}"]
         new_visited = state.get("visited_specialists", []) + ["researcher"]
         return {
             "results": new_results,
             "visited_specialists": new_visited,
-            "current_specialist": "continue"  # Signal to continue routing
+            "current_specialist": "continue",  # Signal to continue routing
         }
 
     def calculator_node(state: MultiNodeState) -> MultiNodeState:
@@ -555,19 +578,18 @@ def pattern5_multinode_different_tools():
                 "metadata": {
                     "noveum": {
                         "name": "calculator_node",
-                        "available_tools": [calculator]  # ✅ Only calculator
+                        "available_tools": [calculator],  # ✅ Only calculator
                     }
-                }
-            }
+                },
+            },
         )
 
-        new_results = state.get("results", []) + \
-            [f"Calculator: {response.content}"]
+        new_results = state.get("results", []) + [f"Calculator: {response.content}"]
         new_visited = state.get("visited_specialists", []) + ["calculator"]
         return {
             "results": new_results,
             "visited_specialists": new_visited,
-            "current_specialist": "continue"
+            "current_specialist": "continue",
         }
 
     def weather_node(state: MultiNodeState) -> MultiNodeState:
@@ -583,19 +605,18 @@ def pattern5_multinode_different_tools():
                     "noveum": {
                         "name": "weather_node",
                         # ✅ Only weather_tool
-                        "available_tools": [weather_tool]
+                        "available_tools": [weather_tool],
                     }
-                }
-            }
+                },
+            },
         )
 
-        new_results = state.get("results", []) + \
-            [f"Weather: {response.content}"]
+        new_results = state.get("results", []) + [f"Weather: {response.content}"]
         new_visited = state.get("visited_specialists", []) + ["weather"]
         return {
             "results": new_results,
             "visited_specialists": new_visited,
-            "current_specialist": "continue"
+            "current_specialist": "continue",
         }
 
     def router_node(state: MultiNodeState) -> MultiNodeState:
@@ -605,8 +626,10 @@ def pattern5_multinode_different_tools():
 
         # Determine which specialists we need
         needs_weather = "weather" in query or "temperature" in query
-        needs_calc = any(word in query for word in [
-                         "calculate", "multiply", "add", "subtract", "*", "+", "math"])
+        needs_calc = any(
+            word in query
+            for word in ["calculate", "multiply", "add", "subtract", "*", "+", "math"]
+        )
         needs_research = "search" in query or "find" in query or "python" in query
 
         # Find next specialist to visit
@@ -623,8 +646,7 @@ def pattern5_multinode_different_tools():
             else:
                 next_specialist = "done"
 
-        print(
-            f"\n🎯 Router: Directing to '{next_specialist}' (visited: {visited})")
+        print(f"\n🎯 Router: Directing to '{next_specialist}' (visited: {visited})")
         return {"current_specialist": next_specialist}
 
     def should_continue(state: MultiNodeState) -> str:
@@ -654,8 +676,8 @@ def pattern5_multinode_different_tools():
             "researcher": "researcher",
             "calculator": "calculator",
             "weather": "weather",
-            "done": END
-        }
+            "done": END,
+        },
     )
 
     # All specialists loop back to router for potential next step
@@ -681,12 +703,12 @@ def pattern5_multinode_different_tools():
             {"input": query, "results": [], "visited_specialists": []},
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": f"pattern5_multinode"}}
-            }
+                "metadata": {"noveum": {"name": "pattern5_multinode"}},
+            },
         )
 
         print(f"\n✅ Visited specialists: {result['visited_specialists']}")
-        for res in result['results']:
+        for res in result["results"]:
             print(f"   • {res}")
 
     print("\n📊 Trace Info:")
@@ -753,8 +775,7 @@ def main():
         print("   • Code: metadata={'noveum': {'available_tools': TOOLS}}")
 
         print("\n✅ AUTO-DETECTION WORKS:")
-        print(
-            "   • Pattern 1: OpenAI Functions Agent (invocation_params['functions'])")
+        print("   • Pattern 1: OpenAI Functions Agent (invocation_params['functions'])")
         print("   • Pattern 3: LangGraph Custom StateGraph (llm.bind_tools)")
         print("   • Pattern 4: LangGraph create_react_agent (llm.bind_tools)")
 
@@ -764,9 +785,11 @@ def main():
 
         print("\n📚 HOW IT WORKS:")
         print(
-            "   1. llm.bind_tools() → tools in invocation_params['tools'] → on_llm_start() detects")
+            "   1. llm.bind_tools() → tools in invocation_params['tools'] → on_llm_start() detects"
+        )
         print(
-            "   2. OpenAI Functions → invocation_params['functions'] → on_llm_start() detects")
+            "   2. OpenAI Functions → invocation_params['functions'] → on_llm_start() detects"
+        )
         print("   3. metadata.noveum.available_tools → always works (priority 1)")
 
         print("\n❌ WHAT DOESN'T WORK:")

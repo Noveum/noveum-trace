@@ -470,8 +470,7 @@ def extract_agent_capabilities(serialized: dict[str, Any]) -> str:
                     tool_types.add("api_calls")
                 else:
                     tool_types.add(
-                        tool.get("name", "other") if tool.get(
-                            "name") else "other"
+                        tool.get("name", "other") if tool.get("name") else "other"
                     )
 
         if tool_types:
@@ -843,7 +842,11 @@ def _tool_to_dict(tool: Any) -> dict[str, Any]:
             tool_data = tool.dict()
 
         # Strategy 2: OpenAI function calling format (from invocation_params)
-        elif isinstance(tool, dict) and tool.get("type") == "function" and "function" in tool:
+        elif (
+            isinstance(tool, dict)
+            and tool.get("type") == "function"
+            and "function" in tool
+        ):
             tool_data = tool["function"]
 
         # Strategy 3: Convert to dict
@@ -858,7 +861,9 @@ def _tool_to_dict(tool: Any) -> dict[str, Any]:
     return {
         "name": tool_data.get("name", "unknown"),
         "description": tool_data.get("description", "No description"),
-        "args_schema": tool_data.get("args_schema") or tool_data.get("parameters") or tool_data.get("args")
+        "args_schema": tool_data.get("args_schema")
+        or tool_data.get("parameters")
+        or tool_data.get("args"),
     }
 
 
@@ -895,7 +900,8 @@ def _convert_tools_to_dict_list(tools: Any) -> list[dict[str, Any]]:
                     logger.debug(f"✅ Added tool: {tool_dict['name']}")
                 else:
                     logger.debug(
-                        f"❌ Skipped tool with invalid name: {tool_dict.get('name')}")
+                        f"❌ Skipped tool with invalid name: {tool_dict.get('name')}"
+                    )
 
             except Exception as e:
                 logger.debug(f"Error converting tool to dict: {e}")

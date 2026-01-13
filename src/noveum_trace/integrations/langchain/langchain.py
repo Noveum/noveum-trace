@@ -22,7 +22,6 @@ from langchain_core.callbacks import (
 )
 from langchain_core.documents import Document
 from langchain_core.outputs import LLMResult
-from langchain_core.tools import BaseTool
 
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.langchain.langchain_utils import (
@@ -103,7 +102,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
         # Track available tools for each agent run
         # Maps run_id -> list of tool dicts with schema info
-        self._run_tools: "dict[Union[UUID, str], list[dict[str, Any]]]" = {}  # noqa: UP037, F821
+        self._run_tools: dict[Union[UUID, str], list[dict[str, Any]]] = (
+            {}
+        )  # noqa: UP037, F821
         self._run_tools_lock = threading.Lock()
 
         # Track if we're managing a trace lifecycle
@@ -305,7 +306,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "gemini/",
                 ]:
                     if model_str.startswith(prefix):
-                        model_str = model_str[len(prefix):]
+                        model_str = model_str[len(prefix) :]
                 return model_str
 
         # Fallback to provider name from id path
@@ -372,8 +373,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 from noveum_trace.utils.llm_utils import MODEL_REGISTRY
 
                 # Get all unique providers from the registry dynamically
-                valid_providers = {
-                    info.provider for info in MODEL_REGISTRY.values()}
+                valid_providers = {info.provider for info in MODEL_REGISTRY.values()}
 
                 # Check id path elements against valid providers from registry
                 for path_element in id_path:
@@ -747,14 +747,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 if parent_span:
                     # Get the trace that this parent span belongs to
                     parent_trace = (
-                        parent_span.trace if hasattr(
-                            parent_span, "trace") else None
+                        parent_span.trace if hasattr(parent_span, "trace") else None
                     )
 
                 # If we couldn't get trace from span, try looking up parent's root trace
                 if not parent_trace:
-                    parent_root_run_id = self._find_root_run_id(
-                        parent_run_id, None)
+                    parent_root_run_id = self._find_root_run_id(parent_run_id, None)
                     parent_trace = self._get_root_trace(parent_root_run_id)
 
             if parent_trace:
@@ -1002,8 +1000,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span_name = custom_name if custom_name else operation_name
 
             # Resolve parent span ID based on mode
-            parent_span_id = self._resolve_parent_span_id(
-                parent_run_id, parent_name)
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
             trace, should_manage = self._get_or_create_trace_context(
@@ -1023,8 +1020,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 if "kwargs" not in serialized_with_model:
                     serialized_with_model["kwargs"] = {}
                 serialized_with_model["kwargs"]["model"] = model_from_kwargs
-                extracted_model_name = self._extract_model_name(
-                    serialized_with_model)
+                extracted_model_name = self._extract_model_name(serialized_with_model)
             else:
                 extracted_model_name = self._extract_model_name(serialized)
 
@@ -1065,12 +1061,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 if isinstance(temperature, (int, float)) and not isinstance(
                     temperature, bool
                 ):
-                    span_attributes["llm.input.temperature"] = float(
-                        temperature)
+                    span_attributes["llm.input.temperature"] = float(temperature)
                 elif isinstance(temperature, str):
                     try:
-                        span_attributes["llm.input.temperature"] = float(
-                            temperature)
+                        span_attributes["llm.input.temperature"] = float(temperature)
                     except ValueError:
                         span_attributes["llm.input.temperature"] = temperature
                 else:
@@ -1085,10 +1079,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 invocation_params = kwargs.get("invocation_params", {})
                 # Check both 'tools' (bind_tools) and 'functions' (OpenAI Functions Agent)
                 tools_in_params = invocation_params.get(
-                    "tools") or invocation_params.get("functions", [])
+                    "tools"
+                ) or invocation_params.get("functions", [])
 
                 logger.debug(
-                    f"🔍 Checking for tools in invocation_params: {len(tools_in_params) if tools_in_params else 0} tools found")
+                    f"🔍 Checking for tools in invocation_params: {len(tools_in_params) if tools_in_params else 0} tools found"
+                )
 
                 if tools_in_params:
                     # Convert tools from invocation_params to our standard format
@@ -1096,11 +1092,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         _convert_tools_to_dict_list,
                     )
 
-                    converted_tools = _convert_tools_to_dict_list(
-                        tools_in_params)
+                    converted_tools = _convert_tools_to_dict_list(tools_in_params)
 
                     logger.debug(
-                        f"🔧 Converted {len(converted_tools) if converted_tools else 0} tools")
+                        f"🔧 Converted {len(converted_tools) if converted_tools else 0} tools"
+                    )
 
                     if converted_tools:
                         # Store tools with appropriate run_id for later retrieval
@@ -1113,13 +1109,15 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
                         # Add tool tracking attributes to the LLM span so they're visible in traces
                         span_attributes["llm.available_tools.count"] = len(
-                            converted_tools)
+                            converted_tools
+                        )
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
 
                         logger.debug(
-                            f"✅ Added tool attributes to span: count={len(converted_tools)}, names={[t['name'] for t in converted_tools]}")
+                            f"✅ Added tool attributes to span: count={len(converted_tools)}, names={[t['name'] for t in converted_tools]}"
+                        )
 
                         # If LLM is inside an agent, also update parent span with tool info
                         # This is critical for LangGraph agents where serialized=None in on_chain_start
@@ -1128,13 +1126,20 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                             parent_span = self._get_run(parent_run_id)
                             if parent_span:
                                 try:
-                                    parent_span.set_attributes({
-                                        "agent.available_tools.count": len(converted_tools),
-                                        "agent.available_tools.names": [t["name"] for t in converted_tools]
-                                    })
+                                    parent_span.set_attributes(
+                                        {
+                                            "agent.available_tools.count": len(
+                                                converted_tools
+                                            ),
+                                            "agent.available_tools.names": [
+                                                t["name"] for t in converted_tools
+                                            ],
+                                        }
+                                    )
                                 except Exception as e:
                                     logger.debug(
-                                        f"Could not update parent span with tools: {e}")
+                                        f"Could not update parent span with tools: {e}"
+                                    )
 
             # Create span (either in new trace or existing trace)
             if not self._ensure_client():
@@ -1184,8 +1189,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             end_time = datetime.now(timezone.utc)
             latency_ms = None
             if getattr(span, "start_time", None) is not None:
-                latency_ms = (
-                    end_time - span.start_time).total_seconds() * 1000
+                latency_ms = (end_time - span.start_time).total_seconds() * 1000
 
             if hasattr(response, "generations") and response.generations:
                 generations = [
@@ -1345,8 +1349,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span_name = custom_name if custom_name else operation_name
 
             # Resolve parent span ID based on mode
-            parent_span_id = self._resolve_parent_span_id(
-                parent_run_id, parent_name)
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
             trace, should_manage = self._get_or_create_trace_context(
@@ -1357,8 +1360,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             attributes = {
                 "langchain.run_id": str(run_id),
                 "chain.name": (
-                    serialized.get(
-                        "name", "unknown") if serialized else "unknown"
+                    serialized.get("name", "unknown") if serialized else "unknown"
                 ),
                 "chain.operation": "execution",
                 **{
@@ -1404,8 +1406,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 self._set_run_tools(run_id, available_tools)
 
                 # Add tool tracking attributes to span
-                attributes["agent.available_tools.count"] = len(
-                    available_tools)
+                attributes["agent.available_tools.count"] = len(available_tools)
                 attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
                 ]
@@ -1616,8 +1617,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
         except Exception as e:
-            logger.error(
-                f"Error handling routing decision: {e}", exc_info=True)
+            logger.error(f"Error handling routing decision: {e}", exc_info=True)
 
     # Tool Events
     def on_tool_start(
@@ -1644,8 +1644,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
 
-            tool_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual function name from serialized data
             func_name = extract_tool_function_name(serialized)
@@ -1654,8 +1653,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span_name = custom_name if custom_name else f"tool:{tool_name}:{func_name}"
 
             # Resolve parent span ID based on mode
-            parent_span_id = self._resolve_parent_span_id(
-                parent_run_id, parent_name)
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get available tools from parent agent run
             available_tools = []
@@ -1688,14 +1686,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         for index, input_dict in enumerate(inputs):
                             for k, v in input_dict.items():
                                 input_attrs[f"tool.input.{index}.{k}"] = v
-                        input_attrs["tool.input.argument_count"] = str(
-                            len(inputs))
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
                     else:
                         # Case 3: List but not all elements are dicts
                         for index, item in enumerate(inputs):
                             input_attrs[f"tool.input.{index}"] = str(item)
-                        input_attrs["tool.input.argument_count"] = str(
-                            len(inputs))
+                        input_attrs["tool.input.argument_count"] = str(len(inputs))
 
                 elif isinstance(inputs, tuple):
                     # Case 4: Tuple input (treat like list case 3)
@@ -1725,12 +1721,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     if hasattr(tool_obj, "func"):
                         # Tool has a func attribute (for @tool decorated functions)
                         func = tool_obj.func
-                        function_def_info = extract_function_definition_info(
-                            func)
+                        function_def_info = extract_function_definition_info(func)
                     elif callable(tool_obj):
                         # Tool itself is callable
-                        function_def_info = extract_function_definition_info(
-                            tool_obj)
+                        function_def_info = extract_function_definition_info(tool_obj)
 
                 # Method 2: If code_location_info has function definition, use it
                 if not function_def_info and code_location_info:
@@ -1769,11 +1763,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 **{
                     k: v
                     for k, v in kwargs.items()
-                    if k
-                    not in ["tags", "metadata", "inputs", "tool", "tool_instance"]
+                    if k not in ["tags", "metadata", "inputs", "tool", "tool_instance"]
                     and isinstance(v, (str, int, float, bool))
                 },
-
             }
 
             # Add tool tracking attributes
@@ -1906,8 +1898,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span_name = custom_name if custom_name else operation_name
 
             # Resolve parent span ID based on mode
-            parent_span_id = self._resolve_parent_span_id(
-                parent_run_id, parent_name)
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
             trace, should_manage = self._get_or_create_trace_context(
@@ -1915,8 +1906,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             )
 
             # Create span for agent
-            agent_name = serialized.get(
-                "name", "unknown") if serialized else "unknown"
+            agent_name = serialized.get("name", "unknown") if serialized else "unknown"
 
             # Extract actual agent information from serialized data
             agent_type = extract_agent_type(serialized)
@@ -1945,8 +1935,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             # Add tool tracking attributes if tools are available
             if available_tools:
-                span_attributes["agent.available_tools.count"] = len(
-                    available_tools)
+                span_attributes["agent.available_tools.count"] = len(available_tools)
                 span_attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
                 ]
@@ -2133,8 +2122,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             span_name = custom_name if custom_name else operation_name
 
             # Resolve parent span ID based on mode
-            parent_span_id = self._resolve_parent_span_id(
-                parent_run_id, parent_name)
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
 
             # Get or create trace context
             trace, should_manage = self._get_or_create_trace_context(
@@ -2150,8 +2138,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "langchain.run_id": str(run_id),
                     "retrieval.type": "search",
                     "retrieval.operation": (
-                        serialized.get(
-                            "name", "unknown") if serialized else "unknown"
+                        serialized.get("name", "unknown") if serialized else "unknown"
                     ),
                     # Input attributes
                     "retrieval.query": query,

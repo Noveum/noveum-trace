@@ -19,7 +19,6 @@ from typing import Annotated, Literal, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import (
-    AIMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
@@ -57,7 +56,7 @@ def setup_noveum_trace():
 class AgentState(TypedDict):
     """
     Agent state with message accumulation.
-    
+
     The add_messages reducer means messages ACCUMULATE - they never get removed!
     This is what causes the long chains.
     """
@@ -84,10 +83,10 @@ class AgentState(TypedDict):
 def search_database(query: str) -> str:
     """
     Search a database. Returns verbose results to increase message size.
-    
+
     Args:
         query: The search query
-        
+
     Returns:
         Search results with detailed information
     """
@@ -117,10 +116,10 @@ def search_database(query: str) -> str:
 def analyze_data(data: str) -> str:
     """
     Analyze data. Returns detailed analysis to increase message size.
-    
+
     Args:
         data: The data to analyze
-        
+
     Returns:
         Detailed analysis results
     """
@@ -148,10 +147,10 @@ def analyze_data(data: str) -> str:
 def fetch_context(context_id: str) -> str:
     """
     Fetch additional context. Returns large context to increase message size.
-    
+
     Args:
         context_id: The context identifier
-        
+
     Returns:
         Context information
     """
@@ -172,7 +171,7 @@ def fetch_context(context_id: str) -> str:
 def agent_node(state: AgentState) -> AgentState:
     """
     Agent reasoning node - decides what to do next.
-    
+
     This node will call tools multiple times, adding messages to the state.
     """
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -212,7 +211,7 @@ def agent_node(state: AgentState) -> AgentState:
 def tool_node(state: AgentState) -> AgentState:
     """
     Execute tool calls and return results.
-    
+
     This adds ToolMessage objects to the state for each tool call.
     """
     from langgraph.prebuilt import ToolNode
@@ -223,7 +222,7 @@ def tool_node(state: AgentState) -> AgentState:
     # Get the last message (should be AIMessage with tool calls)
     last_message = state["messages"][-1]
 
-    print(f"\n🔧 EXECUTING TOOLS:")
+    print("\n🔧 EXECUTING TOOLS:")
     if hasattr(last_message, "tool_calls"):
         for tc in last_message.tool_calls:
             print(f"   - {tc['name']}")
@@ -251,7 +250,7 @@ def should_continue(state: AgentState) -> Literal["tools", "end"]:
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
 
-    print(f"\n✅ No more tool calls - ENDING")
+    print("\n✅ No more tool calls - ENDING")
     return "end"
 
 
@@ -286,7 +285,7 @@ def create_agent() -> StateGraph:
 def run_demo(max_iterations: int = 5):
     """
     Run the message accumulation demo.
-    
+
     Args:
         max_iterations: How many iterations to run (more = longer message chains)
     """
@@ -333,10 +332,10 @@ def run_demo(max_iterations: int = 5):
         "task_complete": False,
     }
 
-    print(f"\n📋 Task: ML deployment best practices research")
+    print("\n📋 Task: ML deployment best practices research")
     print(f"📊 Max Iterations: {max_iterations}")
     print(f"📝 Starting with: {len(initial_state['messages'])} HumanMessages")
-    print(f"\n💡 Watch how messages accumulate with each iteration!")
+    print("\n💡 Watch how messages accumulate with each iteration!")
     print("=" * 80)
 
     # Execute
@@ -364,7 +363,7 @@ def run_demo(max_iterations: int = 5):
             message_types[msg_type] = message_types.get(msg_type, 0) + 1
             total_chars += len(str(msg))
 
-        print(f"\nMessage breakdown:")
+        print("\nMessage breakdown:")
         for msg_type, count in sorted(message_types.items()):
             print(f"  - {msg_type}: {count}")
 
@@ -382,7 +381,7 @@ def run_demo(max_iterations: int = 5):
         )
         print("  attributes['chain.inputs'] = {k: str(v) for k, v in inputs.items()}")
         print("\nThis means the 'messages' key becomes:")
-        print(f"  '[HumanMessage(...), AIMessage(...), ToolMessage(...), ...]'")
+        print("  '[HumanMessage(...), AIMessage(...), ToolMessage(...), ...]'")
         print(f"\nWith {total_chars:,} characters, this makes traces:")
         print("  ❌ Very large (slow to load)")
         print("  ❌ Hard to read (wall of text)")

@@ -27,29 +27,33 @@ def message_to_dict(msg: Any) -> dict[str, Any]:
     """
     try:
         # Try Pydantic v2 first
-        if hasattr(msg, 'model_dump') and callable(msg.model_dump):
+        if hasattr(msg, "model_dump") and callable(msg.model_dump):
             return msg.model_dump()
         # Fallback to Pydantic v1
-        elif hasattr(msg, 'dict') and callable(msg.dict):
+        elif hasattr(msg, "dict") and callable(msg.dict):
             return msg.dict()
         # Last resort: manual extraction
         else:
             result = {
-                'type': type(msg).__name__,
-                'content': str(msg.content) if hasattr(msg, 'content') else None,
+                "type": type(msg).__name__,
+                "content": str(msg.content) if hasattr(msg, "content") else None,
             }
             # Add common optional fields
-            if hasattr(msg, 'id'):
-                result['id'] = msg.id
-            if hasattr(msg, 'name'):
-                result['name'] = msg.name
+            if hasattr(msg, "id"):
+                result["id"] = msg.id
+            if hasattr(msg, "name"):
+                result["name"] = msg.name
             return result
     except Exception as e:
         logger.debug(f"Error converting message to dict: {e}")
         return {
-            'type': type(msg).__name__,
-            'content': str(msg.content) if hasattr(msg, 'content') else 'Error extracting content',
-            'error': str(e)
+            "type": type(msg).__name__,
+            "content": (
+                str(msg.content)
+                if hasattr(msg, "content")
+                else "Error extracting content"
+            ),
+            "error": str(e),
         }
 
 
@@ -71,15 +75,14 @@ def is_langchain_message(obj: Any) -> bool:
         # This works for all message types: HumanMessage, AIMessage, etc.
         mro = type(obj).__mro__
         return any(
-            cls.__name__ == 'BaseMessage'
-            and cls.__module__.startswith('langchain')
+            cls.__name__ == "BaseMessage" and cls.__module__.startswith("langchain")
             for cls in mro
         )
     except Exception:
         return False
 
 
-def parse_messages_list(messages: list) -> dict[str, list]:
+def parse_messages_list(messages: list[Any]) -> dict[str, list[Any]]:
     """
     Parse a list of LangChain messages into structured data.
 
@@ -94,69 +97,74 @@ def parse_messages_list(messages: list) -> dict[str, list]:
     Returns:
         Dict with keys: 'messages', 'tool_calls', 'tool_results'
     """
-    result = {
-        'messages': [],
-        'tool_calls': [],
-        'tool_results': []
+    result: dict[str, list[Any]] = {
+        "messages": [],
+        "tool_calls": [],
+        "tool_results": [],
     }
 
     for msg in messages:
         try:
             # Get message type
-            msg_type = msg.type if hasattr(
-                msg, 'type') else type(msg).__name__.lower()
+            msg_type = msg.type if hasattr(msg, "type") else type(msg).__name__.lower()
 
             # Handle regular messages (human, system, chat, remove)
-            if msg_type in ['human', 'system', 'chat', 'remove']:
-                result['messages'].append(message_to_dict(msg))
+            if msg_type in ["human", "system", "chat", "remove"]:
+                result["messages"].append(message_to_dict(msg))
 
             # Handle AI messages (extract tool calls separately)
-            elif msg_type == 'ai':
+            elif msg_type == "ai":
                 # Extract tool calls first
-                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for tc in msg.tool_calls:
                         try:
                             # Handle both dict and object tool calls
                             if isinstance(tc, dict):
-                                result['tool_calls'].append({
-                                    'name': tc.get('name'),
-                                    'args': tc.get('args'),
-                                    'id': tc.get('id')
-                                })
+                                result["tool_calls"].append(
+                                    {
+                                        "name": tc.get("name"),
+                                        "args": tc.get("args"),
+                                        "id": tc.get("id"),
+                                    }
+                                )
                             else:
-                                result['tool_calls'].append({
-                                    'name': getattr(tc, 'name', None),
-                                    'args': getattr(tc, 'args', None),
-                                    'id': getattr(tc, 'id', None)
-                                })
+                                result["tool_calls"].append(
+                                    {
+                                        "name": getattr(tc, "name", None),
+                                        "args": getattr(tc, "args", None),
+                                        "id": getattr(tc, "id", None),
+                                    }
+                                )
                         except Exception as e:
                             logger.debug(f"Error extracting tool call: {e}")
 
                 # Add AI message without tool_calls to avoid duplication
                 msg_dict = message_to_dict(msg)
                 # Clear tool_calls and invalid_tool_calls to reduce size
-                msg_dict['tool_calls'] = []
-                if 'invalid_tool_calls' in msg_dict:
-                    msg_dict['invalid_tool_calls'] = []
-                result['messages'].append(msg_dict)
+                msg_dict["tool_calls"] = []
+                if "invalid_tool_calls" in msg_dict:
+                    msg_dict["invalid_tool_calls"] = []
+                result["messages"].append(msg_dict)
 
             # Handle tool results
-            elif msg_type in ['tool', 'function']:
-                result['tool_results'].append(message_to_dict(msg))
+            elif msg_type in ["tool", "function"]:
+                result["tool_results"].append(message_to_dict(msg))
 
             # Unknown message type - add to messages as-is
             else:
                 logger.debug(f"Unknown message type: {msg_type}")
-                result['messages'].append(message_to_dict(msg))
+                result["messages"].append(message_to_dict(msg))
 
         except Exception as e:
             logger.error(f"Error parsing message: {e}")
             # Add error placeholder to avoid losing the message entirely
-            result['messages'].append({
-                'type': 'error',
-                'content': f'Error parsing message: {str(e)}',
-                'original_type': type(msg).__name__
-            })
+            result["messages"].append(
+                {
+                    "type": "error",
+                    "content": f"Error parsing message: {str(e)}",
+                    "original_type": type(msg).__name__,
+                }
+            )
 
     return result
 
@@ -180,7 +188,7 @@ def process_chain_inputs_outputs(data: dict[str, Any]) -> dict[str, Any]:
         - 'iteration': stringified value
         - etc.
     """
-    attributes = {}
+    attributes: dict[str, Any] = {}
 
     for key, value in data.items():
         try:
@@ -188,9 +196,9 @@ def process_chain_inputs_outputs(data: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, list) and value and is_langchain_message(value[0]):
                 # Parse messages into structured format
                 parsed = parse_messages_list(value)
-                attributes[f'{key}.messages'] = parsed['messages']
-                attributes[f'{key}.tool_calls'] = parsed['tool_calls']
-                attributes[f'{key}.tool_results'] = parsed['tool_results']
+                attributes[f"{key}.messages"] = parsed["messages"]
+                attributes[f"{key}.tool_calls"] = parsed["tool_calls"]
+                attributes[f"{key}.tool_results"] = parsed["tool_results"]
             else:
                 # Keep other keys as stringified (existing behavior)
                 attributes[key] = str(value)
