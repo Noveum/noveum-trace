@@ -38,6 +38,9 @@ from noveum_trace.integrations.langchain.langchain_utils import (
     extract_tool_function_name,
     get_operation_name,
 )
+from noveum_trace.integrations.langchain.message_utils import (
+    process_chain_inputs_outputs,
+)
 from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 
 logger = logging.getLogger(__name__)
@@ -1368,9 +1371,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             # Handle inputs based on type
             if isinstance(inputs, dict):
-                # Standard dict input - use as-is
-                attributes["chain.inputs"] = {
-                    k: str(v) for k, v in inputs.items()}
+                # Use new message parsing for dicts
+                parsed_inputs = process_chain_inputs_outputs(inputs)
+                for key, value in parsed_inputs.items():
+                    attributes[f"chain.inputs.{key}"] = value
             elif isinstance(inputs, list):
                 # List input - use chain.inputs.0, chain.inputs.1 format
                 for i, item in enumerate(inputs):
@@ -1451,18 +1455,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             # Handle both dict and non-dict outputs
             if isinstance(outputs, dict):
-                # Dict outputs - convert values to strings
-                chain_outputs = {k: str(v) for k, v in outputs.items()}
+                # Use new message parsing for dicts
+                parsed_outputs = process_chain_inputs_outputs(outputs)
+                for key, value in parsed_outputs.items():
+                    span.set_attributes({f"chain.output.{key}": value})
             else:
                 # Non-dict outputs (e.g., string) - store as raw value
-                chain_outputs = outputs
-
-            span.set_attributes(
-                {
-                    # Output attributes
-                    "chain.output.outputs": chain_outputs
-                }
-            )
+                span.set_attributes({"chain.output.outputs": str(outputs)})
 
             span.set_status(SpanStatus.OK)
             assert self._client is not None  # Type guard after _ensure_client
