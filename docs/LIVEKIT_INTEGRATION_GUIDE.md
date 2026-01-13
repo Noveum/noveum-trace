@@ -86,7 +86,7 @@ noveum_trace.init(
 
 async def entrypoint(ctx: JobContext):
     # Extract job context for span attributes
-    job_context = extract_job_context(ctx)
+    job_context = await extract_job_context(ctx)
     
     # Wrap STT provider for detailed audio tracking
     traced_stt = LiveKitSTTWrapper(
@@ -413,7 +413,7 @@ Use the utility function to extract context from LiveKit's JobContext:
 ```python
 from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
-job_context = extract_job_context(ctx)
+job_context = await extract_job_context(ctx)
 # Automatically extracts: job_id, room_name, room_sid, agent_id, worker_id, etc.
 ```
 
@@ -423,7 +423,7 @@ job_context = extract_job_context(ctx)
 from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 # Get standard fields automatically
-job_context = extract_job_context(ctx)
+job_context = await extract_job_context(ctx)
 
 # Add your custom metadata
 job_context.update({
@@ -790,7 +790,7 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Starting session {ctx.job.id} in room {ctx.room.name}")
     
     # Extract job context
-    job_context = extract_job_context(ctx)
+    job_context = await extract_job_context(ctx)
     
     # Wrap STT provider
     traced_stt = LiveKitSTTWrapper(

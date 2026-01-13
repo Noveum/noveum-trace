@@ -369,8 +369,8 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     This sets up STT/TTS with tracing and handles the conversation.
     """
-    # Extract job context
-    job_context = extract_job_context(ctx)
+    job_context = await extract_job_context(ctx)
+
     session_id = ctx.job.id
 
     # Create STT provider

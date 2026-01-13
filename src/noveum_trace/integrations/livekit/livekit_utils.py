@@ -8,6 +8,7 @@ and context extraction for LiveKit integration with noveum-trace.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from dataclasses import asdict, is_dataclass
@@ -285,12 +286,14 @@ def _is_mock_object(obj: Any) -> bool:
     )
 
 
-def _safe_str(obj: Any, default: str = "unknown") -> str:
+async def _safe_str(obj: Any, default: str = "unknown") -> str:
     """
-    Safely convert an object to string, filtering out mocks.
+    Safely convert an object to string, filtering out mocks and handling coroutines.
+
+    Supports both sync properties (old LiveKit SDK) and async properties (new LiveKit SDK v2+).
 
     Args:
-        obj: Object to convert
+        obj: Object to convert (can be a coroutine or regular value)
         default: Default value if object is mock or None
 
     Returns:
@@ -299,6 +302,11 @@ def _safe_str(obj: Any, default: str = "unknown") -> str:
     if obj is None:
         return default
 
+    # Handle coroutines (async properties from LiveKit SDK v2+)
+    # Await them to get the actual value
+    if inspect.iscoroutine(obj):
+        obj = await obj
+
     str_val = str(obj)
     if _is_mock_object(obj):
         return default
@@ -306,11 +314,12 @@ def _safe_str(obj: Any, default: str = "unknown") -> str:
     return str_val
 
 
-def extract_job_context(ctx: Any) -> dict[str, Any]:
+async def extract_job_context(ctx: Any) -> dict[str, Any]:
     """
     Extract serializable fields from LiveKit JobContext.
 
     Filters out mock objects to prevent "<Mock object>" strings in traces.
+    Handles both sync properties (old LiveKit SDK) and async properties (new LiveKit SDK v2+).
 
     Args:
         ctx: LiveKit JobContext or similar object
@@ -323,7 +332,7 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
     # Job info
     if hasattr(ctx, "job") and ctx.job and not _is_mock_object(ctx.job):
         if hasattr(ctx.job, "id"):
-            job_id = _safe_str(ctx.job.id)
+            job_id = await _safe_str(ctx.job.id)
             if job_id != "unknown":
                 context["job_id"] = job_id
 
@@ -333,35 +342,35 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
             and not _is_mock_object(ctx.job.room)
         ):
             if hasattr(ctx.job.room, "sid"):
-                room_sid = _safe_str(ctx.job.room.sid)
+                room_sid = await _safe_str(ctx.job.room.sid)
                 if room_sid != "unknown":
                     context["job_room_sid"] = room_sid
             if hasattr(ctx.job.room, "name"):
-                room_name = _safe_str(ctx.job.room.name)
+                room_name = await _safe_str(ctx.job.room.name)
                 if room_name != "unknown":
                     context["job_room_name"] = room_name
 
     # Room info
     if hasattr(ctx, "room") and ctx.room and not _is_mock_object(ctx.room):
         if hasattr(ctx.room, "name"):
-            room_name = _safe_str(ctx.room.name)
+            room_name = await _safe_str(ctx.room.name)
             if room_name != "unknown":
                 context["room_name"] = room_name
         if hasattr(ctx.room, "sid"):
-            room_sid = _safe_str(ctx.room.sid)
+            room_sid = await _safe_str(ctx.room.sid)
             if room_sid != "unknown":
                 context["room_sid"] = room_sid
 
     # Agent info
     if hasattr(ctx, "agent") and ctx.agent and not _is_mock_object(ctx.agent):
         if hasattr(ctx.agent, "id"):
-            agent_id = _safe_str(ctx.agent.id)
+            agent_id = await _safe_str(ctx.agent.id)
             if agent_id != "unknown":
                 context["agent_id"] = agent_id
 
     # Worker info
     if hasattr(ctx, "worker_id") and not _is_mock_object(ctx.worker_id):
-        worker_id = _safe_str(ctx.worker_id)
+        worker_id = await _safe_str(ctx.worker_id)
         if worker_id != "unknown":
             context["worker_id"] = worker_id
 
@@ -372,11 +381,11 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
         and not _is_mock_object(ctx.participant)
     ):
         if hasattr(ctx.participant, "identity"):
-            identity = _safe_str(ctx.participant.identity)
+            identity = await _safe_str(ctx.participant.identity)
             if identity != "unknown":
                 context["participant_identity"] = identity
         if hasattr(ctx.participant, "sid"):
-            sid = _safe_str(ctx.participant.sid)
+            sid = await _safe_str(ctx.participant.sid)
             if sid != "unknown":
                 context["participant_sid"] = sid
 
@@ -387,7 +396,7 @@ def create_span_attributes(
     provider: str,
     model: str,
     operation_type: str,
-    audio_file: str,
+    audio_uuid: str,
     audio_duration_ms: float,
     job_context: dict[str, Any],
     **extra_attributes: Any,
@@ -399,7 +408,7 @@ def create_span_attributes(
         provider: Provider name (e.g., 'deepgram', 'cartesia')
         model: Model identifier
         operation_type: 'stt' or 'tts'
-        audio_file: Filename of saved audio
+        audio_uuid: UUID of the audio file
         audio_duration_ms: Audio duration in milliseconds
         job_context: Job context dictionary
         **extra_attributes: Additional operation-specific attributes
@@ -410,7 +419,7 @@ def create_span_attributes(
     attributes = {
         f"{operation_type}.provider": provider,
         f"{operation_type}.model": model,
-        f"{operation_type}.audio_file": audio_file,
+        f"{operation_type}.audio_uuid": audio_uuid,
         f"{operation_type}.audio_duration_ms": audio_duration_ms,
     }
 
