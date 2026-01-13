@@ -35,6 +35,7 @@ Environment Variables:
 import asyncio
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Optional
@@ -105,7 +106,8 @@ class Order:
         if item.lower() in MENU:
             for _ in range(quantity):
                 self.items.append(
-                    {"name": item.lower(), "price": MENU[item.lower()]["price"]}
+                    {"name": item.lower(),
+                     "price": MENU[item.lower()]["price"]}
                 )
             return True
         return False
@@ -175,7 +177,8 @@ def create_system_prompt(order: Order) -> str:
     # Filter out "coke" from menu display since it's the same as "drink"
     menu_display = {k: v for k, v in MENU.items() if k != "coke"}
     menu_text = "\n".join(
-        [f"- {name}: ${info['price']:.2f}" for name, info in menu_display.items()]
+        [f"- {name}: ${info['price']:.2f}" for name,
+            info in menu_display.items()]
     )
     menu_text += "\n- coke: $1.99 (same as drink)"
 
@@ -331,10 +334,12 @@ class DriveThruAgentText:
 
         # Replace placeholder with actual total
         if "${:.2f}" in response:
-            response = response.replace("${:.2f}", f"${self.order.get_total():.2f}")
+            response = response.replace(
+                "${:.2f}", f"${self.order.get_total():.2f}")
 
         # Add to conversation history
-        self.conversation_history.append({"role": "agent", "content": response})
+        self.conversation_history.append(
+            {"role": "agent", "content": response})
 
         return response
 
@@ -369,8 +374,12 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     This sets up STT/TTS with tracing and handles the conversation.
     """
-    # Extract job context
-    job_context = extract_job_context(ctx)
+    # Extract job context (with timing to show it's fast)
+    start_time = time.perf_counter()
+    job_context = await extract_job_context(ctx)
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    print(f"[Performance] extract_job_context took {elapsed_ms:.2f}ms")
+
     session_id = ctx.job.id
 
     # Create STT provider

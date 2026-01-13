@@ -8,6 +8,7 @@ and context extraction for LiveKit integration with noveum-trace.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from dataclasses import asdict, is_dataclass
@@ -231,7 +232,8 @@ def upload_audio_frames(
         return True
 
     except Exception as e:  # noqa: S110 - broad exception for graceful degradation
-        logger.warning(f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
+        logger.warning(
+            f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
         return False
 
 
@@ -285,12 +287,14 @@ def _is_mock_object(obj: Any) -> bool:
     )
 
 
-def _safe_str(obj: Any, default: str = "unknown") -> str:
+async def _safe_str(obj: Any, default: str = "unknown") -> str:
     """
-    Safely convert an object to string, filtering out mocks.
+    Safely convert an object to string, filtering out mocks and handling coroutines.
+
+    Supports both sync properties (old LiveKit SDK) and async properties (new LiveKit SDK v2+).
 
     Args:
-        obj: Object to convert
+        obj: Object to convert (can be a coroutine or regular value)
         default: Default value if object is mock or None
 
     Returns:
@@ -299,6 +303,11 @@ def _safe_str(obj: Any, default: str = "unknown") -> str:
     if obj is None:
         return default
 
+    # Handle coroutines (async properties from LiveKit SDK v2+)
+    # Await them to get the actual value
+    if inspect.iscoroutine(obj):
+        obj = await obj
+
     str_val = str(obj)
     if _is_mock_object(obj):
         return default
@@ -306,11 +315,12 @@ def _safe_str(obj: Any, default: str = "unknown") -> str:
     return str_val
 
 
-def extract_job_context(ctx: Any) -> dict[str, Any]:
+async def extract_job_context(ctx: Any) -> dict[str, Any]:
     """
     Extract serializable fields from LiveKit JobContext.
 
     Filters out mock objects to prevent "<Mock object>" strings in traces.
+    Handles both sync properties (old LiveKit SDK) and async properties (new LiveKit SDK v2+).
 
     Args:
         ctx: LiveKit JobContext or similar object
@@ -323,7 +333,7 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
     # Job info
     if hasattr(ctx, "job") and ctx.job and not _is_mock_object(ctx.job):
         if hasattr(ctx.job, "id"):
-            job_id = _safe_str(ctx.job.id)
+            job_id = await _safe_str(ctx.job.id)
             if job_id != "unknown":
                 context["job_id"] = job_id
 
@@ -333,35 +343,35 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
             and not _is_mock_object(ctx.job.room)
         ):
             if hasattr(ctx.job.room, "sid"):
-                room_sid = _safe_str(ctx.job.room.sid)
+                room_sid = await _safe_str(ctx.job.room.sid)
                 if room_sid != "unknown":
                     context["job_room_sid"] = room_sid
             if hasattr(ctx.job.room, "name"):
-                room_name = _safe_str(ctx.job.room.name)
+                room_name = await _safe_str(ctx.job.room.name)
                 if room_name != "unknown":
                     context["job_room_name"] = room_name
 
     # Room info
     if hasattr(ctx, "room") and ctx.room and not _is_mock_object(ctx.room):
         if hasattr(ctx.room, "name"):
-            room_name = _safe_str(ctx.room.name)
+            room_name = await _safe_str(ctx.room.name)
             if room_name != "unknown":
                 context["room_name"] = room_name
         if hasattr(ctx.room, "sid"):
-            room_sid = _safe_str(ctx.room.sid)
+            room_sid = await _safe_str(ctx.room.sid)
             if room_sid != "unknown":
                 context["room_sid"] = room_sid
 
     # Agent info
     if hasattr(ctx, "agent") and ctx.agent and not _is_mock_object(ctx.agent):
         if hasattr(ctx.agent, "id"):
-            agent_id = _safe_str(ctx.agent.id)
+            agent_id = await _safe_str(ctx.agent.id)
             if agent_id != "unknown":
                 context["agent_id"] = agent_id
 
     # Worker info
     if hasattr(ctx, "worker_id") and not _is_mock_object(ctx.worker_id):
-        worker_id = _safe_str(ctx.worker_id)
+        worker_id = await _safe_str(ctx.worker_id)
         if worker_id != "unknown":
             context["worker_id"] = worker_id
 
@@ -372,11 +382,11 @@ def extract_job_context(ctx: Any) -> dict[str, Any]:
         and not _is_mock_object(ctx.participant)
     ):
         if hasattr(ctx.participant, "identity"):
-            identity = _safe_str(ctx.participant.identity)
+            identity = await _safe_str(ctx.participant.identity)
             if identity != "unknown":
                 context["participant_identity"] = identity
         if hasattr(ctx.participant, "sid"):
-            sid = _safe_str(ctx.participant.sid)
+            sid = await _safe_str(ctx.participant.sid)
             if sid != "unknown":
                 context["participant_sid"] = sid
 
@@ -466,7 +476,8 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
             data = asdict(event)
         # Handle objects with __dict__
         elif hasattr(event, "__dict__"):
-            data = {k: v for k, v in event.__dict__.items() if not k.startswith("_")}
+            data = {k: v for k, v in event.__dict__.items()
+                    if not k.startswith("_")}
         # Handle dictionaries
         elif isinstance(event, dict):
             data = event
@@ -608,7 +619,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                             text_parts.append(str(part.text))
                         elif isinstance(part, dict) and "text" in part:
                             text_parts.append(str(part["text"]))
-                    text_content = "\n".join(text_parts) if text_parts else None
+                    text_content = "\n".join(
+                        text_parts) if text_parts else None
                 elif isinstance(content, str):
                     text_content = content
 
@@ -631,7 +643,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                 {
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "arguments": (
-                        str(item.arguments) if hasattr(item, "arguments") else None
+                        str(item.arguments) if hasattr(
+                            item, "arguments") else None
                     ),
                 }
             )
@@ -643,7 +656,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "output": str(item.output) if hasattr(item, "output") else None,
                     "is_error": (
-                        bool(item.is_error) if hasattr(item, "is_error") else False
+                        bool(item.is_error) if hasattr(
+                            item, "is_error") else False
                     ),
                 }
             )
@@ -771,7 +785,8 @@ async def _update_span_with_system_prompt(
             await asyncio.sleep(check_interval)
 
     except Exception as e:
-        logger.debug(f"Failed to update span with system prompt: {e}", exc_info=True)
+        logger.debug(
+            f"Failed to update span with system prompt: {e}", exc_info=True)
 
 
 def create_event_span(
@@ -928,7 +943,8 @@ def create_event_span(
             # Check if we already have system prompt in attributes
             if "llm.system_prompt" not in attributes:
                 # Start background task to wait for agent_activity and update span
-                asyncio.create_task(_update_span_with_system_prompt(span, manager))
+                asyncio.create_task(
+                    _update_span_with_system_prompt(span, manager))
 
         return span
 
