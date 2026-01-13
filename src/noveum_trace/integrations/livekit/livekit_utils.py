@@ -387,7 +387,7 @@ def create_span_attributes(
     provider: str,
     model: str,
     operation_type: str,
-    audio_file: str,
+    audio_uuid: str,
     audio_duration_ms: float,
     job_context: dict[str, Any],
     **extra_attributes: Any,
@@ -399,7 +399,7 @@ def create_span_attributes(
         provider: Provider name (e.g., 'deepgram', 'cartesia')
         model: Model identifier
         operation_type: 'stt' or 'tts'
-        audio_file: Filename of saved audio
+        audio_uuid: UUID of the audio file
         audio_duration_ms: Audio duration in milliseconds
         job_context: Job context dictionary
         **extra_attributes: Additional operation-specific attributes
@@ -410,7 +410,7 @@ def create_span_attributes(
     attributes = {
         f"{operation_type}.provider": provider,
         f"{operation_type}.model": model,
-        f"{operation_type}.audio_file": audio_file,
+        f"{operation_type}.audio_uuid": audio_uuid,
         f"{operation_type}.audio_duration_ms": audio_duration_ms,
     }
 
