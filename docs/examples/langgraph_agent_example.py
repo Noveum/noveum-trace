@@ -338,7 +338,8 @@ def synthesize_node(state: ResearchState) -> ResearchState:
     print(f"✓ Generated answer ({len(final_answer)} characters)")
 
     # Add to messages
-    state["messages"].append(AIMessage(content=f"Final Answer:\n{final_answer}"))
+    state["messages"].append(
+        AIMessage(content=f"Final Answer:\n{final_answer}"))
 
     return state
 
@@ -492,9 +493,11 @@ def run_research_agent(question: str, max_iterations: int = 3):
         # Print summary
         print("\n📊 EXECUTION SUMMARY:")
         print(f"   • Iterations performed: {final_state['iteration_count']}")
-        print(f"   • Search results gathered: {len(final_state['search_results'])}")
+        print(
+            f"   • Search results gathered: {len(final_state['search_results'])}")
         print(f"   • Final quality: {final_state['information_quality']}")
-        print(f"   • Answer length: {len(final_state['final_answer'])} characters")
+        print(
+            f"   • Answer length: {len(final_state['final_answer'])} characters")
 
         print("\n📝 FINAL ANSWER:")
         print("─" * 80)

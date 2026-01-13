@@ -231,7 +231,8 @@ def upload_audio_frames(
         return True
 
     except Exception as e:  # noqa: S110 - broad exception for graceful degradation
-        logger.warning(f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
+        logger.warning(
+            f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
         return False
 
 
@@ -466,7 +467,8 @@ def _serialize_event_data(event: Any, prefix: str = "") -> dict[str, Any]:
             data = asdict(event)
         # Handle objects with __dict__
         elif hasattr(event, "__dict__"):
-            data = {k: v for k, v in event.__dict__.items() if not k.startswith("_")}
+            data = {k: v for k, v in event.__dict__.items()
+                    if not k.startswith("_")}
         # Handle dictionaries
         elif isinstance(event, dict):
             data = event
@@ -608,7 +610,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                             text_parts.append(str(part.text))
                         elif isinstance(part, dict) and "text" in part:
                             text_parts.append(str(part["text"]))
-                    text_content = "\n".join(text_parts) if text_parts else None
+                    text_content = "\n".join(
+                        text_parts) if text_parts else None
                 elif isinstance(content, str):
                     text_content = content
 
@@ -631,7 +634,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                 {
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "arguments": (
-                        str(item.arguments) if hasattr(item, "arguments") else None
+                        str(item.arguments) if hasattr(
+                            item, "arguments") else None
                     ),
                 }
             )
@@ -643,7 +647,8 @@ def _serialize_chat_items(chat_items: list[Any]) -> dict[str, Any]:
                     "name": str(item.name) if hasattr(item, "name") else None,
                     "output": str(item.output) if hasattr(item, "output") else None,
                     "is_error": (
-                        bool(item.is_error) if hasattr(item, "is_error") else False
+                        bool(item.is_error) if hasattr(
+                            item, "is_error") else False
                     ),
                 }
             )
@@ -771,7 +776,8 @@ async def _update_span_with_system_prompt(
             await asyncio.sleep(check_interval)
 
     except Exception as e:
-        logger.debug(f"Failed to update span with system prompt: {e}", exc_info=True)
+        logger.debug(
+            f"Failed to update span with system prompt: {e}", exc_info=True)
 
 
 def create_event_span(
@@ -928,7 +934,8 @@ def create_event_span(
             # Check if we already have system prompt in attributes
             if "llm.system_prompt" not in attributes:
                 # Start background task to wait for agent_activity and update span
-                asyncio.create_task(_update_span_with_system_prompt(span, manager))
+                asyncio.create_task(
+                    _update_span_with_system_prompt(span, manager))
 
         return span
 

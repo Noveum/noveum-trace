@@ -470,7 +470,8 @@ def extract_agent_capabilities(serialized: dict[str, Any]) -> str:
                     tool_types.add("api_calls")
                 else:
                     tool_types.add(
-                        tool.get("name", "other") if tool.get("name") else "other"
+                        tool.get("name", "other") if tool.get(
+                            "name") else "other"
                     )
 
         if tool_types:
@@ -758,3 +759,150 @@ def build_routing_attributes(payload: dict[str, Any]) -> dict[str, Any]:
             attributes[attr_key] = str(value)
 
     return attributes
+
+
+def extract_available_tools(
+    serialized: Optional[dict[str, Any]],
+    metadata: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """
+    Extract available tools from agent serialized data or metadata.
+
+    Priority:
+    1. Manual injection via metadata.noveum.available_tools (PRIMARY - most reliable)
+    2. Auto-detection from serialized.kwargs.tools (FALLBACK - convenience)
+
+    Args:
+        serialized: LangChain serialized agent/chain data
+        metadata: LangChain metadata dict
+
+    Returns:
+        List of dicts with full tool schema:
+        [
+            {
+                "name": str,
+                "description": str,
+                "args_schema": dict (JSON schema) or None,
+            }
+        ]
+    """
+    tools_list: list[dict[str, Any]] = []
+
+    # Priority 1: Check metadata for manually injected tools (RECOMMENDED)
+    if metadata:
+        noveum_config = metadata.get("noveum", {})
+        if isinstance(noveum_config, dict):
+            manual_tools = noveum_config.get("available_tools")
+            if manual_tools:
+                tools_list = _convert_tools_to_dict_list(manual_tools)
+                if tools_list:
+                    logger.debug(
+                        f"Extracted {len(tools_list)} tools from metadata (manual injection)"
+                    )
+                    return tools_list
+
+    # Priority 2: Fallback to auto-detection from serialized data
+    if serialized:
+        kwargs = serialized.get("kwargs", {})
+        auto_tools = kwargs.get("tools")
+        if auto_tools:
+            tools_list = _convert_tools_to_dict_list(auto_tools)
+            if tools_list:
+                logger.debug(
+                    f"Extracted {len(tools_list)} tools from serialized data (auto-detection)"
+                )
+                return tools_list
+
+    return []
+
+
+def _tool_to_dict(tool: Any) -> dict[str, Any]:
+    """
+    Convert a single tool to a standardized dict format.
+
+    Tries conversion strategies in order:
+    1. Pydantic model serialization (.model_dump(), .dict())
+    2. OpenAI function calling format {type: "function", function: {...}}
+    3. Built-in dict() conversion (works for most objects)
+
+    Args:
+        tool: A tool in any format
+
+    Returns:
+        Dict with keys: name, description, args_schema
+    """
+    tool_data = None
+
+    try:
+        # Strategy 1: Pydantic serialization (Pydantic v2)
+        if hasattr(tool, "model_dump"):
+            tool_data = tool.model_dump()
+
+        # Strategy 1: Pydantic serialization (Pydantic v1)
+        elif hasattr(tool, "dict"):
+            tool_data = tool.dict()
+
+        # Strategy 2: OpenAI function calling format (from invocation_params)
+        elif isinstance(tool, dict) and tool.get("type") == "function" and "function" in tool:
+            tool_data = tool["function"]
+
+        # Strategy 3: Convert to dict
+        else:
+            tool_data = dict(tool)
+
+    except Exception as e:
+        logger.debug(f"Error converting tool to dict: {e}")
+        return {"name": "unknown", "description": "No description", "args_schema": None}
+
+    # Normalize keys (handle different naming conventions)
+    return {
+        "name": tool_data.get("name", "unknown"),
+        "description": tool_data.get("description", "No description"),
+        "args_schema": tool_data.get("args_schema") or tool_data.get("parameters") or tool_data.get("args")
+    }
+
+
+def _convert_tools_to_dict_list(tools: Any) -> list[dict[str, Any]]:
+    """
+    Convert tools to a list of standardized dicts.
+
+    Handles any tool format by trying multiple conversion strategies.
+
+    Args:
+        tools: List of tools in any format, or a single tool
+
+    Returns:
+        List of dicts with keys: name, description, args_schema
+    """
+    if not tools:
+        return []
+
+    result: list[dict[str, Any]] = []
+
+    try:
+        # Handle both list and single tool
+        tools_iter = tools if isinstance(tools, (list, tuple)) else [tools]
+
+        logger.debug(f"Converting {len(tools_iter)} tools to dict list")
+
+        for tool in tools_iter:
+            try:
+                tool_dict = _tool_to_dict(tool)
+
+                # Only add if we got a valid name
+                if tool_dict.get("name") and tool_dict["name"] != "unknown":
+                    result.append(tool_dict)
+                    logger.debug(f"✅ Added tool: {tool_dict['name']}")
+                else:
+                    logger.debug(
+                        f"❌ Skipped tool with invalid name: {tool_dict.get('name')}")
+
+            except Exception as e:
+                logger.debug(f"Error converting tool to dict: {e}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Error processing tools list: {e}")
+        return []
+
+    return result
