@@ -417,19 +417,6 @@ job_context = await extract_job_context(ctx)
 # Automatically extracts: job_id, room_name, room_sid, agent_id, worker_id, etc.
 ```
 
-> **Note:** `extract_job_context()` is an async function as of noveum-trace v0.x.x to properly handle async properties in LiveKit SDK v2+ (such as `room.sid`). It remains backward compatible with older LiveKit SDK versions that use synchronous properties. The function typically completes in microseconds as the room metadata is already available after connection.
-
-**Performance Example:**
-```python
-import time
-
-start = time.perf_counter()
-job_context = await extract_job_context(ctx)
-elapsed_ms = (time.perf_counter() - start) * 1000
-print(f"extract_job_context took {elapsed_ms:.2f}ms")
-# Typical output: extract_job_context took 0.05ms
-```
-
 #### Adding Custom Fields
 
 ```python
