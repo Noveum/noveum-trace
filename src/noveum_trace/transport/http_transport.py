@@ -474,9 +474,10 @@ class HttpTransport:
                 try:
                     import certifi
 
+                    logger.debug(f"🔒 Using certifi CA bundle: {certifi.where()}")
                     logger.debug(
-                        f"🔒 Using certifi CA bundle: {certifi.where()}")
-                    logger.debug(f"    certifi version: {certifi.__version__}")
+                        f"    certifi version: {getattr(certifi, '__version__', 'unknown')}"
+                    )
                 except ImportError:
                     logger.debug(
                         "🔒 Using system CA bundle (certifi not installed)")
@@ -914,12 +915,12 @@ class HttpTransport:
         try:
             # Prepare multipart form data
             files = {
-                "audio": (f"{audio_uuid}.wav", audio_item["audio_data"], "audio/wav")
+                "file": (f"{audio_uuid}.wav", audio_item["audio_data"], "audio/wav")
             }
 
             data = {
-                "trace_id": trace_id,
-                "span_id": span_id,
+                "traceId": trace_id,  # API expects camelCase
+                "spanId": span_id,  # API expects camelCase
                 "audio_uuid": audio_uuid,
                 "timestamp": audio_item.get("timestamp"),
                 **audio_item.get("metadata", {}),
