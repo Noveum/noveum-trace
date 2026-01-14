@@ -49,10 +49,11 @@ class TestOnChainStartInputHandling:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
 
-            # Should use "chain.inputs" key (original behavior)
-            assert "chain.inputs" in attributes
-            assert attributes["chain.inputs"]["key1"] == "value1"
-            assert attributes["chain.inputs"]["key2"] == "value2"
+            # Should use flattened "chain.inputs.{key}" format
+            assert "chain.inputs.key1" in attributes
+            assert "chain.inputs.key2" in attributes
+            assert attributes["chain.inputs.key1"] == "value1"
+            assert attributes["chain.inputs.key2"] == "value2"
 
     def test_chain_start_with_list_of_dicts_input(self):
         """Test on_chain_start with list of dicts (LangGraph prebuilt pattern)."""

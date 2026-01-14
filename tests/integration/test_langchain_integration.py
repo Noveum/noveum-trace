@@ -539,7 +539,10 @@ class TestLangChainIntegration:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
             assert attributes["chain.operation"] == "execution"
-            assert "chain.inputs" in attributes
+            assert "chain.inputs.topic" in attributes
+            assert "chain.inputs.style" in attributes
+            assert attributes["chain.inputs.topic"] == "AI"
+            assert attributes["chain.inputs.style"] == "academic"
 
     def test_chain_end_with_new_attributes(self):
         """Test chain end event with new output attribute structure."""
@@ -559,10 +562,12 @@ class TestLangChainIntegration:
                 outputs={"text": "AI is fascinating", "confidence": 0.95}, run_id=run_id
             )
 
-            # Check new output attributes structure
-            call_args = mock_span.set_attributes.call_args
-            attributes = call_args[0][0]
-            assert "chain.output.outputs" in attributes
+            # Check new output attributes structure - gather all attributes from all calls
+            all_attributes = {}
+            for call in mock_span.set_attributes.call_args_list:
+                all_attributes.update(call[0][0])
+            assert "chain.output.text" in all_attributes
+            assert "chain.output.confidence" in all_attributes
 
     def test_tool_start_with_new_attributes(self):
         """Test tool start event with enhanced naming and attributes."""
@@ -1102,8 +1107,9 @@ class TestLangChainIntegration:
             # Check that input was stored without truncation
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
-            assert len(attributes["chain.inputs"]["large_input"]) == 300
-            assert attributes["chain.inputs"]["large_input"] == large_input
+            assert "chain.inputs.large_input" in attributes
+            assert len(attributes["chain.inputs.large_input"]) == 300
+            assert attributes["chain.inputs.large_input"] == large_input
 
     def test_missing_llm_output(self):
         """Test LLM end event with missing llm_output."""
@@ -3007,7 +3013,8 @@ class TestLangChainIntegration:
             call_args = mock_span.set_attributes.call_args
             attributes = call_args[0][0]
             assert attributes["retrieval.result_count"] == 15
-            assert len(attributes["retrieval.sample_results"]) == 10  # Truncated to 10
+            # Truncated to 10
+            assert len(attributes["retrieval.sample_results"]) == 10
             assert attributes["retrieval.results_truncated"] is True
 
     def test_agent_action_creates_tool_span(self):
