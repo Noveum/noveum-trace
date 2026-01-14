@@ -5,6 +5,7 @@ This module provides a callback handler that automatically traces LangChain
 operations including LLM calls, chains, agents, tools, and retrieval operations.
 """
 
+import json
 import logging
 import threading
 from collections.abc import Sequence
@@ -1114,6 +1115,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
+                        # Add complete tool schemas for better trace visibility
+                        span_attributes["llm.available_tools.schemas"] = json.dumps(
+                            converted_tools, default=str
+                        )
 
                         logger.debug(
                             f"✅ Added tool attributes to span: count={len(converted_tools)}, names={[t['name'] for t in converted_tools]}"
@@ -1134,6 +1139,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                             "agent.available_tools.names": [
                                                 t["name"] for t in converted_tools
                                             ],
+                                            "agent.available_tools.schemas": json.dumps(
+                                                converted_tools, default=str
+                                            ),
                                         }
                                     )
                                 except Exception as e:
@@ -1410,6 +1418,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
                 ]
+                attributes["agent.available_tools.schemas"] = json.dumps(
+                    available_tools, default=str
+                )
 
             # Create span for chain
             assert self._client is not None  # Type guard after _ensure_client
@@ -1947,6 +1958,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
                 ]
+                span_attributes["agent.available_tools.schemas"] = json.dumps(
+                    available_tools, default=str
+                )
 
             assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(

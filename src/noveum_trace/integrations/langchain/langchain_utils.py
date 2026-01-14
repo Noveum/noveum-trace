@@ -785,26 +785,23 @@ def extract_available_tools(
             }
         ]
     """
-    tools_list: list[dict[str, Any]] = []
-
     # Priority 1: Check metadata for manually injected tools (RECOMMENDED)
     if metadata:
         noveum_config = metadata.get("noveum", {})
-        if isinstance(noveum_config, dict):
-            manual_tools = noveum_config.get("available_tools")
-            if manual_tools:
-                tools_list = _convert_tools_to_dict_list(manual_tools)
-                if tools_list:
-                    logger.debug(
-                        f"Extracted {len(tools_list)} tools from metadata (manual injection)"
-                    )
-                    return tools_list
+        if isinstance(noveum_config, dict) and (
+            manual_tools := noveum_config.get("available_tools")
+        ):
+            tools_list = _convert_tools_to_dict_list(manual_tools)
+            if tools_list:
+                logger.debug(
+                    f"Extracted {len(tools_list)} tools from metadata (manual injection)"
+                )
+                return tools_list
 
     # Priority 2: Fallback to auto-detection from serialized data
     if serialized:
         kwargs = serialized.get("kwargs", {})
-        auto_tools = kwargs.get("tools")
-        if auto_tools:
+        if auto_tools := kwargs.get("tools"):
             tools_list = _convert_tools_to_dict_list(auto_tools)
             if tools_list:
                 logger.debug(
