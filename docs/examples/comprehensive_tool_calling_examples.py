@@ -6,7 +6,7 @@ This guide covers EVERYTHING about tool calling and auto-detection:
 TRADITIONAL LANGCHAIN AGENTS (AgentExecutor-based):
 ├── Pattern 1: OpenAI Functions Agent ✅ Auto-detect works
 ├── Pattern 2: ReAct Agent (AgentExecutor) ✅ Auto-detect works
-└── Pattern 3: Manual Metadata Injection ✅ Most reliable (RECOMMENDED)
+└── Pattern 3: Manual Metadata Injection ✅ Most reliable
 
 LANGGRAPH AGENTS (Modern patterns):
 ├── Pattern 4: Custom StateGraph with bind_tools() ✅ Auto-detect works

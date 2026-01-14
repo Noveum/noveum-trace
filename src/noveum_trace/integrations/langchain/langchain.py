@@ -1786,6 +1786,14 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         called_tool_info["args_schema"]
                     )
 
+            # Add code location information if available
+            if code_location_info:
+                span_attributes.update(code_location_info)
+
+            # Add function definition information if available
+            if function_def_info:
+                span_attributes.update(function_def_info)
+
             assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,

@@ -414,7 +414,7 @@ if __name__ == "__main__":
     max_iterations = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 
     print(f"\nRunning with max_iterations={max_iterations}")
-    print("(Try: python message_accumulation_demo.py 10 for more iterations)\n")
+    print(f"(Try: python {os.path.basename(__file__)} 10 for more iterations)\n")
 
     run_demo(max_iterations=max_iterations)
 
