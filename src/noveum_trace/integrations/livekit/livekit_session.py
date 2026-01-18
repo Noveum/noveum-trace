@@ -17,6 +17,12 @@ from typing import Any, Callable, Optional
 from noveum_trace.core.context import set_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.core.trace import Trace
+from noveum_trace.integrations.livekit.livekit_constants import (
+    MAX_AUDIO_FRAMES,
+    MAX_CONVERSATION_HISTORY,
+    MAX_PENDING_FUNCTION_CALLS,
+    MAX_PENDING_FUNCTION_OUTPUTS,
+)
 from noveum_trace.integrations.livekit.livekit_llm import (
     extract_available_tools,
     serialize_tools_for_attributes,
@@ -448,6 +454,11 @@ class _LiveKitTracingManager:
 
                 item_dict["type"] = "message"
                 self._conversation_history.append(item_dict)
+                # Enforce cap to prevent memory growth
+                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
+                    self._conversation_history = self._conversation_history[
+                        -MAX_CONVERSATION_HISTORY:
+                    ]
 
             elif item_type == "function_call":
                 item_dict = {
@@ -458,8 +469,17 @@ class _LiveKitTracingManager:
                     ),
                 }
                 self._conversation_history.append(item_dict)
+                # Enforce cap to prevent memory growth
+                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
+                    self._conversation_history = self._conversation_history[
+                        -MAX_CONVERSATION_HISTORY:
+                    ]
                 # Also track as pending for merging
                 self._pending_function_calls.append(item_dict)
+                if len(self._pending_function_calls) > MAX_PENDING_FUNCTION_CALLS:
+                    self._pending_function_calls = self._pending_function_calls[
+                        -MAX_PENDING_FUNCTION_CALLS:
+                    ]
 
             elif item_type == "function_call_output":
                 item_dict = {
@@ -471,8 +491,17 @@ class _LiveKitTracingManager:
                     ),
                 }
                 self._conversation_history.append(item_dict)
+                # Enforce cap to prevent memory growth
+                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
+                    self._conversation_history = self._conversation_history[
+                        -MAX_CONVERSATION_HISTORY:
+                    ]
                 # Also track as pending for merging
                 self._pending_function_outputs.append(item_dict)
+                if len(self._pending_function_outputs) > MAX_PENDING_FUNCTION_OUTPUTS:
+                    self._pending_function_outputs = self._pending_function_outputs[
+                        -MAX_PENDING_FUNCTION_OUTPUTS:
+                    ]
 
         except Exception as e:
             logger.debug(f"Failed to track conversation item: {e}")
@@ -527,11 +556,21 @@ class _LiveKitTracingManager:
             )
 
     def _finalize_generation_span_with_functions(self) -> None:
-        """Finalize the pending generation span with function call data."""
+        """Finalize the pending generation span with function call data and finish it."""
         if not self._pending_generation_span:
             return
 
         try:
+            from noveum_trace import get_client
+
+            client = get_client()
+            if not client:
+                # Can't finish span without client, clear pending data anyway
+                self._pending_function_calls.clear()
+                self._pending_function_outputs.clear()
+                self._pending_generation_span = None
+                return
+
             span = self._pending_generation_span
 
             # Add function calls to span
@@ -558,12 +597,16 @@ class _LiveKitTracingManager:
                 except Exception:
                     pass
 
+            # Now finish the span with all merged data
+            span.set_status(SpanStatus.OK)
+            client.finish_span(span)
+
             # Clear pending data
             self._pending_function_calls.clear()
             self._pending_function_outputs.clear()
             self._pending_generation_span = None
 
-            logger.debug("Updated generation span with function data")
+            logger.debug("Finalized generation span with function data")
 
         except Exception as e:
             logger.warning(f"Failed to finalize generation span: {e}", exc_info=True)
@@ -591,6 +634,11 @@ class _LiveKitTracingManager:
                 # but we clear the dict to prevent memory leaks)
                 self._speech_spans.clear()
 
+                # Flush any pending generation span before ending the trace
+                # This ensures function call data is persisted even if no
+                # function_tools_executed event was received
+                self._finalize_generation_span_with_functions()
+
                 # End trace
                 if self._trace:
                     try:
@@ -598,12 +646,15 @@ class _LiveKitTracingManager:
 
                         client = get_client()
 
-                        # Add final conversation history to trace
+                        # Add final conversation history to trace (bounded snapshot)
                         if self._conversation_history:
+                            history_snapshot = self._conversation_history[
+                                -MAX_CONVERSATION_HISTORY:
+                            ]
                             self._trace.set_attributes(
                                 {
                                     "conversation.history.message_count": len(
-                                        self._conversation_history
+                                        history_snapshot
                                     ),
                                 }
                             )
@@ -611,7 +662,7 @@ class _LiveKitTracingManager:
                                 self._trace.set_attributes(
                                     {
                                         "conversation.history": json.dumps(
-                                            self._conversation_history, default=str
+                                            history_snapshot, default=str
                                         ),
                                     }
                                 )
@@ -692,13 +743,14 @@ class _LiveKitTracingManager:
 
             # Upload combined STT audio if available
             if self._collected_stt_frames:
+                frame_count = len(self._collected_stt_frames)
                 audio_uuid = str(uuid.uuid4())
                 span = client.start_span(
                     name="audio.full_conversation.stt",
                     attributes={
                         "audio.type": "stt",
                         "audio.uuid": audio_uuid,
-                        "audio.frame_count": len(self._collected_stt_frames),
+                        "audio.frame_count": frame_count,
                     },
                 )
                 upload_audio_frames(
@@ -710,19 +762,20 @@ class _LiveKitTracingManager:
                 )
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
-                logger.debug(
-                    f"Uploaded full STT audio: {len(self._collected_stt_frames)} frames"
-                )
+                # Clear buffer after upload to free memory
+                self._collected_stt_frames.clear()
+                logger.debug(f"Uploaded full STT audio: {frame_count} frames")
 
             # Upload combined TTS audio if available
             if self._collected_tts_frames:
+                frame_count = len(self._collected_tts_frames)
                 audio_uuid = str(uuid.uuid4())
                 span = client.start_span(
                     name="audio.full_conversation.tts",
                     attributes={
                         "audio.type": "tts",
                         "audio.uuid": audio_uuid,
-                        "audio.frame_count": len(self._collected_tts_frames),
+                        "audio.frame_count": frame_count,
                     },
                 )
                 upload_audio_frames(
@@ -734,24 +787,37 @@ class _LiveKitTracingManager:
                 )
                 span.set_status(SpanStatus.OK)
                 client.finish_span(span)
-                logger.debug(
-                    f"Uploaded full TTS audio: {len(self._collected_tts_frames)} frames"
-                )
+                # Clear buffer after upload to free memory
+                self._collected_tts_frames.clear()
+                logger.debug(f"Uploaded full TTS audio: {frame_count} frames")
 
         except Exception as e:
+            # Clear buffers on exception to free memory even if upload failed
+            self._collected_stt_frames.clear()
+            self._collected_tts_frames.clear()
             logger.warning(
                 f"Failed to upload full conversation audio: {e}", exc_info=True
             )
 
     def collect_stt_frames(self, frames: list[Any]) -> None:
-        """Collect STT audio frames for full conversation audio."""
-        if frames:
-            self._collected_stt_frames.extend(frames)
+        """Collect STT audio frames for full conversation audio (capped to prevent OOM)."""
+        if not frames:
+            return
+        # Cap frame collection to prevent OOM on long sessions
+        if len(self._collected_stt_frames) >= MAX_AUDIO_FRAMES:
+            return  # Already at cap, skip new frames
+        remaining = MAX_AUDIO_FRAMES - len(self._collected_stt_frames)
+        self._collected_stt_frames.extend(frames[:remaining])
 
     def collect_tts_frames(self, frames: list[Any]) -> None:
-        """Collect TTS audio frames for full conversation audio."""
-        if frames:
-            self._collected_tts_frames.extend(frames)
+        """Collect TTS audio frames for full conversation audio (capped to prevent OOM)."""
+        if not frames:
+            return
+        # Cap frame collection to prevent OOM on long sessions
+        if len(self._collected_tts_frames) >= MAX_AUDIO_FRAMES:
+            return  # Already at cap, skip new frames
+        remaining = MAX_AUDIO_FRAMES - len(self._collected_tts_frames)
+        self._collected_tts_frames.extend(frames[:remaining])
 
     # RealtimeSession event handlers (synchronous, use asyncio.create_task internally)
     def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
@@ -798,14 +864,15 @@ class _LiveKitTracingManager:
                     tool_attrs = serialize_tools_for_attributes(self._available_tools)
                     attributes.update(tool_attrs)
 
-                # Add conversation history snapshot
+                # Add conversation history snapshot (bounded to prevent oversized attributes)
                 if self._conversation_history:
-                    attributes["llm.conversation.message_count"] = len(
-                        self._conversation_history
-                    )
+                    history_snapshot = self._conversation_history[
+                        -MAX_CONVERSATION_HISTORY:
+                    ]
+                    attributes["llm.conversation.message_count"] = len(history_snapshot)
                     try:
                         attributes["llm.conversation.history"] = json.dumps(
-                            self._conversation_history, default=str
+                            history_snapshot, default=str
                         )
                     except Exception:
                         pass
@@ -813,17 +880,16 @@ class _LiveKitTracingManager:
                 # Add constants metadata
                 attributes["metadata"] = create_constants_metadata()
 
-                # Create span
+                # Create span (do NOT finish yet - wait for function call data)
                 span = client.start_span(
                     name="livekit.realtime.generation_created",
                     attributes=attributes,
                 )
 
                 # Store as pending for function call merging
+                # The span will be finished in _finalize_generation_span_with_functions
+                # after function calls/outputs are merged
                 self._pending_generation_span = span
-
-                span.set_status(SpanStatus.OK)
-                client.finish_span(span)
 
             except Exception as e:
                 logger.warning(

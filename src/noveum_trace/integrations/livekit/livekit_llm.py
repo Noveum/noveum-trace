@@ -13,6 +13,11 @@ from typing import Any, Optional
 
 from noveum_trace.core.context import get_current_trace
 from noveum_trace.core.span import SpanStatus
+from noveum_trace.integrations.livekit.livekit_constants import (
+    MAX_CONVERSATION_HISTORY,
+    MAX_PENDING_FUNCTION_CALLS,
+    MAX_PENDING_FUNCTION_OUTPUTS,
+)
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_constants_metadata,
 )
@@ -374,6 +379,11 @@ class LiveKitLLMWrapper:
         if name:
             msg["name"] = name
         self._conversation_history.append(msg)
+        # Enforce cap to prevent memory growth
+        if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
+            self._conversation_history = self._conversation_history[
+                -MAX_CONVERSATION_HISTORY:
+            ]
 
     def record_function_call(
         self,
@@ -393,6 +403,11 @@ class LiveKitLLMWrapper:
         if call_id:
             call["call_id"] = call_id
         self._pending_function_calls.append(call)
+        # Enforce cap to prevent memory growth
+        if len(self._pending_function_calls) > MAX_PENDING_FUNCTION_CALLS:
+            self._pending_function_calls = self._pending_function_calls[
+                -MAX_PENDING_FUNCTION_CALLS:
+            ]
 
     def record_function_output(
         self,
@@ -415,6 +430,11 @@ class LiveKitLLMWrapper:
                 "is_error": is_error,
             }
         )
+        # Enforce cap to prevent memory growth
+        if len(self._pending_function_outputs) > MAX_PENDING_FUNCTION_OUTPUTS:
+            self._pending_function_outputs = self._pending_function_outputs[
+                -MAX_PENDING_FUNCTION_OUTPUTS:
+            ]
 
     def _flush_pending_function_data(
         self,
@@ -455,6 +475,11 @@ class LiveKitLLMWrapper:
         for msg in serialized_messages:
             if msg not in self._conversation_history:
                 self._conversation_history.append(msg)
+        # Enforce cap to prevent memory growth
+        if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
+            self._conversation_history = self._conversation_history[
+                -MAX_CONVERSATION_HISTORY:
+            ]
 
         # Get base stream
         base_stream = self._base_llm.chat(chat_ctx, **kwargs)
@@ -496,7 +521,9 @@ class _WrappedLLMStream:
 
         # Response accumulation
         self._response_text = ""
-        self._function_calls: list[dict[str, Any]] = []
+        # Tool calls accumulated by call_id to merge streamed fragments
+        self._function_calls_by_id: dict[str, dict[str, Any]] = {}
+        self._no_id_counter = 0  # Counter for tool calls without an id
         self._usage: dict[str, Any] = {}
         self._span_created = False
 
@@ -527,19 +554,63 @@ class _WrappedLLMStream:
         return chunk
 
     def _capture_tool_call(self, tool_call: Any) -> None:
-        """Capture a tool call from the stream."""
+        """
+        Capture and merge a tool call fragment from the stream.
+
+        LiveKit Agents emits delta.tool_calls incrementally across multiple
+        stream chunks. This method merges fragments by call_id, concatenating
+        arguments as they arrive.
+        """
         try:
-            call_dict: dict[str, Any] = {}
-            if hasattr(tool_call, "function"):
+            # Extract call_id - use it as the key for merging
+            call_id: str | None = None
+            if hasattr(tool_call, "id") and tool_call.id:
+                call_id = str(tool_call.id)
+
+            # Extract function name and arguments from delta
+            name: str | None = None
+            arguments: str = ""
+            if hasattr(tool_call, "function") and tool_call.function:
                 func = tool_call.function
-                call_dict["name"] = getattr(func, "name", "unknown")
-                call_dict["arguments"] = getattr(func, "arguments", "")
-            if hasattr(tool_call, "id"):
-                call_dict["call_id"] = tool_call.id
-            if call_dict:
-                self._function_calls.append(call_dict)
+                # Name may only appear in the first chunk
+                if hasattr(func, "name") and func.name:
+                    name = str(func.name)
+                # Arguments are streamed incrementally
+                if hasattr(func, "arguments") and func.arguments:
+                    arguments = str(func.arguments)
+
+            # Determine the key for this tool call
+            if call_id:
+                key = call_id
+            else:
+                # For tool calls without id, create a unique key
+                key = f"_no_id_{self._no_id_counter}"
+                self._no_id_counter += 1
+
+            # Check if we already have an entry for this call_id
+            if key in self._function_calls_by_id:
+                # Merge: concatenate arguments, update name if provided
+                existing = self._function_calls_by_id[key]
+                if name:
+                    existing["name"] = name
+                existing["arguments"] = existing.get("arguments", "") + arguments
+            else:
+                # Create new entry
+                call_dict: dict[str, Any] = {
+                    "name": name or "unknown",
+                    "arguments": arguments,
+                }
+                if call_id:
+                    call_dict["call_id"] = call_id
+                self._function_calls_by_id[key] = call_dict
+
         except Exception as e:
             logger.debug(f"Failed to capture tool call: {e}")
+
+    @property
+    def _function_calls(self) -> list[dict[str, Any]]:
+        """Get accumulated function calls as a list."""
+        return list(self._function_calls_by_id.values())
 
     def __aiter__(self) -> _WrappedLLMStream:
         """Return self as async iterator."""
@@ -633,8 +704,8 @@ class _WrappedLLMStream:
             except Exception:
                 pass
 
-            # Add conversation history
-            history = self._wrapper.conversation_history
+            # Add conversation history (bounded snapshot to prevent oversized attributes)
+            history = self._wrapper.conversation_history[-MAX_CONVERSATION_HISTORY:]
             attributes["llm.conversation.message_count"] = len(history)
             try:
                 attributes["llm.conversation.history"] = json.dumps(

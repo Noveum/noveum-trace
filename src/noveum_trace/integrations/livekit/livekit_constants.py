@@ -27,3 +27,13 @@ AUDIO_DURATION_MS_DEFAULT_VALUE = 0.0
 # Timing constants for system prompt updates
 SYSTEM_PROMPT_MAX_WAIT_SECONDS = 5.0
 SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS = 0.1
+
+# Maximum buffer sizes to prevent memory growth and oversized attributes
+# Note: Larger values allow more context but increase memory usage and attribute sizes
+MAX_CONVERSATION_HISTORY = 1000  # Increased for larger conversation context
+MAX_PENDING_FUNCTION_CALLS = 100
+MAX_PENDING_FUNCTION_OUTPUTS = 100
+
+# Maximum audio frames to collect (prevents OOM on long sessions)
+# At 16kHz mono, 200k frames ≈ 12.5 seconds of audio
+MAX_AUDIO_FRAMES = 200_000
