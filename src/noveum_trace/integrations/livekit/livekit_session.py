@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
+import uuid
 from typing import Any, Callable, Optional
 
 from noveum_trace.core.context import set_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.core.trace import Trace
+from noveum_trace.integrations.livekit.livekit_llm import (
+    extract_available_tools,
+    serialize_tools_for_attributes,
+)
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_event_span,
     update_speech_span_with_chat_items,
+    upload_audio_frames,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +92,21 @@ class _LiveKitTracingManager:
         # Track finished speech spans by speech_handle.id for later attribute updates
         self._speech_spans: dict[str, Any] = {}  # speech_id -> Span
 
+        # Available tools extracted from agent
+        self._available_tools: list[dict[str, Any]] = []
+
+        # Conversation history tracking
+        self._conversation_history: list[dict[str, Any]] = []
+
+        # Pending function calls/outputs (to merge with generation span)
+        self._pending_generation_span: Optional[Any] = None
+        self._pending_function_calls: list[dict[str, Any]] = []
+        self._pending_function_outputs: list[dict[str, Any]] = []
+
+        # Audio frames collection for full conversation audio
+        self._collected_stt_frames: list[Any] = []
+        self._collected_tts_frames: list[Any] = []
+
         if not LIVEKIT_AVAILABLE:
             logger.error(
                 "Cannot initialize LiveKit tracing manager: LiveKit is not available. "
@@ -148,6 +170,15 @@ class _LiveKitTracingManager:
                     attributes["llm.system_prompt"] = agent.instructions
                 elif hasattr(agent, "_instructions") and agent._instructions:
                     attributes["llm.system_prompt"] = agent._instructions
+
+                # Extract available tools from agent
+                self._available_tools = extract_available_tools(agent)
+                if self._available_tools:
+                    tool_attrs = serialize_tools_for_attributes(self._available_tools)
+                    attributes.update(tool_attrs)
+                    logger.debug(
+                        f"Extracted {len(self._available_tools)} tools from agent"
+                    )
 
                 # Add job context if available
                 try:
@@ -351,16 +382,191 @@ class _LiveKitTracingManager:
         self._create_async_handler("user_input_transcribed")(ev)
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        """Handle conversation_item_added event."""
-        self._create_async_handler("conversation_item_added")(ev)
+        """Handle conversation_item_added event and track history."""
+
+        async def _handle_with_history() -> None:
+            try:
+                # Track conversation history
+                item = ev.item if hasattr(ev, "item") else ev
+                self._track_conversation_item(item)
+
+                # Create span
+                create_event_span("conversation_item_added", ev, manager=self)
+            except Exception as e:
+                logger.warning(
+                    f"Error in conversation_item_added handler: {e}", exc_info=True
+                )
+
+        try:
+            asyncio.create_task(_handle_with_history())
+        except Exception as e:
+            logger.warning(
+                f"Failed to create task for conversation_item_added: {e}", exc_info=True
+            )
+
+    def _track_conversation_item(self, item: Any) -> None:
+        """Track a conversation item in history."""
+        try:
+            item_dict: dict[str, Any] = {}
+
+            # Determine item type
+            item_type = getattr(item, "type", None)
+            if not item_type:
+                if hasattr(item, "content") and hasattr(item, "role"):
+                    item_type = "message"
+                elif hasattr(item, "name") and hasattr(item, "arguments"):
+                    item_type = "function_call"
+                elif hasattr(item, "name") and hasattr(item, "output"):
+                    item_type = "function_call_output"
+                else:
+                    item_type = "unknown"
+
+            if item_type == "message":
+                # Extract role
+                if hasattr(item, "role"):
+                    role = item.role
+                    if hasattr(role, "value"):
+                        item_dict["role"] = str(role.value)
+                    else:
+                        item_dict["role"] = str(role)
+
+                # Extract content
+                if hasattr(item, "text_content"):
+                    item_dict["content"] = str(item.text_content)
+                elif hasattr(item, "content"):
+                    content = item.content
+                    if isinstance(content, str):
+                        item_dict["content"] = content
+                    elif isinstance(content, list):
+                        text_parts = []
+                        for part in content:
+                            if isinstance(part, str):
+                                text_parts.append(part)
+                            elif hasattr(part, "text"):
+                                text_parts.append(str(part.text))
+                        item_dict["content"] = "\n".join(text_parts)
+
+                item_dict["type"] = "message"
+                self._conversation_history.append(item_dict)
+
+            elif item_type == "function_call":
+                item_dict = {
+                    "type": "function_call",
+                    "name": str(item.name) if hasattr(item, "name") else "unknown",
+                    "arguments": (
+                        str(item.arguments) if hasattr(item, "arguments") else ""
+                    ),
+                }
+                self._conversation_history.append(item_dict)
+                # Also track as pending for merging
+                self._pending_function_calls.append(item_dict)
+
+            elif item_type == "function_call_output":
+                item_dict = {
+                    "type": "function_call_output",
+                    "name": str(item.name) if hasattr(item, "name") else "unknown",
+                    "output": str(item.output) if hasattr(item, "output") else "",
+                    "is_error": (
+                        bool(item.is_error) if hasattr(item, "is_error") else False
+                    ),
+                }
+                self._conversation_history.append(item_dict)
+                # Also track as pending for merging
+                self._pending_function_outputs.append(item_dict)
+
+        except Exception as e:
+            logger.debug(f"Failed to track conversation item: {e}")
 
     def _on_agent_false_interruption(self, ev: Any) -> None:
         """Handle agent_false_interruption event."""
         self._create_async_handler("agent_false_interruption")(ev)
 
     def _on_function_tools_executed(self, ev: FunctionToolsExecutedEvent) -> None:
-        """Handle function_tools_executed event."""
-        self._create_async_handler("function_tools_executed")(ev)
+        """Handle function_tools_executed event - merge into pending generation span."""
+
+        async def _handle_function_tools() -> None:
+            try:
+                # Extract function call results
+                if hasattr(ev, "results") and ev.results:
+                    for result in ev.results:
+                        output_dict = {
+                            "name": (
+                                str(result.name)
+                                if hasattr(result, "name")
+                                else "unknown"
+                            ),
+                            "output": (
+                                str(result.output) if hasattr(result, "output") else ""
+                            ),
+                            "is_error": (
+                                bool(result.is_error)
+                                if hasattr(result, "is_error")
+                                else False
+                            ),
+                        }
+                        self._pending_function_outputs.append(output_dict)
+
+                # If we have a pending generation span, update it with function data
+                if self._pending_generation_span:
+                    self._finalize_generation_span_with_functions()
+                else:
+                    # No pending span, create a minimal event span
+                    # (fallback, should rarely happen)
+                    create_event_span("function_tools_executed", ev, manager=self)
+
+            except Exception as e:
+                logger.warning(
+                    f"Error in function_tools_executed handler: {e}", exc_info=True
+                )
+
+        try:
+            asyncio.create_task(_handle_function_tools())
+        except Exception as e:
+            logger.warning(
+                f"Failed to create task for function_tools_executed: {e}", exc_info=True
+            )
+
+    def _finalize_generation_span_with_functions(self) -> None:
+        """Finalize the pending generation span with function call data."""
+        if not self._pending_generation_span:
+            return
+
+        try:
+            span = self._pending_generation_span
+
+            # Add function calls to span
+            if self._pending_function_calls:
+                span.attributes["llm.function_calls.count"] = len(
+                    self._pending_function_calls
+                )
+                try:
+                    span.attributes["llm.function_calls"] = json.dumps(
+                        self._pending_function_calls, default=str
+                    )
+                except Exception:
+                    pass
+
+            # Add function outputs to span
+            if self._pending_function_outputs:
+                span.attributes["llm.function_outputs.count"] = len(
+                    self._pending_function_outputs
+                )
+                try:
+                    span.attributes["llm.function_outputs"] = json.dumps(
+                        self._pending_function_outputs, default=str
+                    )
+                except Exception:
+                    pass
+
+            # Clear pending data
+            self._pending_function_calls.clear()
+            self._pending_function_outputs.clear()
+            self._pending_generation_span = None
+
+            logger.debug("Updated generation span with function data")
+
+        except Exception as e:
+            logger.warning(f"Failed to finalize generation span: {e}", exc_info=True)
 
     def _on_metrics_collected(self, ev: MetricsCollectedEvent) -> None:
         """Handle metrics_collected event."""
@@ -375,7 +581,7 @@ class _LiveKitTracingManager:
         self._create_async_handler("error")(ev)
 
     def _on_close(self, ev: CloseEvent) -> None:
-        """Handle close event and end trace."""
+        """Handle close event, add final data, and end trace."""
 
         async def _handle_close() -> None:
             try:
@@ -391,6 +597,43 @@ class _LiveKitTracingManager:
                         from noveum_trace import get_client
 
                         client = get_client()
+
+                        # Add final conversation history to trace
+                        if self._conversation_history:
+                            self._trace.set_attributes(
+                                {
+                                    "conversation.history.message_count": len(
+                                        self._conversation_history
+                                    ),
+                                }
+                            )
+                            try:
+                                self._trace.set_attributes(
+                                    {
+                                        "conversation.history": json.dumps(
+                                            self._conversation_history, default=str
+                                        ),
+                                    }
+                                )
+                            except Exception:
+                                pass
+
+                        # Add available tools summary to trace
+                        if self._available_tools:
+                            self._trace.set_attributes(
+                                {
+                                    "agent.available_tools.count": len(
+                                        self._available_tools
+                                    ),
+                                    "agent.available_tools.names": [
+                                        t.get("name", "unknown")
+                                        for t in self._available_tools
+                                    ],
+                                }
+                            )
+
+                        # Upload full conversation audio if we have collected frames
+                        await self._upload_full_conversation_audio()
 
                         # Set trace status based on close reason
                         if LIVEKIT_AVAILABLE:
@@ -435,6 +678,81 @@ class _LiveKitTracingManager:
         except Exception as e:
             logger.warning(f"Failed to create task for close event: {e}", exc_info=True)
 
+    async def _upload_full_conversation_audio(self) -> None:
+        """Upload full conversation audio (combined STT + TTS frames)."""
+        if not self._trace:
+            return
+
+        try:
+            from noveum_trace import get_client
+
+            client = get_client()
+            if not client:
+                return
+
+            # Upload combined STT audio if available
+            if self._collected_stt_frames:
+                audio_uuid = str(uuid.uuid4())
+                span = client.start_span(
+                    name="audio.full_conversation.stt",
+                    attributes={
+                        "audio.type": "stt",
+                        "audio.uuid": audio_uuid,
+                        "audio.frame_count": len(self._collected_stt_frames),
+                    },
+                )
+                upload_audio_frames(
+                    self._collected_stt_frames,
+                    audio_uuid,
+                    "stt_full",
+                    span.trace_id,
+                    span.span_id,
+                )
+                span.set_status(SpanStatus.OK)
+                client.finish_span(span)
+                logger.debug(
+                    f"Uploaded full STT audio: {len(self._collected_stt_frames)} frames"
+                )
+
+            # Upload combined TTS audio if available
+            if self._collected_tts_frames:
+                audio_uuid = str(uuid.uuid4())
+                span = client.start_span(
+                    name="audio.full_conversation.tts",
+                    attributes={
+                        "audio.type": "tts",
+                        "audio.uuid": audio_uuid,
+                        "audio.frame_count": len(self._collected_tts_frames),
+                    },
+                )
+                upload_audio_frames(
+                    self._collected_tts_frames,
+                    audio_uuid,
+                    "tts_full",
+                    span.trace_id,
+                    span.span_id,
+                )
+                span.set_status(SpanStatus.OK)
+                client.finish_span(span)
+                logger.debug(
+                    f"Uploaded full TTS audio: {len(self._collected_tts_frames)} frames"
+                )
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to upload full conversation audio: {e}", exc_info=True
+            )
+
+    def collect_stt_frames(self, frames: list[Any]) -> None:
+        """Collect STT audio frames for full conversation audio."""
+        if frames:
+            self._collected_stt_frames.extend(frames)
+
+    def collect_tts_frames(self, frames: list[Any]) -> None:
+        """Collect TTS audio frames for full conversation audio."""
+        if frames:
+            self._collected_tts_frames.extend(frames)
+
     # RealtimeSession event handlers (synchronous, use asyncio.create_task internally)
     def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
         """Handle input_speech_started event."""
@@ -451,8 +769,73 @@ class _LiveKitTracingManager:
         self._create_async_handler("realtime.input_audio_transcription_completed")(ev)
 
     def _on_generation_created(self, ev: GenerationCreatedEvent) -> None:
-        """Handle generation_created event."""
-        self._create_async_handler("realtime.generation_created")(ev)
+        """Handle generation_created event with tools and history."""
+
+        async def _handle_generation() -> None:
+            try:
+                from noveum_trace.core.context import get_current_trace
+                from noveum_trace import get_client
+
+                trace = get_current_trace()
+                if not trace:
+                    return
+
+                client = get_client()
+                if not client:
+                    return
+
+                # Serialize event data
+                from noveum_trace.integrations.livekit.livekit_utils import (
+                    _serialize_event_data,
+                    create_constants_metadata,
+                )
+
+                attributes = _serialize_event_data(ev, "realtime.generation_created")
+                attributes["event.type"] = "realtime.generation_created"
+
+                # Add available tools
+                if self._available_tools:
+                    tool_attrs = serialize_tools_for_attributes(self._available_tools)
+                    attributes.update(tool_attrs)
+
+                # Add conversation history snapshot
+                if self._conversation_history:
+                    attributes["llm.conversation.message_count"] = len(
+                        self._conversation_history
+                    )
+                    try:
+                        attributes["llm.conversation.history"] = json.dumps(
+                            self._conversation_history, default=str
+                        )
+                    except Exception:
+                        pass
+
+                # Add constants metadata
+                attributes["metadata"] = create_constants_metadata()
+
+                # Create span
+                span = client.start_span(
+                    name="livekit.realtime.generation_created",
+                    attributes=attributes,
+                )
+
+                # Store as pending for function call merging
+                self._pending_generation_span = span
+
+                span.set_status(SpanStatus.OK)
+                client.finish_span(span)
+
+            except Exception as e:
+                logger.warning(
+                    f"Error in generation_created handler: {e}", exc_info=True
+                )
+
+        try:
+            asyncio.create_task(_handle_generation())
+        except Exception as e:
+            logger.warning(
+                f"Failed to create task for generation_created: {e}", exc_info=True
+            )
 
     def _on_session_reconnected(self, ev: RealtimeSessionReconnectedEvent) -> None:
         """Handle session_reconnected event."""

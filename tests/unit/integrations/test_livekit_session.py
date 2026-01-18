@@ -392,34 +392,38 @@ class TestLiveKitTracingManager:
         assert manager._wrapped is True
         assert manager.session.start != manager._original_start
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-        new_callable=AsyncMock,
-    )
     @pytest.mark.asyncio
-    async def test_wrapped_start_creates_trace(
-        self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
-    ):
+    async def test_wrapped_start_creates_trace(self, mock_session, mock_client):
         """Test that wrapped start() creates a trace."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        manager._wrap_start_method()
-
-        mock_agent = Mock()
-        mock_agent.label = "TestAgent"
         mock_trace = Mock()
         mock_client.start_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
-        # Ensure original start is async
-        manager._original_start = AsyncMock(return_value=None)
 
-        await manager.session.start(mock_agent)
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
+            manager._wrap_start_method()
 
-        mock_client.start_trace.assert_called_once()
-        mock_set_trace.assert_called_once_with(mock_trace)
-        assert manager._trace == mock_trace
+            # Configure mock agent - set tools to empty list to avoid iteration error
+            mock_agent = Mock(spec=[])
+            mock_agent.label = "TestAgent"
+            mock_agent.tools = []
+            mock_agent.instructions = None
+
+            with patch(
+                "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
+            ) as mock_set_trace:
+                with patch(
+                    "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ):
+                    with patch("noveum_trace.get_client", return_value=mock_client):
+                        manager._original_start = AsyncMock(return_value=None)
+                        await manager.session.start(mock_agent)
+
+            mock_client.start_trace.assert_called_once()
+            mock_set_trace.assert_called_once_with(mock_trace)
+            assert manager._trace == mock_trace
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @pytest.mark.asyncio
@@ -976,9 +980,12 @@ class TestEventHandlers:
     @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
     async def test_on_function_tools_executed(self, mock_create_span, mock_session):
-        """Test _on_function_tools_executed handler."""
+        """Test _on_function_tools_executed handler - calls create_event_span as fallback when no pending span."""
         manager = _LiveKitTracingManager(session=mock_session)
+        # Ensure no pending generation span so fallback path is taken
+        manager._pending_generation_span = None
         event = Mock()
+        event.results = []  # No results to process
 
         manager._on_function_tools_executed(event)
 
@@ -1069,20 +1076,36 @@ class TestRealtimeEventHandlers:
             "realtime.input_audio_transcription_completed", event, manager=manager
         )
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
     @pytest.mark.asyncio
-    async def test_on_generation_created(self, mock_create_span, mock_session):
-        """Test _on_generation_created handler."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        event = Mock()
+    async def test_on_generation_created(self, mock_session, mock_client):
+        """Test _on_generation_created handler - creates span directly without using create_event_span."""
+        mock_trace = Mock()
+        mock_span = Mock()
+        mock_span.span_id = "test_span"
+        mock_span.attributes = {}
+        mock_client.start_span.return_value = mock_span
 
-        manager._on_generation_created(event)
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
 
-        await asyncio.sleep(0.01)
-        mock_create_span.assert_called_once_with(
-            "realtime.generation_created", event, manager=manager
-        )
+            event = Mock()
+            event.__dict__ = {"field": "value"}
+
+            # Patch at the location where it's used in the async handler
+            with patch(
+                "noveum_trace.core.context.get_current_trace", return_value=mock_trace
+            ):
+                with patch("noveum_trace.get_client", return_value=mock_client):
+                    manager._on_generation_created(event)
+                    await asyncio.sleep(0.05)  # Give async task more time
+
+        # _on_generation_created uses client.start_span directly, not create_event_span
+        mock_client.start_span.assert_called_once()
+        call_kwargs = mock_client.start_span.call_args
+        assert call_kwargs is not None
+        assert "livekit.realtime.generation_created" in str(call_kwargs)
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")
@@ -1571,113 +1594,134 @@ class TestRealtimeSessionSetup:
 class TestTraceCreationEdgeCases:
     """Test trace creation edge cases."""
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-        new_callable=AsyncMock,
-    )
     @pytest.mark.asyncio
-    async def test_wrapped_start_with_job_context(
-        self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
-    ):
+    async def test_wrapped_start_with_job_context(self, mock_session, mock_client):
         """Test wrapped_start with job context available."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        manager._wrap_start_method()
-
-        mock_agent = Mock()
-        mock_agent.label = "TestAgent"
         mock_trace = Mock()
         mock_client.start_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
 
-        # Mock get_job_context if available
-        try:
-            with patch(
-                "livekit.agents.get_job_context", create=True
-            ) as mock_get_job_context:
-                mock_job_ctx = Mock()
-                mock_job = Mock()
-                mock_job.id = "job_123"
-                mock_job_ctx.job = mock_job
-                mock_get_job_context.return_value = mock_job_ctx
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
+            manager._wrap_start_method()
 
-                manager._original_start = AsyncMock(return_value=None)
+            # Configure mock agent properly
+            mock_agent = Mock(spec=[])
+            mock_agent.label = "TestAgent"
+            mock_agent.tools = []
+            mock_agent.instructions = None
 
-                await manager.session.start(mock_agent)
+            # Mock get_job_context if available
+            try:
+                with patch(
+                    "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
+                ):
+                    with patch(
+                        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch("noveum_trace.get_client", return_value=mock_client):
+                            with patch(
+                                "livekit.agents.get_job_context", create=True
+                            ) as mock_get_job_context:
+                                mock_job_ctx = Mock()
+                                mock_job = Mock()
+                                mock_job.id = "job_123"
+                                mock_job_ctx.job = mock_job
+                                mock_get_job_context.return_value = mock_job_ctx
 
-                mock_client.start_trace.assert_called_once()
-                # Check that job context was used in trace name
-                call_args = mock_client.start_trace.call_args
-                assert call_args is not None
-        except (ImportError, ModuleNotFoundError):
-            # Skip if livekit.agents not available
-            pytest.skip("livekit.agents not available")
+                                manager._original_start = AsyncMock(return_value=None)
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-        new_callable=AsyncMock,
-    )
+                                await manager.session.start(mock_agent)
+
+                                mock_client.start_trace.assert_called_once()
+                                # Check that job context was used in trace name
+                                call_args = mock_client.start_trace.call_args
+                                assert call_args is not None
+            except (ImportError, ModuleNotFoundError):
+                # Skip if livekit.agents not available
+                pytest.skip("livekit.agents not available")
+
     @pytest.mark.asyncio
     async def test_wrapped_start_with_instructions_via_private(
-        self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
+        self, mock_session, mock_client
     ):
         """Test wrapped_start with agent instructions via _instructions."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        manager._wrap_start_method()
-
-        mock_agent = Mock()
-        mock_agent.label = "TestAgent"
-        mock_agent.instructions = None
-        mock_agent._instructions = "Private instructions"
         mock_trace = Mock()
         mock_client.start_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
 
-        manager._original_start = AsyncMock(return_value=None)
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
+            manager._wrap_start_method()
 
-        await manager.session.start(mock_agent)
+            # Configure mock agent properly
+            mock_agent = Mock(spec=[])
+            mock_agent.label = "TestAgent"
+            mock_agent.tools = []
+            mock_agent.instructions = None
+            mock_agent._instructions = "Private instructions"
 
-        mock_client.start_trace.assert_called_once()
-        call_args = mock_client.start_trace.call_args
-        assert call_args is not None
+            with patch(
+                "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
+            ):
+                with patch(
+                    "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ):
+                    with patch("noveum_trace.get_client", return_value=mock_client):
+                        manager._original_start = AsyncMock(return_value=None)
+                        await manager.session.start(mock_agent)
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-        new_callable=AsyncMock,
-    )
+            mock_client.start_trace.assert_called_once()
+            call_args = mock_client.start_trace.call_args
+            assert call_args is not None
+
     @pytest.mark.asyncio
     async def test_wrapped_start_when_get_job_context_fails(
-        self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
+        self, mock_session, mock_client
     ):
         """Test wrapped_start when get_job_context fails."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        manager._wrap_start_method()
-
-        mock_agent = Mock()
-        mock_agent.label = "TestAgent"
         mock_trace = Mock()
         mock_client.start_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
 
-        try:
-            with patch("livekit.agents.get_job_context", create=True) as mock_get_job:
-                mock_get_job.side_effect = Exception("Job context error")
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
+            manager._wrap_start_method()
 
-                manager._original_start = AsyncMock(return_value=None)
+            # Configure mock agent properly
+            mock_agent = Mock(spec=[])
+            mock_agent.label = "TestAgent"
+            mock_agent.tools = []
+            mock_agent.instructions = None
 
-                await manager.session.start(mock_agent)
+            try:
+                with patch(
+                    "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
+                ):
+                    with patch(
+                        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch("noveum_trace.get_client", return_value=mock_client):
+                            with patch(
+                                "livekit.agents.get_job_context", create=True
+                            ) as mock_get_job:
+                                mock_get_job.side_effect = Exception(
+                                    "Job context error"
+                                )
 
-                mock_client.start_trace.assert_called_once()
-        except (ImportError, ModuleNotFoundError):
-            pytest.skip("livekit.agents not available")
+                                manager._original_start = AsyncMock(return_value=None)
+
+                                await manager.session.start(mock_agent)
+
+                                mock_client.start_trace.assert_called_once()
+            except (ImportError, ModuleNotFoundError):
+                pytest.skip("livekit.agents not available")
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")
@@ -1704,30 +1748,38 @@ class TestTraceCreationEdgeCases:
 
         manager._original_start.assert_called_once_with(mock_agent)
 
-    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
-    @patch("noveum_trace.get_client")
-    @patch("noveum_trace.integrations.livekit.livekit_session.set_current_trace")
-    @patch(
-        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-        new_callable=AsyncMock,
-    )
     @pytest.mark.asyncio
-    async def test_wrapped_start_error_handling(
-        self, mock_sleep, mock_set_trace, mock_get_client, mock_session, mock_client
-    ):
+    async def test_wrapped_start_error_handling(self, mock_session, mock_client):
         """Test wrapped_start error handling and fallback."""
-        manager = _LiveKitTracingManager(session=mock_session)
-        manager._wrap_start_method()
-
-        mock_agent = Mock()
         mock_trace = Mock()
         mock_client.start_trace.return_value = mock_trace
-        mock_get_client.return_value = mock_client
 
-        manager._original_start = AsyncMock(side_effect=RuntimeError("Start error"))
+        with patch(
+            "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
+        ):
+            manager = _LiveKitTracingManager(session=mock_session)
+            manager._wrap_start_method()
 
-        # Should handle error and end trace
-        with pytest.raises(RuntimeError, match="Start error"):
-            await manager.session.start(mock_agent)
+            # Configure mock agent properly
+            mock_agent = Mock(spec=[])
+            mock_agent.label = "TestAgent"
+            mock_agent.tools = []
+            mock_agent.instructions = None
 
-        mock_client.finish_trace.assert_called_once()
+            with patch(
+                "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
+            ):
+                with patch(
+                    "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ):
+                    with patch("noveum_trace.get_client", return_value=mock_client):
+                        manager._original_start = AsyncMock(
+                            side_effect=RuntimeError("Start error")
+                        )
+
+                        # Should handle error and end trace
+                        with pytest.raises(RuntimeError, match="Start error"):
+                            await manager.session.start(mock_agent)
+
+            mock_client.finish_trace.assert_called_once()

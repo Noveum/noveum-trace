@@ -80,6 +80,7 @@ class LiveKitTTSWrapper:
         session_id: str,
         job_context: Optional[dict[str, Any]] = None,
         audio_base_dir: Optional[Path] = None,
+        frame_collector: Optional[Any] = None,
     ):
         """
         Initialize TTS wrapper.
@@ -89,12 +90,15 @@ class LiveKitTTSWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
+            frame_collector: Optional callback/object with collect_tts_frames(frames) method
+                            for full conversation audio collection
         """
         # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
         self._base_tts = tts
         self._session_id = session_id
         self._job_context = job_context or {}
         self._counter_ref = [0]  # Mutable reference for sharing with streams
+        self._frame_collector = frame_collector
 
         # Always create audio directory (doesn't require LiveKit)
         self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
@@ -178,6 +182,7 @@ class LiveKitTTSWrapper:
             model=self.model,
             counter_ref=self._counter_ref,
             audio_dir=self._audio_dir,
+            frame_collector=self._frame_collector,
         )
 
     def stream(self, **kwargs: Any) -> _WrappedSynthesizeStream:
@@ -199,6 +204,7 @@ class LiveKitTTSWrapper:
             model=self.model,
             counter_ref=self._counter_ref,
             audio_dir=self._audio_dir,
+            frame_collector=self._frame_collector,
         )
 
     def prewarm(self) -> None:
@@ -228,6 +234,7 @@ class _WrappedSynthesizeStream:
         model: str,
         counter_ref: list[int],
         audio_dir: Path,
+        frame_collector: Optional[Any] = None,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -236,6 +243,7 @@ class _WrappedSynthesizeStream:
         self._model = model
         self._counter_ref = counter_ref
         self._audio_dir = audio_dir
+        self._frame_collector = frame_collector
 
         # State management
         self._buffered_frames: list[Any] = []
@@ -389,6 +397,17 @@ class _WrappedSynthesizeStream:
                         f"Failed to create span for TTS streaming: {e}", exc_info=True
                     )
 
+            # Collect frames for full conversation audio before clearing
+            if self._frame_collector and hasattr(
+                self._frame_collector, "collect_tts_frames"
+            ):
+                try:
+                    self._frame_collector.collect_tts_frames(
+                        self._buffered_frames.copy()
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to collect TTS frames: {e}")
+
             # Clear buffer for next segment
             self._buffered_frames = []
             self._input_text = ""
@@ -448,6 +467,7 @@ class _WrappedChunkedStream:
         model: str,
         counter_ref: list[int],
         audio_dir: Path,
+        frame_collector: Optional[Any] = None,
     ):
         self._base_stream = base_stream
         self._input_text = input_text
@@ -457,6 +477,7 @@ class _WrappedChunkedStream:
         self._model = model
         self._counter_ref = counter_ref
         self._audio_dir = audio_dir
+        self._frame_collector = frame_collector
 
         # State management
         self._buffered_frames: list[Any] = []
@@ -491,6 +512,15 @@ class _WrappedChunkedStream:
             return
 
         self._span_created = True
+
+        # Collect frames for full conversation audio before span creation
+        if self._frame_collector and hasattr(
+            self._frame_collector, "collect_tts_frames"
+        ):
+            try:
+                self._frame_collector.collect_tts_frames(self._buffered_frames.copy())
+            except Exception as e:
+                logger.debug(f"Failed to collect TTS frames: {e}")
 
         # Increment counter
         self._counter_ref[0] += 1
