@@ -133,8 +133,8 @@ class TestLangChainIntegration:
                 == "tool.calculator"
             )
 
-            # Test with unknown name
-            assert get_operation_name("llm_start", {}) == "llm.unknown"
+            # Test with missing name (defaults to .node)
+            assert get_operation_name("llm_start", {}) == "llm.node"
 
             # Test with unknown event type
             assert (
@@ -1409,11 +1409,11 @@ class TestLangChainIntegration:
 
             # Test with None serialized
             name = get_operation_name("llm_start", None)
-            assert name == "llm_start.unknown"
+            assert name == "llm_start.node"
 
             # Test with empty serialized
             name = get_operation_name("chain_start", {})
-            assert name == "chain.unknown"
+            assert name == "chain.node"
 
             # Test with missing name
             serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
