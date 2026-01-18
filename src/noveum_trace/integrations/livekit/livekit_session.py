@@ -773,8 +773,8 @@ class _LiveKitTracingManager:
 
         async def _handle_generation() -> None:
             try:
-                from noveum_trace.core.context import get_current_trace
                 from noveum_trace import get_client
+                from noveum_trace.core.context import get_current_trace
 
                 trace = get_current_trace()
                 if not trace:
