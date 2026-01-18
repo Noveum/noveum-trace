@@ -472,9 +472,7 @@ class LiveKitLLMWrapper:
 
         # Update conversation history
         serialized_messages = serialize_chat_history(messages)
-        for msg in serialized_messages:
-            if msg not in self._conversation_history:
-                self._conversation_history.append(msg)
+        self._conversation_history.extend(serialized_messages)
         # Enforce cap to prevent memory growth
         if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
             self._conversation_history = self._conversation_history[
@@ -652,10 +650,11 @@ class _WrappedLLMStream:
         if self._span_created:
             return
 
-        self._span_created = True
-
         trace = get_current_trace()
         if not trace:
+            # Clear pending function data to prevent bleeding into next span
+            self._wrapper._flush_pending_function_data()
+            self._span_created = True
             return
 
         try:
@@ -663,7 +662,13 @@ class _WrappedLLMStream:
 
             client = get_client()
             if not client:
+                # Clear pending function data to prevent bleeding into next span
+                self._wrapper._flush_pending_function_data()
+                self._span_created = True
                 return
+
+            # Mark span as created now that we have valid trace and client
+            self._span_created = True
 
             # Get pending function data from wrapper
             pending_calls, pending_outputs = (

@@ -534,6 +534,15 @@ class _LiveKitTracingManager:
                             ),
                         }
                         self._pending_function_outputs.append(output_dict)
+                        if (
+                            len(self._pending_function_outputs)
+                            > MAX_PENDING_FUNCTION_OUTPUTS
+                        ):
+                            self._pending_function_outputs = (
+                                self._pending_function_outputs[
+                                    -MAX_PENDING_FUNCTION_OUTPUTS:
+                                ]
+                            )
 
                 # If we have a pending generation span, update it with function data
                 if self._pending_generation_span:
@@ -542,6 +551,9 @@ class _LiveKitTracingManager:
                     # No pending span, create a minimal event span
                     # (fallback, should rarely happen)
                     create_event_span("function_tools_executed", ev, manager=self)
+                    # Avoid leaking outputs/calls into a later generation
+                    self._pending_function_outputs.clear()
+                    self._pending_function_calls.clear()
 
             except Exception as e:
                 logger.warning(
