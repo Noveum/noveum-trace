@@ -218,3 +218,211 @@ class TestIsDescendantOf:
         handler._set_parent(run_id_1, None)
 
         assert not handler._is_descendant_of(run_id_1, run_id_2)
+
+
+@pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain not available")
+class TestTTFTCleanup:
+    """Test TTFT (Time To First Token) tracking cleanup to prevent memory leaks."""
+
+    @pytest.fixture
+    def handler(self):
+        """Create a callback handler for testing."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+            return NoveumTraceCallbackHandler()
+
+    def test_on_llm_end_cleans_up_ttft_when_span_is_none(self, handler):
+        """Test that on_llm_end cleans up TTFT tracking even when span is None."""
+        run_id = uuid4()
+
+        # Simulate first token received (adds run_id to _first_token_received)
+        with handler._first_token_lock:
+            handler._first_token_received.add(run_id)
+
+        # Verify run_id is in the set
+        assert run_id in handler._first_token_received
+
+        # Call on_llm_end with no span stored (span will be None)
+        mock_response = Mock()
+        mock_response.generations = []
+        mock_response.llm_output = {}
+
+        handler.on_llm_end(mock_response, run_id=run_id)
+
+        # Verify run_id was cleaned up even though span was None
+        assert run_id not in handler._first_token_received
+
+    def test_on_llm_end_cleans_up_ttft_with_valid_span(self, handler):
+        """Test that on_llm_end cleans up TTFT tracking with a valid span."""
+        run_id = uuid4()
+
+        # Create a mock span and store it
+        mock_span = Mock()
+        mock_span.attributes = {}
+        mock_span.start_time = None
+        handler._set_run(run_id, mock_span)
+
+        # Simulate first token received
+        with handler._first_token_lock:
+            handler._first_token_received.add(run_id)
+
+        # Verify run_id is in the set
+        assert run_id in handler._first_token_received
+
+        # Call on_llm_end
+        mock_response = Mock()
+        mock_response.generations = []
+        mock_response.llm_output = {}
+
+        handler.on_llm_end(mock_response, run_id=run_id)
+
+        # Verify run_id was cleaned up
+        assert run_id not in handler._first_token_received
+
+    def test_on_llm_error_cleans_up_ttft_when_span_is_none(self, handler):
+        """Test that on_llm_error cleans up TTFT tracking even when span is None."""
+        run_id = uuid4()
+
+        # Simulate first token received before error
+        with handler._first_token_lock:
+            handler._first_token_received.add(run_id)
+
+        # Verify run_id is in the set
+        assert run_id in handler._first_token_received
+
+        # Call on_llm_error with no span stored
+        error = Exception("Test error")
+        handler.on_llm_error(error, run_id=run_id)
+
+        # Verify run_id was cleaned up even though span was None
+        assert run_id not in handler._first_token_received
+
+    def test_on_llm_error_cleans_up_ttft_with_valid_span(self, handler):
+        """Test that on_llm_error cleans up TTFT tracking with a valid span."""
+        run_id = uuid4()
+
+        # Create a mock span and store it
+        mock_span = Mock()
+        handler._set_run(run_id, mock_span)
+
+        # Simulate first token received before error
+        with handler._first_token_lock:
+            handler._first_token_received.add(run_id)
+
+        # Verify run_id is in the set
+        assert run_id in handler._first_token_received
+
+        # Call on_llm_error
+        error = Exception("Test error")
+        handler.on_llm_error(error, run_id=run_id)
+
+        # Verify run_id was cleaned up
+        assert run_id not in handler._first_token_received
+
+    def test_on_llm_new_token_cleans_up_when_span_missing(self, handler):
+        """Test that on_llm_new_token cleans up TTFT tracking when span is missing."""
+        run_id = uuid4()
+
+        # Call on_llm_new_token without storing a span first
+        # This simulates a race condition or failed span creation
+        handler.on_llm_new_token("test token", run_id=run_id)
+
+        # Verify run_id was cleaned up because span was not found
+        assert run_id not in handler._first_token_received
+
+    def test_on_llm_new_token_records_ttft_with_valid_span(self, handler):
+        """Test that on_llm_new_token records TTFT with a valid span."""
+        from datetime import datetime, timezone
+
+        run_id = uuid4()
+
+        # Create a mock span with start_time and store it
+        mock_span = Mock()
+        mock_span.start_time = datetime.now(timezone.utc)
+        handler._set_run(run_id, mock_span)
+
+        # Call on_llm_new_token
+        handler.on_llm_new_token("test token", run_id=run_id)
+
+        # Verify run_id is in the set (not cleaned up because span exists)
+        assert run_id in handler._first_token_received
+
+        # Verify TTFT metrics were recorded
+        mock_span.set_attribute.assert_any_call("llm.streaming", True)
+
+    def test_ttft_cleanup_multiple_runs_no_leak(self, handler):
+        """Test that multiple streaming runs don't leak memory in _first_token_received."""
+        run_ids = [uuid4() for _ in range(10)]
+
+        # Simulate multiple streaming runs with various outcomes
+        for i, run_id in enumerate(run_ids):
+            # Add to first token received set
+            with handler._first_token_lock:
+                handler._first_token_received.add(run_id)
+
+            if i % 3 == 0:
+                # Simulate successful completion (no span)
+                mock_response = Mock()
+                mock_response.generations = []
+                mock_response.llm_output = {}
+                handler.on_llm_end(mock_response, run_id=run_id)
+            elif i % 3 == 1:
+                # Simulate error (no span)
+                handler.on_llm_error(Exception("test"), run_id=run_id)
+            else:
+                # Simulate new token with missing span
+                # First, ensure the run_id is added by on_llm_new_token itself
+                handler._first_token_received.discard(run_id)  # Remove first
+                handler.on_llm_new_token("token", run_id=run_id)
+
+        # Verify all run_ids were cleaned up - no memory leak
+        assert len(handler._first_token_received) == 0
+
+    def test_ttft_cleanup_thread_safety(self, handler):
+        """Test thread safety of TTFT cleanup operations."""
+        import threading
+
+        run_ids = [uuid4() for _ in range(50)]
+        errors = []
+
+        def simulate_streaming(run_id, outcome):
+            try:
+                # Add to first token set
+                with handler._first_token_lock:
+                    handler._first_token_received.add(run_id)
+
+                if outcome == "end":
+                    mock_response = Mock()
+                    mock_response.generations = []
+                    mock_response.llm_output = {}
+                    handler.on_llm_end(mock_response, run_id=run_id)
+                elif outcome == "error":
+                    handler.on_llm_error(Exception("test"), run_id=run_id)
+                else:
+                    handler._first_token_received.discard(run_id)
+                    handler.on_llm_new_token("token", run_id=run_id)
+            except Exception as e:
+                errors.append(e)
+
+        # Create threads with different outcomes
+        threads = []
+        outcomes = ["end", "error", "token"]
+        for i, run_id in enumerate(run_ids):
+            outcome = outcomes[i % 3]
+            thread = threading.Thread(target=simulate_streaming, args=(run_id, outcome))
+            threads.append(thread)
+
+        # Start all threads
+        for thread in threads:
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Should have no errors
+        assert len(errors) == 0
+
+        # Should have no memory leak
+        assert len(handler._first_token_received) == 0
