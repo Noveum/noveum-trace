@@ -524,10 +524,23 @@ class _WrappedLLMStream:
         self._no_id_counter = 0  # Counter for tool calls without an id
         self._usage: dict[str, Any] = {}
         self._span_created = False
+        self._stream_error: BaseException | None = None
 
     async def __anext__(self) -> Any:
         """Get next chunk from the stream."""
-        chunk = await self._base_stream.__anext__()
+        try:
+            chunk = await self._base_stream.__anext__()
+        except StopAsyncIteration:
+            # Stream ended normally - create span before propagating
+            if not self._span_created:
+                await self._create_span()
+            raise
+        except Exception as e:
+            # Stream errored - record error and create span before propagating
+            self._stream_error = e
+            if not self._span_created:
+                await self._create_span()
+            raise
 
         # Accumulate response text
         if hasattr(chunk, "choices") and chunk.choices:
@@ -780,9 +793,17 @@ class _WrappedLLMStream:
             # Add constants metadata
             attributes["metadata"] = create_constants_metadata()
 
+            # Add error info if stream errored
+            if self._stream_error:
+                attributes["error.type"] = type(self._stream_error).__name__
+                attributes["error.message"] = str(self._stream_error)
+
             # Create and finish span
             span = client.start_span(name="llm.chat", attributes=attributes)
-            span.set_status(SpanStatus.OK)
+            if self._stream_error:
+                span.set_status(SpanStatus.ERROR)
+            else:
+                span.set_status(SpanStatus.OK)
             client.finish_span(span)
 
         except Exception as e:

@@ -892,6 +892,11 @@ class _LiveKitTracingManager:
                 # Add constants metadata
                 attributes["metadata"] = create_constants_metadata()
 
+                # Finalize any existing pending span before creating a new one
+                # This prevents span leaks when generation events fire in quick succession
+                if self._pending_generation_span is not None:
+                    self._finalize_generation_span_with_functions()
+
                 # Create span (do NOT finish yet - wait for function call data)
                 span = client.start_span(
                     name="livekit.realtime.generation_created",
