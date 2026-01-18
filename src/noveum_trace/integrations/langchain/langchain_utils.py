@@ -309,7 +309,10 @@ def extract_noveum_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any
         metadata: LangChain metadata dict
 
     Returns:
-        Dict with 'name' and 'parent_name' keys if present
+        Dict with:
+        - 'name': Custom span name (if present)
+        - 'parent_name': Parent span name (if present)
+        - 'metadata': Dict of all other custom fields to add as span attributes
     """
     if not metadata:
         return {}
@@ -318,12 +321,19 @@ def extract_noveum_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any
     if not isinstance(noveum_config, dict):
         return {}
 
-    # Only extract 'name' and 'parent_name'
     result = {}
-    if "name" in noveum_config:
-        result["name"] = noveum_config["name"]
-    if "parent_name" in noveum_config:
-        result["parent_name"] = noveum_config["parent_name"]
+    custom_metadata = {}
+
+    for key, value in noveum_config.items():
+        if key == "name":
+            result["name"] = value
+        elif key == "parent_name":
+            result["parent_name"] = value
+        else:
+            custom_metadata[key] = value
+
+    if custom_metadata:
+        result["metadata"] = custom_metadata
 
     return result
 
@@ -351,9 +361,9 @@ def get_operation_name(
 
     # For other event types or non-LangGraph chains, need serialized
     if serialized is None:
-        return f"{event_type}.unknown"
+        return f"{event_type}.node"
 
-    name = serialized.get("name", "unknown")
+    name = serialized.get("name", "node")
 
     if event_type == "llm_start":
         # Use model name instead of class name for better readability
