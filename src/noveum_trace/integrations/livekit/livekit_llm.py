@@ -38,7 +38,7 @@ except ImportError as e:
     LIVEKIT_AVAILABLE = False
     logger.debug(
         "LiveKit is not importable. LiveKit LLM integration features will not be available. "
-        "Install it with: pip install livekit livekit-agents",
+        "Install it with: pip install livekit livekit-agents or check the documentation",
         exc_info=e,
     )
 
