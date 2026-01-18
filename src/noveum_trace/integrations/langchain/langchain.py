@@ -1415,6 +1415,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span.set_attribute("llm.streaming", True)
             except Exception as e:
                 logger.debug(f"Error recording TTFT metrics: {e}")
+        else:
+            with self._first_token_lock:
+                self._first_token_received.discard(run_id)
 
     def on_llm_end(
         self,
@@ -1428,14 +1431,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if not self._ensure_client():
             return
 
+        with self._first_token_lock:
+            self._first_token_received.discard(run_id)
+
         # Get and remove span from runs dict
         span = self._pop_run(run_id)
         if span is None:
             return
-
-        # Clean up TTFT tracking
-        with self._first_token_lock:
-            self._first_token_received.discard(run_id)
 
         try:
             # Add response data
@@ -1548,6 +1550,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Handle LLM error event."""
         if not self._ensure_client():
             return None
+
+        with self._first_token_lock:
+            self._first_token_received.discard(run_id)
 
         # Get and remove span from runs dict
         span = self._pop_run(run_id)

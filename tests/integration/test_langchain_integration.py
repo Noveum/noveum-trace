@@ -3098,3 +3098,832 @@ class TestLangChainIntegration:
             assert "tool:calculator:calculator" in call_args[1]["name"]
             assert call_args[1]["attributes"]["tool.name"] == "calculator"
             assert call_args[1]["attributes"]["tool.operation"] == "calculator"
+
+    # =========================================================================
+    # on_chat_model_start Tests
+    # =========================================================================
+
+    def test_chat_model_start_creates_span(self):
+        """Test that on_chat_model_start creates span with chat-specific attributes."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Create mock messages with model_dump method
+            mock_human_msg = Mock()
+            mock_human_msg.model_dump.return_value = {
+                "type": "human",
+                "content": "Hello, how are you?",
+            }
+
+            mock_ai_msg = Mock()
+            mock_ai_msg.model_dump.return_value = {
+                "type": "ai",
+                "content": "I'm doing well, thank you!",
+            }
+
+            messages = [[mock_human_msg, mock_ai_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={
+                            "name": "ChatOpenAI",
+                            "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+                            "kwargs": {"model": "gpt-4"},
+                        },
+                        messages=messages,
+                        run_id=run_id,
+                    )
+
+                    # Verify span was created
+                    mock_client.start_span.assert_called_once()
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    # Verify chat-specific attributes
+                    assert attributes["llm.operation"] == "chat"
+                    assert attributes["llm.input.type"] == "chat"
+                    assert attributes["llm.input.message_count"] == 2
+                    assert "llm.input.messages" in attributes
+                    assert attributes["langchain.run_id"] == str(run_id)
+
+    def test_chat_model_start_with_custom_name(self):
+        """Test that custom name from noveum metadata is used as span name."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                        metadata={"noveum": {"name": "my_custom_chat_span"}},
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    assert call_args[1]["name"] == "my_custom_chat_span"
+
+    def test_chat_model_start_with_parent_name(self):
+        """Test that parent span is resolved via parent_name in metadata."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+            mock_parent_span = Mock()
+            mock_parent_span.span_id = "parent_span_123"
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Store the parent span with a custom name
+            handler._set_name("parent_agent", "parent_span_123")
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = mock_trace
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                        metadata={"noveum": {"parent_name": "parent_agent"}},
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    assert call_args[1]["parent_span_id"] == "parent_span_123"
+
+    def test_chat_model_start_with_custom_metadata(self):
+        """Test that custom metadata is saved as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "user_id": "user_123",
+                                "session_id": "sess_456",
+                                "custom_tag": "important",
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["user_id"] == "user_123"
+                    assert custom_metadata["session_id"] == "sess_456"
+                    assert custom_metadata["custom_tag"] == "important"
+
+    def test_chat_model_start_detects_system_prompt(self):
+        """Test that has_system_prompt is True when system message is present."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Create messages with system prompt
+            mock_system_msg = Mock()
+            mock_system_msg.model_dump.return_value = {
+                "type": "system",
+                "content": "You are a helpful assistant.",
+            }
+
+            mock_human_msg = Mock()
+            mock_human_msg.model_dump.return_value = {
+                "type": "human",
+                "content": "Hello!",
+            }
+
+            messages = [[mock_system_msg, mock_human_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+                    assert attributes["llm.input.has_system_prompt"] is True
+
+    def test_chat_model_start_detects_tool_calls(self):
+        """Test that has_tool_calls is True when messages contain tool calls."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Create AI message with tool calls
+            mock_ai_msg = Mock()
+            mock_ai_msg.model_dump.return_value = {
+                "type": "ai",
+                "content": "",
+                "tool_calls": [
+                    {"name": "search", "args": {"query": "weather"}, "id": "call_123"}
+                ],
+            }
+
+            messages = [[mock_ai_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+                    assert attributes["llm.input.has_tool_calls"] is True
+
+    def test_chat_model_start_no_client_graceful(self):
+        """Test that on_chat_model_start handles missing client gracefully."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_get_client.side_effect = Exception("Client not initialized")
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            # Should not raise an exception
+            handler.on_chat_model_start(
+                serialized={"name": "ChatOpenAI"},
+                messages=messages,
+                run_id=run_id,
+            )
+
+            # No spans should be created
+            assert len(handler.runs) == 0
+
+    def test_chat_model_start_extracts_temperature(self):
+        """Test that temperature is extracted from kwargs/invocation_params."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={
+                            "name": "ChatOpenAI",
+                            "kwargs": {"temperature": 0.7},
+                        },
+                        messages=messages,
+                        run_id=run_id,
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+                    assert attributes["llm.input.temperature"] == 0.7
+
+    def test_chat_model_start_extracts_tools_from_invocation_params(self):
+        """Test that tools from bind_tools pattern are captured."""
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            mock_msg = Mock()
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
+            messages = [[mock_msg]]
+
+            # Define tools in invocation_params
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather info",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Search the web",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            ]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                        invocation_params={"tools": tools},
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert attributes["llm.available_tools.count"] == 2
+                    assert "get_weather" in attributes["llm.available_tools.names"]
+                    assert "search" in attributes["llm.available_tools.names"]
+
+    def test_chat_model_start_message_conversion(self):
+        """Test that messages are properly converted to dicts using message_to_dict."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Test with message that has dict() method (Pydantic v1 style)
+            mock_msg_v1 = Mock(spec=[])  # No model_dump
+            mock_msg_v1.dict = Mock(
+                return_value={"type": "human", "content": "Pydantic v1 message"}
+            )
+
+            # Test with message that has model_dump() method (Pydantic v2 style)
+            mock_msg_v2 = Mock()
+            mock_msg_v2.model_dump = Mock(
+                return_value={"type": "ai", "content": "Pydantic v2 message"}
+            )
+
+            messages = [[mock_msg_v1, mock_msg_v2]]
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chat_model_start(
+                        serialized={"name": "ChatOpenAI"},
+                        messages=messages,
+                        run_id=run_id,
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    # Verify messages were converted
+                    messages_json = json.loads(attributes["llm.input.messages"])
+                    assert len(messages_json[0]) == 2
+                    assert messages_json[0][0]["content"] == "Pydantic v1 message"
+                    assert messages_json[0][1]["content"] == "Pydantic v2 message"
+
+    # =========================================================================
+    # on_llm_new_token Tests (Additional Coverage)
+    # =========================================================================
+
+    def test_llm_new_token_ignores_subsequent_tokens(self):
+        """Test that second+ tokens don't trigger additional attribute updates."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Create a mock span with start_time
+            mock_span = Mock()
+            mock_span.start_time = datetime.now(timezone.utc)
+            handler._set_run(run_id, mock_span)
+
+            # First token
+            handler.on_llm_new_token("Hello", run_id=run_id)
+
+            # Verify first token recorded TTFT
+            assert run_id in handler._first_token_received
+
+            # Reset mock to track subsequent calls
+            mock_span.set_attribute.reset_mock()
+
+            # Second token - should not update attributes
+            handler.on_llm_new_token(" world", run_id=run_id)
+
+            # No additional attributes should be set for subsequent tokens
+            assert mock_span.set_attribute.call_count == 0
+
+            # Third token - still no updates
+            handler.on_llm_new_token("!", run_id=run_id)
+            assert mock_span.set_attribute.call_count == 0
+
+    def test_llm_new_token_ttft_calculation(self):
+        """Test that TTFT is calculated correctly from span start_time."""
+        import time
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            # Create a mock span with start_time 100ms ago
+            mock_span = Mock()
+            start_time = datetime.now(timezone.utc)
+            mock_span.start_time = start_time
+            handler._set_run(run_id, mock_span)
+
+            # Wait a bit to ensure measurable TTFT
+            time.sleep(0.05)  # 50ms
+
+            # Receive first token
+            handler.on_llm_new_token("token", run_id=run_id)
+
+            # Verify TTFT metrics were recorded
+            calls = {
+                call[0][0]: call[0][1]
+                for call in mock_span.set_attribute.call_args_list
+            }
+
+            assert "llm.time_to_first_token_ms" in calls
+            ttft_ms = calls["llm.time_to_first_token_ms"]
+            # TTFT should be at least 50ms (our sleep time)
+            assert ttft_ms >= 50
+            # But not unreasonably long (less than 1 second)
+            assert ttft_ms < 1000
+
+            assert "llm.streaming" in calls
+            assert calls["llm.streaming"] is True
+
+            assert "llm.first_token_time" in calls
+            # Should be a valid ISO format timestamp
+            assert "T" in calls["llm.first_token_time"]
+
+    # =========================================================================
+    # Custom Metadata Recording Tests (noveum.additional_attributes)
+    # =========================================================================
+
+    def test_llm_start_with_custom_metadata(self):
+        """Test that on_llm_start records custom metadata as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_llm_start(
+                        serialized={"name": "gpt-4"},
+                        prompts=["Hello"],
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "user_id": "user_123",
+                                "conversation_id": "conv_456",
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["user_id"] == "user_123"
+                    assert custom_metadata["conversation_id"] == "conv_456"
+
+    def test_chain_start_with_custom_metadata(self):
+        """Test that on_chain_start records custom metadata as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_chain_start(
+                        serialized={"name": "test_chain"},
+                        inputs={"input": "test"},
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "workflow_id": "wf_123",
+                                "step_number": 1,
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["workflow_id"] == "wf_123"
+                    assert custom_metadata["step_number"] == 1
+
+    def test_tool_start_with_custom_metadata(self):
+        """Test that on_tool_start records custom metadata as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_tool_start(
+                        serialized={"name": "calculator"},
+                        input_str="2 + 2",
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "tool_category": "math",
+                                "priority": "high",
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["tool_category"] == "math"
+                    assert custom_metadata["priority"] == "high"
+
+    def test_agent_start_with_custom_metadata(self):
+        """Test that on_agent_start records custom metadata as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_agent_start(
+                        serialized={"name": "react_agent"},
+                        inputs={"input": "test task"},
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "agent_version": "v2",
+                                "environment": "production",
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["agent_version"] == "v2"
+                    assert custom_metadata["environment"] == "production"
+
+    def test_retriever_start_with_custom_metadata(self):
+        """Test that on_retriever_start records custom metadata as noveum.additional_attributes."""
+        import json
+        from uuid import uuid4
+
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_trace = Mock()
+            mock_span = Mock()
+
+            mock_client.start_trace.return_value = mock_trace
+            mock_client.start_span.return_value = mock_span
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+            run_id = uuid4()
+
+            with patch(
+                "noveum_trace.core.context.get_current_trace"
+            ) as mock_get_current:
+                with patch("noveum_trace.core.context.set_current_trace"):
+                    mock_get_current.return_value = None
+
+                    handler.on_retriever_start(
+                        serialized={"name": "vector_store"},
+                        query="search query",
+                        run_id=run_id,
+                        metadata={
+                            "noveum": {
+                                "collection_name": "documents",
+                                "top_k": 5,
+                            }
+                        },
+                    )
+
+                    call_args = mock_client.start_span.call_args
+                    attributes = call_args[1]["attributes"]
+
+                    assert "noveum.additional_attributes" in attributes
+                    custom_metadata = json.loads(
+                        attributes["noveum.additional_attributes"]
+                    )
+                    assert custom_metadata["collection_name"] == "documents"
+                    assert custom_metadata["top_k"] == 5
+
+    # =========================================================================
+    # Default Name Change Tests ("unknown" -> "node")
+    # =========================================================================
+
+    def test_operation_name_defaults_to_node_when_serialized_none(self):
+        """Test that get_operation_name returns 'event.node' when serialized is None."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            NoveumTraceCallbackHandler()
+
+            # Test with None serialized
+            result = get_operation_name("chain_start", None)
+            assert result == "chain_start.node"
+
+            result = get_operation_name("llm_start", None)
+            assert result == "llm_start.node"
+
+            result = get_operation_name("tool_start", None)
+            assert result == "tool_start.node"
+
+    def test_operation_name_defaults_to_node_when_name_missing(self):
+        """Test that get_operation_name returns 'event.node' when name key is missing."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            NoveumTraceCallbackHandler()
+
+            # Test with empty serialized dict (no name key)
+            result = get_operation_name("chain_start", {})
+            assert result == "chain.node"
+
+            # Test with serialized dict missing name but having other keys
+            result = get_operation_name("tool_start", {"id": ["some", "id"]})
+            assert result == "tool.node"
+
+    def test_internal_get_operation_name_defaults_to_node(self):
+        """Test that _get_operation_name on handler returns .node suffix."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            handler = NoveumTraceCallbackHandler()
+
+            # Test with None serialized
+            result = handler._get_operation_name("llm_start", None)
+            assert result == "llm_start.node"
+
+            # Test with empty serialized
+            result = handler._get_operation_name("chain_start", {})
+            assert result == "chain.node"
+
+            # Test with serialized missing name
+            result = handler._get_operation_name("tool_start", {"id": ["test"]})
+            assert result == "tool.node"
