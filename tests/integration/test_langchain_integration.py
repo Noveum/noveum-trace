@@ -1749,6 +1749,57 @@ class TestLangChainIntegration:
             result = extract_noveum_metadata(metadata)
             assert result == {"name": "custom_name", "parent_name": "parent_span"}
 
+    def test_extract_noveum_metadata_with_custom_fields(self):
+        """Test noveum metadata extraction with custom fields."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            NoveumTraceCallbackHandler()
+
+            metadata = {
+                "noveum": {
+                    "name": "custom_name",
+                    "parent_name": "parent_span",
+                    "user_id": "user_123",
+                    "session_id": "sess_456",
+                    "custom_tag": "important",
+                }
+            }
+
+            result = extract_noveum_metadata(metadata)
+            assert result["name"] == "custom_name"
+            assert result["parent_name"] == "parent_span"
+            assert "metadata" in result
+            assert result["metadata"] == {
+                "user_id": "user_123",
+                "session_id": "sess_456",
+                "custom_tag": "important",
+            }
+
+    def test_extract_noveum_metadata_only_custom_fields(self):
+        """Test noveum metadata extraction with only custom fields (no name/parent_name)."""
+        with patch("noveum_trace.get_client") as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            NoveumTraceCallbackHandler()
+
+            metadata = {
+                "noveum": {
+                    "user_id": "user_123",
+                    "request_id": "req_789",
+                }
+            }
+
+            result = extract_noveum_metadata(metadata)
+            assert "name" not in result
+            assert "parent_name" not in result
+            assert result["metadata"] == {
+                "user_id": "user_123",
+                "request_id": "req_789",
+            }
+
     def test_extract_noveum_metadata_missing(self):
         """Test noveum metadata extraction with missing data."""
         with patch("noveum_trace.get_client") as mock_get_client:

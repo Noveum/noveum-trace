@@ -39,6 +39,7 @@ from noveum_trace.integrations.langchain.langchain_utils import (
     get_operation_name,
 )
 from noveum_trace.integrations.langchain.message_utils import (
+    message_to_dict,
     process_chain_inputs_outputs,
 )
 from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
@@ -129,6 +130,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.warning("Failed to get Noveum Trace client: %s", e)
             self._client = None
+
+        # Track first token received for TTFT (time-to-first-token) calculation
+        # Used by on_llm_new_token to record streaming metrics
+        self._first_token_received: set[Union[UUID, str]] = set()
+        self._first_token_lock = threading.Lock()
 
     def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
@@ -231,8 +237,8 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
     def _get_operation_name(self, event_type: str, serialized: dict[str, Any]) -> str:
         """Generate standardized operation names."""
         if serialized is None:
-            return f"{event_type}.unknown"
-        name = serialized.get("name", "unknown")
+            return f"{event_type}.node"
+        name = serialized.get("name", "node")
 
         if event_type == "llm_start":
             # Use model name instead of class name for better readability
@@ -996,6 +1002,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             noveum_config = extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
 
             # Use custom name if provided, otherwise use operation name
             span_name = custom_name if custom_name else operation_name
@@ -1149,6 +1156,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                         f"Could not update parent span with tools: {e}"
                                     )
 
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                span_attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
+                )
+
             # Create span (either in new trace or existing trace)
             if not self._ensure_client():
                 return None
@@ -1173,6 +1186,236 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error("Error handling LLM start event: %s", e)
 
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[Any]],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Handle chat model start event.
+
+        This is called instead of on_llm_start when using chat models like
+        ChatOpenAI, ChatAnthropic, etc. It receives structured messages
+        instead of flat string prompts.
+        """
+        if not self._ensure_client():
+            return
+
+        operation_name = get_operation_name("llm_start", serialized)
+
+        try:
+            # Extract Noveum-specific metadata
+            noveum_config = extract_noveum_metadata(metadata)
+            custom_name = noveum_config.get("name")
+            parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
+
+            # Use custom name if provided, otherwise use operation name
+            span_name = custom_name if custom_name else operation_name
+
+            # Resolve parent span ID based on mode
+            parent_span_id = self._resolve_parent_span_id(parent_run_id, parent_name)
+
+            # Get or create trace context
+            trace, should_manage = self._get_or_create_trace_context(
+                span_name, run_id, parent_run_id
+            )
+
+            # Convert messages to dicts using existing message_to_dict
+            message_dicts = [[message_to_dict(m) for m in batch] for batch in messages]
+
+            # Flatten for analysis (messages is List[List[BaseMessage]])
+            flat_messages = message_dicts[0] if message_dicts else []
+
+            # Analyze message content
+            has_system_prompt = any(m.get("type") == "system" for m in flat_messages)
+            has_tool_calls = any(m.get("tool_calls") for m in flat_messages)
+
+            # Extract the actual model name and provider
+            model_from_kwargs = kwargs.get("invocation_params", {}).get(
+                "model"
+            ) or kwargs.get("model")
+
+            if model_from_kwargs and not serialized.get("kwargs", {}).get("model"):
+                serialized_with_model = serialized.copy()
+                if "kwargs" not in serialized_with_model:
+                    serialized_with_model["kwargs"] = {}
+                serialized_with_model["kwargs"]["model"] = model_from_kwargs
+                extracted_model_name = self._extract_model_name(serialized_with_model)
+            else:
+                extracted_model_name = self._extract_model_name(serialized)
+
+            extracted_provider = self._extract_provider_name(serialized)
+
+            temperature = self._extract_invocation_param(
+                serialized, kwargs, "temperature"
+            )
+
+            attribute_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["tags", "metadata", "temperature"]
+                and isinstance(v, (str, int, float, bool))
+            }
+
+            # Extract code location information
+            code_location_info = extract_code_location_info(skip_frames=1)
+
+            span_attributes: dict[str, Any] = {
+                "langchain.run_id": str(run_id),
+                "llm.model": extracted_model_name,
+                "llm.provider": extracted_provider,
+                "llm.operation": "chat",
+                # Chat-specific input attributes
+                "llm.input.type": "chat",
+                "llm.input.messages": json.dumps(message_dicts, default=str),
+                "llm.input.message_count": len(flat_messages),
+                "llm.input.has_system_prompt": has_system_prompt,
+                "llm.input.has_tool_calls": has_tool_calls,
+                **attribute_kwargs,
+            }
+
+            # Add code location information if available
+            if code_location_info:
+                span_attributes.update(code_location_info)
+
+            if temperature is not None:
+                if isinstance(temperature, (int, float)) and not isinstance(
+                    temperature, bool
+                ):
+                    span_attributes["llm.input.temperature"] = float(temperature)
+                elif isinstance(temperature, str):
+                    try:
+                        span_attributes["llm.input.temperature"] = float(temperature)
+                    except ValueError:
+                        span_attributes["llm.input.temperature"] = temperature
+                else:
+                    span_attributes["llm.input.temperature"] = temperature
+
+            # Extract tools from invocation_params (for bind_tools pattern)
+            if kwargs:
+                invocation_params = kwargs.get("invocation_params", {})
+                tools_in_params = invocation_params.get(
+                    "tools"
+                ) or invocation_params.get("functions", [])
+
+                if tools_in_params:
+                    from noveum_trace.integrations.langchain.langchain_utils import (
+                        _convert_tools_to_dict_list,
+                    )
+
+                    converted_tools = _convert_tools_to_dict_list(tools_in_params)
+
+                    if converted_tools:
+                        if parent_run_id:
+                            self._set_run_tools(parent_run_id, converted_tools)
+                        else:
+                            self._set_run_tools(run_id, converted_tools)
+
+                        span_attributes["llm.available_tools.count"] = len(
+                            converted_tools
+                        )
+                        span_attributes["llm.available_tools.names"] = [
+                            t["name"] for t in converted_tools
+                        ]
+                        span_attributes["llm.available_tools.schemas"] = json.dumps(
+                            converted_tools, default=str
+                        )
+
+                        if parent_run_id:
+                            parent_span = self._get_run(parent_run_id)
+                            if parent_span:
+                                try:
+                                    parent_span.set_attributes(
+                                        {
+                                            "agent.available_tools.count": len(
+                                                converted_tools
+                                            ),
+                                            "agent.available_tools.names": [
+                                                t["name"] for t in converted_tools
+                                            ],
+                                            "agent.available_tools.schemas": json.dumps(
+                                                converted_tools, default=str
+                                            ),
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.debug(
+                                        f"Could not update parent span with tools: {e}"
+                                    )
+
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                span_attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
+                )
+
+            # Create span
+            if not self._ensure_client():
+                return None
+            assert self._client is not None
+            span = self._client.start_span(
+                name=span_name,
+                parent_span_id=parent_span_id,
+                attributes=span_attributes,
+            )
+
+            # Store span for later cleanup
+            self._set_run(run_id, span)
+
+            # Store custom name mapping if provided
+            if custom_name:
+                self._set_name(custom_name, span.span_id)
+
+            # Track if we need to manage trace lifecycle
+            if should_manage:
+                self._trace_managed_by_langchain = trace
+
+        except Exception as e:
+            logger.error("Error handling chat model start event: %s", e)
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Handle streaming token event - capture time-to-first-token (TTFT).
+
+        This callback fires for each token during streaming responses.
+        We only record metrics on the first token to calculate TTFT.
+        """
+        # Quick check without lock first (optimization for common case)
+        if run_id in self._first_token_received:
+            return
+
+        # Thread-safe check and record
+        with self._first_token_lock:
+            if run_id in self._first_token_received:
+                return  # Already recorded first token
+            self._first_token_received.add(run_id)
+
+        # Get the span and record TTFT
+        span = self._get_run(run_id)
+        if span:
+            try:
+                now = datetime.now(timezone.utc)
+                # Calculate TTFT from span start time
+                if hasattr(span, "start_time") and span.start_time:
+                    ttft_ms = (now - span.start_time).total_seconds() * 1000
+                    span.set_attribute("llm.time_to_first_token_ms", ttft_ms)
+                span.set_attribute("llm.first_token_time", now.isoformat())
+                span.set_attribute("llm.streaming", True)
+            except Exception as e:
+                logger.debug(f"Error recording TTFT metrics: {e}")
+
     def on_llm_end(
         self,
         response: "LLMResult",
@@ -1189,6 +1432,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         span = self._pop_run(run_id)
         if span is None:
             return
+
+        # Clean up TTFT tracking
+        with self._first_token_lock:
+            self._first_token_received.discard(run_id)
 
         try:
             # Add response data
@@ -1352,6 +1599,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             noveum_config = extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
 
             # Use custom name if provided, otherwise use operation name
             span_name = custom_name if custom_name else operation_name
@@ -1420,6 +1668,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 ]
                 attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str
+                )
+
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
                 )
 
             # Create span for chain
@@ -1654,6 +1908,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             noveum_config = extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
 
             tool_name = serialized.get("name", "unknown") if serialized else "unknown"
 
@@ -1805,6 +2060,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             if function_def_info:
                 span_attributes.update(function_def_info)
 
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                span_attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
+                )
+
             assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
@@ -1909,6 +2170,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             noveum_config = extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
 
             # Extract available tools from metadata or serialized data
             available_tools = extract_available_tools(serialized, metadata)
@@ -1960,6 +2222,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 ]
                 span_attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str
+                )
+
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                span_attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
                 )
 
             assert self._client is not None  # Type guard after _ensure_client
@@ -2139,6 +2407,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             noveum_config = extract_noveum_metadata(metadata)
             custom_name = noveum_config.get("name")
             parent_name = noveum_config.get("parent_name")
+            custom_metadata = noveum_config.get("metadata", {})
 
             # Use custom name if provided, otherwise use operation name
             span_name = custom_name if custom_name else operation_name
@@ -2151,26 +2420,35 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_name, run_id, parent_run_id
             )
 
+            # Build span attributes
+            span_attributes = {
+                "langchain.run_id": str(run_id),
+                "retrieval.type": "search",
+                "retrieval.operation": (
+                    serialized.get("name", "unknown") if serialized else "unknown"
+                ),
+                # Input attributes
+                "retrieval.query": query,
+                **{
+                    k: v
+                    for k, v in kwargs.items()
+                    if k not in ["tags", "metadata"]
+                    and isinstance(v, (str, int, float, bool))
+                },
+            }
+
+            # Add custom noveum metadata to span attributes
+            if custom_metadata:
+                span_attributes["noveum.additional_attributes"] = json.dumps(
+                    custom_metadata, default=str
+                )
+
             # Create span
             assert self._client is not None  # Type guard after _ensure_client
             span = self._client.start_span(
                 name=span_name,
                 parent_span_id=parent_span_id,
-                attributes={
-                    "langchain.run_id": str(run_id),
-                    "retrieval.type": "search",
-                    "retrieval.operation": (
-                        serialized.get("name", "unknown") if serialized else "unknown"
-                    ),
-                    # Input attributes
-                    "retrieval.query": query,
-                    **{
-                        k: v
-                        for k, v in kwargs.items()
-                        if k not in ["tags", "metadata"]
-                        and isinstance(v, (str, int, float, bool))
-                    },
-                },
+                attributes=span_attributes,
             )
 
             # Store span for later cleanup
