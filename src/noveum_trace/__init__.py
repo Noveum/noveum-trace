@@ -66,7 +66,7 @@ Example:
 
 """
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
