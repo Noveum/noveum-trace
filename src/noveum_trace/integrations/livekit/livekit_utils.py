@@ -245,6 +245,166 @@ def upload_audio_frames(
         return False
 
 
+def upload_audio_file(
+    file_path: Path,
+    audio_uuid: str,
+    audio_type: str,
+    trace_id: str,
+    span_id: str,
+    content_type: str = "audio/ogg",
+) -> bool:
+    """
+    Upload an audio file to Noveum platform.
+
+    This utility function handles uploading pre-recorded audio files
+    (e.g., from LiveKit's RecorderIO which saves as OGG/Opus).
+
+    Args:
+        file_path: Path to the audio file
+        audio_uuid: Unique identifier for the audio file
+        audio_type: Type of audio ('conversation', 'stt', 'tts')
+        trace_id: Trace ID to associate audio with
+        span_id: Span ID to associate audio with
+        content_type: MIME type of the audio file (default: "audio/ogg")
+
+    Returns:
+        True if upload was successful, False otherwise
+    """
+    try:
+        if not file_path.exists():
+            logger.warning(f"Audio file not found: {file_path}")
+            return False
+
+        # Read the audio file
+        audio_bytes = file_path.read_bytes()
+        if not audio_bytes:
+            logger.warning(f"Audio file is empty: {file_path}")
+            return False
+
+        # Get client
+        from noveum_trace import get_client
+
+        client = get_client()
+        if not client:
+            logger.info("No client available, skipping audio upload")
+            return False
+
+        # Get file format from extension
+        file_format = file_path.suffix.lstrip(".") or "ogg"
+
+        # Prepare metadata
+        metadata = {
+            "format": file_format,
+            "type": audio_type,
+            "content_type": content_type,
+            "file_size_bytes": len(audio_bytes),
+        }
+
+        # Export audio (non-blocking, queued)
+        client.export_audio(
+            audio_data=audio_bytes,
+            trace_id=trace_id,
+            span_id=span_id,
+            audio_uuid=audio_uuid,
+            metadata=metadata,
+        )
+
+        logger.debug(f"Queued audio file upload: {audio_uuid} ({file_path.name})")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Failed to upload audio file {audio_uuid}: {e}", exc_info=True)
+        return False
+
+
+def get_conversation_history_from_session(session: Any) -> dict[str, Any]:
+    """
+    Extract conversation history from a LiveKit AgentSession.
+
+    Uses LiveKit's built-in ChatContext (session.history) which already
+    tracks all messages, function calls, and function outputs.
+
+    Args:
+        session: LiveKit AgentSession instance
+
+    Returns:
+        Dictionary with conversation history in serializable format
+    """
+    try:
+        # Access LiveKit's built-in conversation history
+        if not hasattr(session, "history"):
+            logger.debug("Session does not have 'history' attribute")
+            return {}
+
+        chat_ctx = session.history
+        if chat_ctx is None:
+            return {}
+
+        # Use LiveKit's built-in to_dict() method for serialization
+        if hasattr(chat_ctx, "to_dict"):
+            return chat_ctx.to_dict()
+
+        # Fallback: manually extract items
+        if hasattr(chat_ctx, "items"):
+            items = []
+            for item in chat_ctx.items:
+                if hasattr(item, "model_dump"):
+                    items.append(item.model_dump(mode="json", exclude_none=True))
+                elif hasattr(item, "dict"):
+                    items.append(item.dict())
+                else:
+                    items.append(str(item))
+            return {"items": items}
+
+        return {}
+
+    except Exception as e:
+        logger.warning(f"Failed to extract conversation history: {e}", exc_info=True)
+        return {}
+
+
+def get_recorder_audio_path(session: Any) -> Optional[Path]:
+    """
+    Get the audio recording path from a LiveKit AgentSession's RecorderIO.
+
+    LiveKit's RecorderIO automatically records the full conversation as a
+    stereo OGG/Opus file (left channel = user, right channel = agent).
+
+    Args:
+        session: LiveKit AgentSession instance
+
+    Returns:
+        Path to the recorded audio file, or None if not available
+    """
+    try:
+        # Access LiveKit's built-in RecorderIO
+        recorder = getattr(session, "_recorder_io", None)
+        if recorder is None:
+            logger.debug("Session does not have '_recorder_io' attribute")
+            return None
+
+        # Get the output path
+        output_path = getattr(recorder, "output_path", None)
+        if output_path is None:
+            logger.debug("RecorderIO does not have 'output_path'")
+            return None
+
+        # Ensure it's a Path object
+        if not isinstance(output_path, Path):
+            output_path = Path(output_path)
+
+        # Check if file exists
+        if not output_path.exists():
+            logger.debug(f"Recording file does not exist: {output_path}")
+            return None
+
+        return output_path
+
+    except Exception as e:
+        logger.warning(f"Failed to get recorder audio path: {e}", exc_info=True)
+        return None
+
+
 def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> Path:
     """
     Ensure audio storage directory exists for a session.
@@ -860,19 +1020,22 @@ def create_event_span(
         # For speech_created events, add conversation history and available tools
         # This makes each speech_created span a complete "dataset item" with full context
         if event_type == "speech_created" and manager:
-            # Add conversation history snapshot (history at time of this LLM call)
-            if (
-                hasattr(manager, "_conversation_history")
-                and manager._conversation_history
-            ):
-                history_snapshot = manager._conversation_history.copy()
-                attributes["llm.conversation.message_count"] = len(history_snapshot)
-                try:
-                    attributes["llm.conversation.history"] = json.dumps(
-                        history_snapshot, default=str
-                    )
-                except Exception:
-                    pass
+            # Add conversation history from LiveKit's built-in ChatContext
+            if hasattr(manager, "session") and manager.session:
+                history_dict = get_conversation_history_from_session(manager.session)
+                if history_dict:
+                    items = history_dict.get("items", [])
+                    # Bound to prevent oversized attributes
+                    if len(items) > MAX_CONVERSATION_HISTORY:
+                        items = items[-MAX_CONVERSATION_HISTORY:]
+                        history_dict = {"items": items}
+                    attributes["llm.conversation.message_count"] = len(items)
+                    try:
+                        attributes["llm.conversation.history"] = json.dumps(
+                            history_dict, default=str
+                        )
+                    except Exception:
+                        pass
 
             # Add available tools to span (same span as LLM call)
             if hasattr(manager, "_available_tools") and manager._available_tools:

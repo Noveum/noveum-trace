@@ -18,7 +18,6 @@ from noveum_trace.core.context import set_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.core.trace import Trace
 from noveum_trace.integrations.livekit.livekit_constants import (
-    MAX_AUDIO_FRAMES,
     MAX_CONVERSATION_HISTORY,
     MAX_PENDING_FUNCTION_CALLS,
     MAX_PENDING_FUNCTION_OUTPUTS,
@@ -26,12 +25,15 @@ from noveum_trace.integrations.livekit.livekit_constants import (
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_event_span,
     extract_available_tools,
+    get_conversation_history_from_session,
+    get_recorder_audio_path,
     serialize_tools_for_attributes,
     update_speech_span_with_chat_items,
-    upload_audio_frames,
+    upload_audio_file,
 )
 
 logger = logging.getLogger(__name__)
+
 
 try:
     from livekit.agents.llm.realtime import (
@@ -103,17 +105,10 @@ class _LiveKitTracingManager:
         # Available tools extracted from agent
         self._available_tools: list[dict[str, Any]] = []
 
-        # Conversation history tracking
-        self._conversation_history: list[dict[str, Any]] = []
-
         # Pending function calls/outputs (to merge with generation span)
         self._pending_generation_span: Optional[Any] = None
         self._pending_function_calls: list[dict[str, Any]] = []
         self._pending_function_outputs: list[dict[str, Any]] = []
-
-        # Audio frames collection for full conversation audio
-        self._collected_stt_frames: list[Any] = []
-        self._collected_tts_frames: list[Any] = []
 
         if not LIVEKIT_AVAILABLE:
             logger.error(
@@ -390,13 +385,18 @@ class _LiveKitTracingManager:
         self._create_async_handler("user_input_transcribed")(ev)
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        """Handle conversation_item_added event and track history."""
+        """Handle conversation_item_added event.
 
-        async def _handle_with_history() -> None:
+        Note: Conversation history is automatically tracked by LiveKit's ChatContext
+        (accessible via session.history). We only need to track pending function calls/outputs
+        for merging with generation spans.
+        """
+
+        async def _handle_conversation_item() -> None:
             try:
-                # Track conversation history
+                # Track pending function calls/outputs for generation span merging
                 item = ev.item if hasattr(ev, "item") else ev
-                self._track_conversation_item(item)
+                self._track_pending_function_item(item)
 
                 # Create span
                 create_event_span("conversation_item_added", ev, manager=self)
@@ -406,85 +406,45 @@ class _LiveKitTracingManager:
                 )
 
         try:
-            asyncio.create_task(_handle_with_history())
+            asyncio.create_task(_handle_conversation_item())
         except Exception as e:
             logger.warning(
                 f"Failed to create task for conversation_item_added: {e}", exc_info=True
             )
 
-    def _track_conversation_item(self, item: Any) -> None:
-        """Track a conversation item in history."""
-        try:
-            item_dict: dict[str, Any] = {}
+    def _track_pending_function_item(self, item: Any) -> None:
+        """Track pending function calls/outputs for merging with generation spans.
 
+        Note: This only tracks function-related items for span merging.
+        Full conversation history is maintained by LiveKit's ChatContext.
+        """
+        try:
             # Determine item type
             item_type = getattr(item, "type", None)
             if not item_type:
-                if hasattr(item, "content") and hasattr(item, "role"):
-                    item_type = "message"
-                elif hasattr(item, "name") and hasattr(item, "arguments"):
+                if hasattr(item, "name") and hasattr(item, "arguments"):
                     item_type = "function_call"
                 elif hasattr(item, "name") and hasattr(item, "output"):
                     item_type = "function_call_output"
                 else:
-                    item_type = "unknown"
+                    return  # Not a function item, skip
 
-            if item_type == "message":
-                # Extract role
-                if hasattr(item, "role"):
-                    role = item.role
-                    if hasattr(role, "value"):
-                        item_dict["role"] = str(role.value)
-                    else:
-                        item_dict["role"] = str(role)
-
-                # Extract content
-                if hasattr(item, "text_content"):
-                    item_dict["content"] = str(item.text_content)
-                elif hasattr(item, "content"):
-                    content = item.content
-                    if isinstance(content, str):
-                        item_dict["content"] = content
-                    elif isinstance(content, list):
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, str):
-                                text_parts.append(part)
-                            elif hasattr(part, "text"):
-                                text_parts.append(str(part.text))
-                        item_dict["content"] = "\n".join(text_parts)
-
-                item_dict["type"] = "message"
-                self._conversation_history.append(item_dict)
-                # Enforce cap to prevent memory growth
-                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
-                    self._conversation_history = self._conversation_history[
-                        -MAX_CONVERSATION_HISTORY:
-                    ]
-
-            elif item_type == "function_call":
-                item_dict = {
+            if item_type == "function_call":
+                call_dict: dict[str, Any] = {
                     "type": "function_call",
                     "name": str(item.name) if hasattr(item, "name") else "unknown",
                     "arguments": (
                         str(item.arguments) if hasattr(item, "arguments") else ""
                     ),
                 }
-                self._conversation_history.append(item_dict)
-                # Enforce cap to prevent memory growth
-                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
-                    self._conversation_history = self._conversation_history[
-                        -MAX_CONVERSATION_HISTORY:
-                    ]
-                # Also track as pending for merging
-                self._pending_function_calls.append(item_dict)
+                self._pending_function_calls.append(call_dict)
                 if len(self._pending_function_calls) > MAX_PENDING_FUNCTION_CALLS:
                     self._pending_function_calls = self._pending_function_calls[
                         -MAX_PENDING_FUNCTION_CALLS:
                     ]
 
             elif item_type == "function_call_output":
-                item_dict = {
+                output_dict: dict[str, Any] = {
                     "type": "function_call_output",
                     "name": str(item.name) if hasattr(item, "name") else "unknown",
                     "output": str(item.output) if hasattr(item, "output") else "",
@@ -492,21 +452,14 @@ class _LiveKitTracingManager:
                         bool(item.is_error) if hasattr(item, "is_error") else False
                     ),
                 }
-                self._conversation_history.append(item_dict)
-                # Enforce cap to prevent memory growth
-                if len(self._conversation_history) > MAX_CONVERSATION_HISTORY:
-                    self._conversation_history = self._conversation_history[
-                        -MAX_CONVERSATION_HISTORY:
-                    ]
-                # Also track as pending for merging
-                self._pending_function_outputs.append(item_dict)
+                self._pending_function_outputs.append(output_dict)
                 if len(self._pending_function_outputs) > MAX_PENDING_FUNCTION_OUTPUTS:
                     self._pending_function_outputs = self._pending_function_outputs[
                         -MAX_PENDING_FUNCTION_OUTPUTS:
                     ]
 
         except Exception as e:
-            logger.debug(f"Failed to track conversation item: {e}")
+            logger.debug(f"Failed to track pending function item: {e}")
 
     def _on_agent_false_interruption(self, ev: Any) -> None:
         """Handle agent_false_interruption event."""
@@ -784,6 +737,9 @@ class _LiveKitTracingManager:
 
     def _on_close(self, ev: CloseEvent) -> None:
         """Handle close event, add final data, and end trace."""
+        logger.info(
+            f"_on_close handler triggered: reason={getattr(ev, 'reason', 'unknown')}"
+        )
 
         async def _handle_close() -> None:
             try:
@@ -808,23 +764,22 @@ class _LiveKitTracingManager:
 
                         client = get_client()
 
-                        # Add final conversation history to trace (bounded snapshot)
-                        if self._conversation_history:
-                            history_snapshot = self._conversation_history[
-                                -MAX_CONVERSATION_HISTORY:
-                            ]
+                        # Get conversation history from LiveKit's built-in ChatContext
+                        history_dict = get_conversation_history_from_session(
+                            self.session
+                        )
+                        if history_dict:
+                            items = history_dict.get("items", [])
                             self._trace.set_attributes(
                                 {
-                                    "conversation.history.message_count": len(
-                                        history_snapshot
-                                    ),
+                                    "conversation.history.message_count": len(items),
                                 }
                             )
                             try:
                                 self._trace.set_attributes(
                                     {
                                         "conversation.history": json.dumps(
-                                            history_snapshot, default=str
+                                            history_dict, default=str
                                         ),
                                     }
                                 )
@@ -845,7 +800,7 @@ class _LiveKitTracingManager:
                                 }
                             )
 
-                        # Upload full conversation audio if we have collected frames
+                        # Upload full conversation audio from LiveKit's RecorderIO
                         await self._upload_full_conversation_audio()
 
                         # Set trace status based on close reason
@@ -879,6 +834,7 @@ class _LiveKitTracingManager:
                         client.finish_trace(self._trace)
                         set_current_trace(None)
                         self._trace = None
+                        logger.info("Trace finished successfully in close handler")
                     except Exception as e:
                         logger.warning(
                             f"Failed to end trace on close: {e}", exc_info=True
@@ -886,14 +842,54 @@ class _LiveKitTracingManager:
             except Exception as e:
                 logger.warning(f"Error in close handler: {e}", exc_info=True)
 
+        # Try to run the close handler - use different strategies based on event loop state
         try:
-            asyncio.create_task(_handle_close())
-        except Exception as e:
-            logger.warning(f"Failed to create task for close event: {e}", exc_info=True)
+            loop = asyncio.get_running_loop()
+            # Event loop is running, create task and try to ensure it runs
+            task = loop.create_task(_handle_close())
+            # Add a callback to log when task completes
+            task.add_done_callback(
+                lambda t: logger.debug(
+                    f"Close handler task completed: cancelled={t.cancelled()}, "
+                    f"exception={t.exception() if not t.cancelled() else 'N/A'}"
+                )
+            )
+        except RuntimeError:
+            # No running event loop - try to run synchronously
+            logger.debug("No running event loop, running close handler synchronously")
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(_handle_close())
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.warning(
+                    f"Failed to run close handler synchronously: {e}", exc_info=True
+                )
 
     async def _upload_full_conversation_audio(self) -> None:
-        """Upload full conversation audio (combined STT + TTS frames)."""
+        """Upload full conversation audio from LiveKit's RecorderIO.
+
+        LiveKit's RecorderIO automatically records the entire conversation as a
+        stereo OGG/Opus file (left channel = user audio, right channel = agent audio).
+        This provides a properly synchronized recording without manual frame collection.
+        """
+        # Get the recording path from LiveKit's RecorderIO
+        audio_path = get_recorder_audio_path(self.session)
+
+        if audio_path is None:
+            logger.debug(
+                "_upload_full_conversation_audio: No recording available. "
+                "Ensure session.start(record=True) was called."
+            )
+            return
+
         if not self._trace:
+            logger.warning(
+                "_upload_full_conversation_audio: No trace available, skipping"
+            )
             return
 
         try:
@@ -901,85 +897,55 @@ class _LiveKitTracingManager:
 
             client = get_client()
             if not client:
+                logger.warning(
+                    "_upload_full_conversation_audio: No client available, skipping"
+                )
                 return
 
-            # Upload combined STT audio if available
-            if self._collected_stt_frames:
-                frame_count = len(self._collected_stt_frames)
-                audio_uuid = str(uuid.uuid4())
-                span = client.start_span(
-                    name="audio.full_conversation.stt",
-                    attributes={
-                        "audio.type": "stt",
-                        "audio.uuid": audio_uuid,
-                        "audio.frame_count": frame_count,
-                    },
-                )
-                upload_audio_frames(
-                    self._collected_stt_frames,
-                    audio_uuid,
-                    "stt_full",
-                    span.trace_id,
-                    span.span_id,
-                )
-                span.set_status(SpanStatus.OK)
-                client.finish_span(span)
-                # Clear buffer after upload to free memory
-                self._collected_stt_frames.clear()
-                logger.debug(f"Uploaded full STT audio: {frame_count} frames")
+            audio_uuid = str(uuid.uuid4())
 
-            # Upload combined TTS audio if available
-            if self._collected_tts_frames:
-                frame_count = len(self._collected_tts_frames)
-                audio_uuid = str(uuid.uuid4())
-                span = client.start_span(
-                    name="audio.full_conversation.tts",
-                    attributes={
-                        "audio.type": "tts",
-                        "audio.uuid": audio_uuid,
-                        "audio.frame_count": frame_count,
-                    },
-                )
-                upload_audio_frames(
-                    self._collected_tts_frames,
-                    audio_uuid,
-                    "tts_full",
-                    span.trace_id,
-                    span.span_id,
-                )
-                span.set_status(SpanStatus.OK)
-                client.finish_span(span)
-                # Clear buffer after upload to free memory
-                self._collected_tts_frames.clear()
-                logger.debug(f"Uploaded full TTS audio: {frame_count} frames")
+            logger.info(
+                f"Uploading full conversation audio from RecorderIO: "
+                f"path={audio_path}, uuid={audio_uuid}"
+            )
+
+            # Create span for the full conversation audio
+            # Use stt.audio_uuid attribute pattern so UI can play it (same as stt.stream)
+            span = client.start_span(
+                name="stt.full_conversation",
+                attributes={
+                    "stt.audio_uuid": audio_uuid,
+                    "stt.audio_format": "ogg",
+                    "stt.audio_channels": "stereo",
+                    "stt.audio_channel_left": "user",
+                    "stt.audio_channel_right": "agent",
+                    "stt.audio_source": "livekit_recorder_io",
+                    "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
+                },
+            )
+
+            # Upload the OGG audio file directly
+            success = upload_audio_file(
+                audio_path,
+                audio_uuid,
+                "stt",  # Use "stt" type so UI recognizes it
+                span.trace_id,
+                span.span_id,
+                content_type="audio/ogg",
+            )
+
+            if success:
+                logger.info(f"Successfully uploaded conversation audio: {audio_path}")
+            else:
+                logger.warning(f"Failed to upload conversation audio: {audio_path}")
+
+            span.set_status(SpanStatus.OK)
+            client.finish_span(span)
 
         except Exception as e:
-            # Clear buffers on exception to free memory even if upload failed
-            self._collected_stt_frames.clear()
-            self._collected_tts_frames.clear()
             logger.warning(
                 f"Failed to upload full conversation audio: {e}", exc_info=True
             )
-
-    def collect_stt_frames(self, frames: list[Any]) -> None:
-        """Collect STT audio frames for full conversation audio (capped to prevent OOM)."""
-        if not frames:
-            return
-        # Cap frame collection to prevent OOM on long sessions
-        if len(self._collected_stt_frames) >= MAX_AUDIO_FRAMES:
-            return  # Already at cap, skip new frames
-        remaining = MAX_AUDIO_FRAMES - len(self._collected_stt_frames)
-        self._collected_stt_frames.extend(frames[:remaining])
-
-    def collect_tts_frames(self, frames: list[Any]) -> None:
-        """Collect TTS audio frames for full conversation audio (capped to prevent OOM)."""
-        if not frames:
-            return
-        # Cap frame collection to prevent OOM on long sessions
-        if len(self._collected_tts_frames) >= MAX_AUDIO_FRAMES:
-            return  # Already at cap, skip new frames
-        remaining = MAX_AUDIO_FRAMES - len(self._collected_tts_frames)
-        self._collected_tts_frames.extend(frames[:remaining])
 
     # RealtimeSession event handlers (synchronous, use asyncio.create_task internally)
     def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
@@ -1026,15 +992,18 @@ class _LiveKitTracingManager:
                     tool_attrs = serialize_tools_for_attributes(self._available_tools)
                     attributes.update(tool_attrs)
 
-                # Add conversation history snapshot (bounded to prevent oversized attributes)
-                if self._conversation_history:
-                    history_snapshot = self._conversation_history[
-                        -MAX_CONVERSATION_HISTORY:
-                    ]
-                    attributes["llm.conversation.message_count"] = len(history_snapshot)
+                # Add conversation history from LiveKit's built-in ChatContext
+                history_dict = get_conversation_history_from_session(self.session)
+                if history_dict:
+                    items = history_dict.get("items", [])
+                    # Bound to prevent oversized attributes
+                    if len(items) > MAX_CONVERSATION_HISTORY:
+                        items = items[-MAX_CONVERSATION_HISTORY:]
+                        history_dict = {"items": items}
+                    attributes["llm.conversation.message_count"] = len(items)
                     try:
                         attributes["llm.conversation.history"] = json.dumps(
-                            history_snapshot, default=str
+                            history_dict, default=str
                         )
                     except Exception:
                         pass
@@ -1125,6 +1094,13 @@ def setup_livekit_tracing(
     - Create spans for each AgentSession event
     - Create spans for RealtimeSession events (if using RealtimeModel)
     - End trace on close or error events
+    - Upload full conversation audio from LiveKit's RecorderIO (when record=True)
+    - Export conversation history from LiveKit's ChatContext
+
+    Note:
+        For full conversation audio, ensure session.start(record=True) is called.
+        LiveKit's RecorderIO automatically records as a stereo OGG file
+        (left channel = user, right channel = agent).
 
     Args:
         session: The AgentSession to trace
@@ -1138,11 +1114,11 @@ def setup_livekit_tracing(
         >>> from livekit.agents import AgentSession, Agent
         >>> from noveum_trace.integrations.livekit import setup_livekit_tracing
         >>>
-        >>> session = AgentSession()
-        >>> manager = setup_livekit_tracing(session)
+        >>> session = AgentSession(stt=stt, tts=tts, llm=llm)
+        >>> setup_livekit_tracing(session)
         >>>
         >>> agent = Agent(instructions="You are helpful.")
-        >>> await session.start(agent)  # Trace is automatically created
+        >>> await session.start(agent, record=True)  # Enables audio recording
     """
     manager = _LiveKitTracingManager(
         session, enabled=enabled, trace_name_prefix=trace_name_prefix

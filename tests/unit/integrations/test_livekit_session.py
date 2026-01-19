@@ -552,6 +552,15 @@ class TestSetupLiveKitTracing:
 
         assert manager.enabled is False
 
+    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
+    def test_setup_livekit_tracing_basic(self, mock_session: Mock) -> None:
+        """Test basic setup - full audio is handled by LiveKit's RecorderIO."""
+        manager = setup_livekit_tracing(mock_session)
+
+        # Manager should be created and enabled
+        assert manager.enabled is True
+        assert manager.session == mock_session
+
 
 @pytest.mark.skipif(
     not LIVEKIT_SESSION_AVAILABLE, reason="LiveKit session not available"
@@ -852,8 +861,12 @@ class TestCreateEventSpanParentResolution:
         # Manager needs proper attributes for speech_created handling
         manager = Mock()
         manager._last_agent_state_changed_span_id = "agent_span_123"
-        manager._conversation_history = []  # Empty list, not Mock
         manager._available_tools = []  # Empty list, not Mock
+        # Mock session.history for conversation history
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {"items": []}
+        manager.session = Mock()
+        manager.session.history = mock_history
 
         event = Mock()
         # Ensure event can be serialized
@@ -1154,6 +1167,11 @@ class TestRealtimeEventHandlers:
         mock_span.span_id = "test_span"
         mock_span.attributes = {}
         mock_client.start_span.return_value = mock_span
+
+        # Mock session.history for conversation history access
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {"items": []}
+        mock_session.history = mock_history
 
         with patch(
             "noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True
@@ -1502,6 +1520,12 @@ class TestCloseEventHandling:
         except ImportError:
             pytest.skip("CloseReason not available")
 
+        # Mock session.history for conversation history access
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {"items": []}
+        mock_session.history = mock_history
+        mock_session._recorder_io = None  # No recording
+
         manager = _LiveKitTracingManager(session=mock_session)
         mock_trace = Mock()
         mock_trace.set_status = Mock()
@@ -1517,7 +1541,7 @@ class TestCloseEventHandling:
 
         manager._on_close(event)
 
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # Give more time for async task
         mock_create_span.assert_called_once_with("close", event, manager=manager)
         # Use stored reference since manager._trace is set to None after finish_trace
         mock_trace.set_status.assert_called_once()
@@ -1535,6 +1559,12 @@ class TestCloseEventHandling:
         except ImportError:
             pytest.skip("CloseReason not available")
 
+        # Mock session.history for conversation history access
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {"items": []}
+        mock_session.history = mock_history
+        mock_session._recorder_io = None  # No recording
+
         manager = _LiveKitTracingManager(session=mock_session)
         mock_trace = Mock()
         mock_trace.set_status = Mock()
@@ -1549,7 +1579,7 @@ class TestCloseEventHandling:
 
         manager._on_close(event)
 
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # Give more time for async task
         mock_create_span.assert_called_once()
         # Use stored reference since manager._trace is set to None after finish_trace
         mock_trace.set_status.assert_called_once()
@@ -1562,9 +1592,16 @@ class TestCloseEventHandling:
         self, mock_get_client: Mock, mock_create_span: Mock, mock_session: Mock
     ) -> None:
         """Test _on_close when LiveKit not available."""
+        # Mock session.history for conversation history access
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {"items": []}
+        mock_session.history = mock_history
+        mock_session._recorder_io = None  # No recording
+
         manager = _LiveKitTracingManager(session=mock_session)
-        manager._trace = Mock()
-        manager._trace.set_status = Mock()
+        mock_trace = Mock()
+        mock_trace.set_status = Mock()
+        manager._trace = mock_trace
 
         mock_client = Mock()
         mock_client.finish_trace = Mock()
@@ -1578,11 +1615,10 @@ class TestCloseEventHandling:
         ):
             manager._on_close(event)
 
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # Give more time for async task
         mock_create_span.assert_called_once()
-        # Trace should still exist and set_status should be called
-        if manager._trace:
-            manager._trace.set_status.assert_called_once()
+        # Use stored reference since manager._trace is set to None after finish_trace
+        mock_trace.set_status.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_session.create_event_span")

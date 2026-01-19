@@ -5,6 +5,7 @@ A step-by-step guide to add automatic tracing to your LiveKit agents using noveu
 The complete solution consists of two components working together:
 - **Session Tracing**: Automatic tracing of all AgentSession and RealtimeSession events
 - **STT/TTS Tracing**: Detailed tracing of speech-to-text and text-to-speech operations with audio capture
+- **Full Conversation Audio**: Automatic upload of the complete conversation recording
 
 ## Table of Contents
 
@@ -12,12 +13,14 @@ The complete solution consists of two components working together:
 2. [Installation](#installation)
 3. [Quick Start](#quick-start)
 4. [How It Works](#how-it-works)
-5. [Session Tracing Component](#session-tracing-component)
-6. [STT/TTS Tracing Component](#stttts-tracing-component)
-7. [Configuration Options](#configuration-options)
-8. [Verification](#verification)
-9. [Common Use Cases](#common-use-cases)
-10. [Troubleshooting](#troubleshooting)
+5. [Architecture](#architecture)
+6. [Session Tracing Component](#session-tracing-component)
+7. [STT/TTS Tracing Component](#stttts-tracing-component)
+8. [Full Conversation Audio Recording](#full-conversation-audio-recording)
+9. [Configuration Options](#configuration-options)
+10. [Verification](#verification)
+11. [Common Use Cases](#common-use-cases)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -88,14 +91,14 @@ async def entrypoint(ctx: JobContext):
     # Extract job context for span attributes
     job_context = await extract_job_context(ctx)
     
-    # Wrap STT provider for detailed audio tracking
+    # Wrap STT provider for detailed audio tracking (per-utterance)
     traced_stt = LiveKitSTTWrapper(
         stt=deepgram.STT(model="nova-2", language="en-US"),
         session_id=ctx.job.id,
         job_context=job_context
     )
     
-    # Wrap TTS provider for detailed audio tracking
+    # Wrap TTS provider for detailed audio tracking (per-utterance)
     traced_tts = LiveKitTTSWrapper(
         tts=cartesia.TTS(model="sonic-english"),
         session_id=ctx.job.id,
@@ -111,9 +114,9 @@ async def entrypoint(ctx: JobContext):
     # Create agent
     agent = Agent(instructions="You are a helpful assistant.")
     
-    # Connect and start
+    # Connect and start with recording enabled for full conversation audio
     await ctx.connect()
-    await session.start(agent)
+    await session.start(agent, record=True)  # record=True enables full audio capture
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
@@ -121,20 +124,110 @@ if __name__ == "__main__":
 
 This complete solution provides:
 - **Session Events**: Automatic tracing of all AgentSession and RealtimeSession events
-- **STT/TTS Operations**: Detailed tracking with audio file capture
+- **STT/TTS Operations**: Detailed tracking with per-utterance audio capture
+- **Full Conversation Audio**: Complete stereo recording uploaded at session end (user=left, agent=right)
+- **LLM Metrics**: Token usage, cost, and latency captured from LiveKit events
+- **Chat History**: Full conversation history in JSON format on generation spans
+- **Available Tools**: Function/tool definitions captured in traces
 - **Automatic Trace Creation**: Trace is created when `session.start()` is called
-- **Complete Observability**: Full visibility into your agent's behavior
 
 ---
 
 ## How It Works
 
-The complete LiveKit integration consists of two components that work together:
+The complete LiveKit integration consists of three components that work together:
 
 1. **Session Tracing Component**: Automatically creates a trace when your session starts and tracks all AgentSession and RealtimeSession events
-2. **STT/TTS Tracing Component**: Wraps your STT and TTS providers to capture detailed audio operations with file storage
+2. **STT/TTS Tracing Component**: Wraps your STT and TTS providers to capture detailed per-utterance audio operations
+3. **Full Conversation Audio**: LiveKit's RecorderIO captures the complete conversation as a stereo OGG file, which is automatically uploaded at session close
 
-These components are designed to work together - session tracing creates the trace context, and STT/TTS wrappers create spans within that context. You should use both components for complete observability.
+These components are designed to work together - session tracing creates the trace context, STT/TTS wrappers create spans for individual operations, and the full conversation audio provides a complete recording for review.
+
+---
+
+## Architecture
+
+### Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         LiveKit Agent Session                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│  │ User Audio   │───▶│ STT Wrapper  │───▶│ stt.stream   │ Per-utterance│
+│  │ (microphone) │    │ (Deepgram)   │    │    spans     │ audio+text   │
+│  └──────────────┘    └──────────────┘    └──────────────┘              │
+│         │                                                               │
+│         │            ┌──────────────┐    ┌──────────────┐              │
+│         │            │   LLM Call   │───▶│ generation   │ Chat history │
+│         │            │  (OpenAI)    │    │    spans     │ Tools, Tokens│
+│         │            └──────────────┘    └──────────────┘              │
+│         │                   │                                           │
+│         │            ┌──────────────┐    ┌──────────────┐              │
+│         │            │ TTS Wrapper  │───▶│ tts.stream   │ Per-utterance│
+│         │            │ (Cartesia)   │    │    spans     │ audio+text   │
+│         │            └──────────────┘    └──────────────┘              │
+│         │                   │                                           │
+│         ▼                   ▼                                           │
+│  ┌──────────────────────────────────────┐    ┌────────────────────┐   │
+│  │         LiveKit RecorderIO           │───▶│stt.full_conversation│   │
+│  │  (Stereo OGG: left=user, right=agent)│    │   (at session end) │   │
+│  └──────────────────────────────────────┘    └────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────┐
+                         │  Noveum Platform │
+                         │  - Traces        │
+                         │  - Spans         │
+                         │  - Audio Files   │
+                         └──────────────────┘
+```
+
+### What Gets Captured
+
+| Component | Span Name | Data Captured |
+|-----------|-----------|---------------|
+| STT Wrapper | `stt.stream` | Per-utterance audio (WAV), transcript, confidence, language |
+| TTS Wrapper | `tts.stream` | Per-utterance audio (WAV), input text, voice settings |
+| Session Events | `livekit.*` | All AgentSession and RealtimeSession events |
+| LLM Generation | `livekit.realtime.generation_created` | Chat history, available tools, function calls |
+| LLM Metrics | (merged into spans) | Token usage, cost, latency, model info |
+| Full Audio | `stt.full_conversation` | Complete conversation (OGG stereo), uploaded at session end |
+
+### Span Attributes
+
+**STT Stream Spans** (`stt.stream`):
+- `stt.audio_uuid`: UUID for audio retrieval
+- `stt.transcript`: Transcribed text
+- `stt.confidence`: Transcription confidence (0-1)
+- `stt.language`: Detected language
+- `stt.provider`: STT provider (e.g., "Deepgram")
+- `stt.model`: Model used (e.g., "nova-2")
+
+**TTS Stream Spans** (`tts.stream`):
+- `tts.audio_uuid`: UUID for audio retrieval
+- `tts.input_text`: Text that was synthesized
+- `tts.provider`: TTS provider (e.g., "Cartesia")
+- `tts.model`: Model used
+
+**Generation Spans** (`livekit.realtime.generation_created`):
+- `llm.conversation.history`: Full chat history as JSON
+- `llm.conversation.message_count`: Number of messages
+- `llm.available_tools.count`: Number of available tools
+- `llm.available_tools.names`: List of tool names
+- `llm.available_tools.schemas`: Full tool schemas as JSON
+- `llm.function_calls`: Function calls made (when merged)
+- `llm.function_outputs`: Function outputs (when merged)
+
+**Full Conversation Audio** (`stt.full_conversation`):
+- `stt.audio_uuid`: UUID for audio retrieval (UI-compatible format)
+- `stt.audio_format`: "ogg"
+- `stt.audio_channels`: "stereo"
+- `stt.audio_channel_left`: "user"
+- `stt.audio_channel_right`: "agent"
 
 ---
 
@@ -243,6 +336,72 @@ The session tracing component is designed to work with the STT/TTS tracing compo
 - STT/TTS spans will automatically be children of the session trace
 - Both components work seamlessly together
 - Always use both components together for complete observability
+
+---
+
+## Full Conversation Audio Recording
+
+The integration automatically uploads the complete conversation audio when the session ends. This requires enabling LiveKit's RecorderIO.
+
+### How to Enable Recording
+
+**Option 1: In Code (Recommended)**
+
+```python
+# Enable recording when starting the session
+await session.start(agent, record=True)
+```
+
+**Option 2: CLI Flag (Console Mode)**
+
+When running in console mode, add the `--record` flag:
+
+```bash
+python your_agent.py --test console --record
+```
+
+### How It Works
+
+1. **LiveKit's RecorderIO** captures audio during the session
+2. Audio is saved as a **stereo OGG/Opus file**:
+   - Left channel: User audio (microphone)
+   - Right channel: Agent audio (TTS output)
+3. **At session close**, the SDK:
+   - Creates an `stt.full_conversation` span
+   - Uploads the OGG file to Noveum
+   - Uses `stt.audio_uuid` format so UI can play it
+
+### Recording Storage
+
+- **Console mode**: `console-recordings/session-{timestamp}/audio.ogg`
+- **Production mode**: Managed by LiveKit Cloud
+
+### Span Format
+
+The full conversation creates a span like:
+
+```json
+{
+  "name": "stt.full_conversation",
+  "attributes": {
+    "stt.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
+    "stt.audio_format": "ogg",
+    "stt.audio_channels": "stereo",
+    "stt.audio_channel_left": "user",
+    "stt.audio_channel_right": "agent",
+    "stt.audio_source": "livekit_recorder_io"
+  }
+}
+```
+
+### When Recording is NOT Available
+
+If `record=True` is not set, the SDK will log:
+```
+_upload_full_conversation_audio: No recording available. Ensure session.start(record=True) was called.
+```
+
+Per-utterance STT/TTS audio will still be captured via the wrappers.
 
 ---
 
@@ -751,6 +910,59 @@ async def entrypoint(ctx: JobContext):
    ```python
    # Check logs for: "RealtimeSession handlers registered"
    ```
+
+### Issue: Full Conversation Audio Not Uploaded
+
+**Problem**: No `stt.full_conversation` span appears in traces.
+
+**Solutions**:
+
+1. **Enable recording in session.start()**:
+   ```python
+   # CORRECT - recording enabled
+   await session.start(agent, record=True)
+   
+   # WRONG - recording not enabled
+   await session.start(agent)
+   ```
+
+2. **For console mode, add --record flag**:
+   ```bash
+   # CORRECT
+   python your_agent.py --test console --record
+   
+   # WRONG - no recording
+   python your_agent.py --test console
+   ```
+
+3. **Check for the recording message in logs**:
+   ```
+   Recording   Session recording will be saved to console-recordings/session-{timestamp}
+   ```
+
+4. **Verify the session closes properly**:
+   - Use a `complete_order` or similar tool to close the session gracefully
+   - Avoid Ctrl+C which may interrupt the upload
+
+5. **Check if RecorderIO is available**:
+   ```python
+   # The SDK checks session._recorder_io for the recording path
+   # If None, recording wasn't enabled
+   ```
+
+### Issue: Full Conversation Audio Not Playable in UI
+
+**Problem**: `stt.full_conversation` span exists but audio doesn't play.
+
+**Solutions**:
+
+1. **Verify the span has correct attributes**:
+   - Must have `stt.audio_uuid` (not `audio.uuid`)
+   - The UI looks for the `stt.` prefix to identify playable audio
+
+2. **Check audio format**:
+   - The audio should be OGG/Opus format
+   - UI supports OGG playback directly
 
 ## Complete Examples
 

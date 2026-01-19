@@ -80,7 +80,6 @@ class LiveKitTTSWrapper:
         session_id: str,
         job_context: Optional[dict[str, Any]] = None,
         audio_base_dir: Optional[Path] = None,
-        frame_collector: Optional[Any] = None,
     ):
         """
         Initialize TTS wrapper.
@@ -90,15 +89,12 @@ class LiveKitTTSWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
             audio_base_dir: Base directory for audio files (defaults to 'audio_files')
-            frame_collector: Optional callback/object with collect_tts_frames(frames) method
-                            for full conversation audio collection
         """
         # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
         self._base_tts = tts
         self._session_id = session_id
         self._job_context = job_context or {}
         self._counter_ref = [0]  # Mutable reference for sharing with streams
-        self._frame_collector = frame_collector
 
         # Always create audio directory (doesn't require LiveKit)
         self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
@@ -400,17 +396,7 @@ class _WrappedSynthesizeStream:
                     )
 
             # Collect frames for full conversation audio before clearing
-            # Access frame_collector from wrapper for dynamic lookup (allows setting after stream creation)
-            frame_collector = (
-                getattr(self._wrapper, "_frame_collector", None)
-                if self._wrapper
-                else None
-            )
-            if frame_collector and hasattr(frame_collector, "collect_tts_frames"):
-                try:
-                    frame_collector.collect_tts_frames(self._buffered_frames.copy())
-                except Exception as e:
-                    logger.debug(f"Failed to collect TTS frames: {e}")
+            # Note: Full conversation audio is handled by LiveKit's RecorderIO
 
             # Clear buffer for next segment
             self._buffered_frames = []
@@ -519,16 +505,7 @@ class _WrappedChunkedStream:
 
         self._span_created = True
 
-        # Collect frames for full conversation audio before span creation
-        # Access frame_collector from wrapper for dynamic lookup (allows setting after stream creation)
-        frame_collector = (
-            getattr(self._wrapper, "_frame_collector", None) if self._wrapper else None
-        )
-        if frame_collector and hasattr(frame_collector, "collect_tts_frames"):
-            try:
-                frame_collector.collect_tts_frames(self._buffered_frames.copy())
-            except Exception as e:
-                logger.debug(f"Failed to collect TTS frames: {e}")
+        # Note: Full conversation audio is handled by LiveKit's RecorderIO
 
         # Increment counter
         self._counter_ref[0] += 1
