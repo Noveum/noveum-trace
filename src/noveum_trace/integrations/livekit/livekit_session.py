@@ -876,6 +876,27 @@ class _LiveKitTracingManager:
         stereo OGG/Opus file (left channel = user audio, right channel = agent audio).
         This provides a properly synchronized recording without manual frame collection.
         """
+        # Finalize the recorder before reading the audio file to ensure
+        # the OGG encoding is fully flushed and complete
+        recorder_io = getattr(self.session, "_recorder_io", None)
+        if recorder_io is not None:
+            try:
+                # Check if recorder is already closed (various ways it might be indicated)
+                is_closed = (
+                    getattr(recorder_io, "closed", False)
+                    or getattr(recorder_io, "_closed", False)
+                )
+                if not is_closed and hasattr(recorder_io, "aclose"):
+                    logger.debug("Finalizing RecorderIO before reading audio file")
+                    await recorder_io.aclose()
+                    logger.debug("RecorderIO finalized successfully")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to finalize RecorderIO: {e}. "
+                    "Audio file may be incomplete or corrupted.",
+                    exc_info=True,
+                )
+
         # Get the recording path from LiveKit's RecorderIO
         audio_path = get_recorder_audio_path(self.session)
 
