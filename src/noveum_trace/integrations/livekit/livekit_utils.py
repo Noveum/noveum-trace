@@ -1291,8 +1291,27 @@ def serialize_chat_history(messages: list[Any]) -> list[dict[str, Any]]:
             if isinstance(msg, dict):
                 msg_dict = {
                     "role": msg.get("role", "unknown"),
-                    "content": str(msg.get("content", "")),
                 }
+
+                # Extract content - handle both str and list with dict parts
+                # Mirroring behavior in _serialize_chat_items to handle dict parts correctly
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    msg_dict["content"] = content
+                elif isinstance(content, list):
+                    # Handle list of content parts (same logic as _serialize_chat_items)
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, str):
+                            text_parts.append(part)
+                        elif hasattr(part, "text"):
+                            text_parts.append(str(part.text))
+                        elif isinstance(part, dict) and "text" in part:
+                            text_parts.append(str(part["text"]))
+                    msg_dict["content"] = "\n".join(text_parts) if text_parts else ""
+                else:
+                    msg_dict["content"] = str(content) if content else ""
+
                 if msg.get("name"):
                     msg_dict["name"] = msg["name"]
                 serialized.append(msg_dict)

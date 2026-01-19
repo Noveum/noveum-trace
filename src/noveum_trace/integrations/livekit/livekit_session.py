@@ -944,23 +944,45 @@ class _LiveKitTracingManager:
                 },
             )
 
-            # Upload the OGG audio file directly
-            success = upload_audio_file(
-                audio_path,
-                audio_uuid,
-                "stt",  # Use "stt" type so UI recognizes it
-                span.trace_id,
-                span.span_id,
-                content_type="audio/ogg",
-            )
+            # Track upload success to set appropriate status
+            upload_success = False
 
-            if success:
-                logger.info(f"Successfully uploaded conversation audio: {audio_path}")
-            else:
-                logger.warning(f"Failed to upload conversation audio: {audio_path}")
+            try:
+                # Upload the OGG audio file directly
+                upload_success = upload_audio_file(
+                    audio_path,
+                    audio_uuid,
+                    "stt",  # Use "stt" type so UI recognizes it
+                    span.trace_id,
+                    span.span_id,
+                    content_type="audio/ogg",
+                )
 
-            span.set_status(SpanStatus.OK)
-            client.finish_span(span)
+                if upload_success:
+                    logger.info(
+                        f"Successfully uploaded conversation audio: {audio_path}"
+                    )
+                else:
+                    logger.warning(f"Failed to upload conversation audio: {audio_path}")
+
+            except Exception as e:
+                # Set error status on exception
+                span.set_status(SpanStatus.ERROR, str(e))
+                logger.warning(
+                    f"Exception while uploading full conversation audio: {e}",
+                    exc_info=True,
+                )
+                # Re-raise to let outer handler log it
+                raise
+            finally:
+                # Always finish the span, setting status based on upload result
+                if upload_success:
+                    span.set_status(SpanStatus.OK)
+                else:
+                    # Only set error status if not already set (i.e., upload returned False)
+                    if span.status != SpanStatus.ERROR:
+                        span.set_status(SpanStatus.ERROR, "Upload failed")
+                client.finish_span(span)
 
         except Exception as e:
             logger.warning(
