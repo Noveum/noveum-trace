@@ -35,5 +35,7 @@ MAX_PENDING_FUNCTION_CALLS = 100
 MAX_PENDING_FUNCTION_OUTPUTS = 100
 
 # Maximum audio frames to collect (prevents OOM on long sessions)
-# At 16kHz mono, 200k frames ≈ 12.5 seconds of audio
-MAX_AUDIO_FRAMES = 200_000
+# At 16kHz mono: 1 frame = 1 sample, so 16k frames = 1 second
+# 60 million frames ≈ 60 minutes of audio (≈120MB at 16kHz mono, 16-bit)
+# Supports long customer support conversations while preventing excessive memory usage
+MAX_AUDIO_FRAMES = 30_000_000

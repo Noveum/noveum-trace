@@ -9,8 +9,8 @@ Tests the session tracing functionality in livekit_session.py:
 """
 
 import asyncio
-from dataclasses import dataclass
 from collections.abc import Generator
+from dataclasses import dataclass
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
