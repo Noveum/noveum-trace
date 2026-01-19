@@ -39,13 +39,7 @@ from noveum_trace.integrations.livekit.livekit_stt import LiveKitSTTWrapper
 from noveum_trace.integrations.livekit.livekit_tts import LiveKitTTSWrapper
 
 # Import utility functions
-from noveum_trace.integrations.livekit.livekit_utils import (
-    extract_available_tools,
-    extract_job_context,
-    serialize_chat_history,
-    serialize_function_calls,
-    serialize_tools_for_attributes,
-)
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 __all__ = [
     # Session tracing (recommended)
@@ -55,8 +49,4 @@ __all__ = [
     "LiveKitTTSWrapper",
     # Utility functions
     "extract_job_context",
-    "extract_available_tools",
-    "serialize_chat_history",
-    "serialize_function_calls",
-    "serialize_tools_for_attributes",
 ]
