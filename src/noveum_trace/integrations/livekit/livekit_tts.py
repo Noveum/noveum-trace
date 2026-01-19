@@ -182,7 +182,7 @@ class LiveKitTTSWrapper:
             model=self.model,
             counter_ref=self._counter_ref,
             audio_dir=self._audio_dir,
-            frame_collector=self._frame_collector,
+            wrapper=self,  # Pass wrapper for dynamic frame_collector access
         )
 
     def stream(self, **kwargs: Any) -> _WrappedSynthesizeStream:
@@ -204,7 +204,7 @@ class LiveKitTTSWrapper:
             model=self.model,
             counter_ref=self._counter_ref,
             audio_dir=self._audio_dir,
-            frame_collector=self._frame_collector,
+            wrapper=self,  # Pass wrapper for dynamic frame_collector access
         )
 
     def prewarm(self) -> None:
@@ -234,7 +234,7 @@ class _WrappedSynthesizeStream:
         model: str,
         counter_ref: list[int],
         audio_dir: Path,
-        frame_collector: Optional[Any] = None,
+        wrapper: Optional[Any] = None,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -243,7 +243,9 @@ class _WrappedSynthesizeStream:
         self._model = model
         self._counter_ref = counter_ref
         self._audio_dir = audio_dir
-        self._frame_collector = frame_collector
+        self._wrapper = (
+            wrapper  # Reference to parent wrapper for dynamic frame_collector access
+        )
 
         # State management
         self._buffered_frames: list[Any] = []
@@ -398,13 +400,15 @@ class _WrappedSynthesizeStream:
                     )
 
             # Collect frames for full conversation audio before clearing
-            if self._frame_collector and hasattr(
-                self._frame_collector, "collect_tts_frames"
-            ):
+            # Access frame_collector from wrapper for dynamic lookup (allows setting after stream creation)
+            frame_collector = (
+                getattr(self._wrapper, "_frame_collector", None)
+                if self._wrapper
+                else None
+            )
+            if frame_collector and hasattr(frame_collector, "collect_tts_frames"):
                 try:
-                    self._frame_collector.collect_tts_frames(
-                        self._buffered_frames.copy()
-                    )
+                    frame_collector.collect_tts_frames(self._buffered_frames.copy())
                 except Exception as e:
                     logger.debug(f"Failed to collect TTS frames: {e}")
 
@@ -467,7 +471,7 @@ class _WrappedChunkedStream:
         model: str,
         counter_ref: list[int],
         audio_dir: Path,
-        frame_collector: Optional[Any] = None,
+        wrapper: Optional[Any] = None,
     ):
         self._base_stream = base_stream
         self._input_text = input_text
@@ -477,7 +481,9 @@ class _WrappedChunkedStream:
         self._model = model
         self._counter_ref = counter_ref
         self._audio_dir = audio_dir
-        self._frame_collector = frame_collector
+        self._wrapper = (
+            wrapper  # Reference to parent wrapper for dynamic frame_collector access
+        )
 
         # State management
         self._buffered_frames: list[Any] = []
@@ -514,11 +520,13 @@ class _WrappedChunkedStream:
         self._span_created = True
 
         # Collect frames for full conversation audio before span creation
-        if self._frame_collector and hasattr(
-            self._frame_collector, "collect_tts_frames"
-        ):
+        # Access frame_collector from wrapper for dynamic lookup (allows setting after stream creation)
+        frame_collector = (
+            getattr(self._wrapper, "_frame_collector", None) if self._wrapper else None
+        )
+        if frame_collector and hasattr(frame_collector, "collect_tts_frames"):
             try:
-                self._frame_collector.collect_tts_frames(self._buffered_frames.copy())
+                frame_collector.collect_tts_frames(self._buffered_frames.copy())
             except Exception as e:
                 logger.debug(f"Failed to collect TTS frames: {e}")
 

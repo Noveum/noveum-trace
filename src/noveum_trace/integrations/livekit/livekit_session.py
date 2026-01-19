@@ -23,12 +23,10 @@ from noveum_trace.integrations.livekit.livekit_constants import (
     MAX_PENDING_FUNCTION_CALLS,
     MAX_PENDING_FUNCTION_OUTPUTS,
 )
-from noveum_trace.integrations.livekit.livekit_llm import (
-    extract_available_tools,
-    serialize_tools_for_attributes,
-)
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_event_span,
+    extract_available_tools,
+    serialize_tools_for_attributes,
     update_speech_span_with_chat_items,
     upload_audio_frames,
 )
@@ -97,6 +95,10 @@ class _LiveKitTracingManager:
         self._last_agent_state_changed_span_id: Optional[str] = None
         # Track finished speech spans by speech_handle.id for later attribute updates
         self._speech_spans: dict[str, Any] = {}  # speech_id -> Span
+
+        # Track pending LLM metrics by speech_id (to merge into speech_created spans)
+        # Format: {speech_id: {"prompt_tokens": N, "completion_tokens": N, "model": "...", ...}}
+        self._pending_llm_metrics: dict[str, dict[str, Any]] = {}
 
         # Available tools extracted from agent
         self._available_tools: list[dict[str, Any]] = []
@@ -624,8 +626,153 @@ class _LiveKitTracingManager:
             logger.warning(f"Failed to finalize generation span: {e}", exc_info=True)
 
     def _on_metrics_collected(self, ev: MetricsCollectedEvent) -> None:
-        """Handle metrics_collected event."""
-        self._create_async_handler("metrics_collected")(ev)
+        """Handle metrics_collected event and extract LLM metrics."""
+
+        async def _handle_with_llm_metrics() -> None:
+            try:
+                # Create the event span (standard handling)
+                create_event_span("metrics_collected", ev, manager=self)
+
+                # Extract LLM metrics if this is an llm_metrics type event
+                metrics = getattr(ev, "metrics", None)
+                if metrics is None:
+                    return
+
+                # Check if this is an LLM metrics event
+                metrics_type = getattr(metrics, "type", None)
+                if metrics_type != "llm_metrics":
+                    return
+
+                # Get speech_id to correlate with speech_created span
+                speech_id = getattr(metrics, "speech_id", None)
+                if not speech_id:
+                    return
+
+                # Extract LLM metrics
+                llm_metrics: dict[str, Any] = {}
+
+                # Token usage
+                prompt_tokens = getattr(metrics, "prompt_tokens", None)
+                completion_tokens = getattr(metrics, "completion_tokens", None)
+                total_tokens = getattr(metrics, "total_tokens", None)
+
+                if prompt_tokens is not None:
+                    llm_metrics["llm.input_tokens"] = prompt_tokens
+                if completion_tokens is not None:
+                    llm_metrics["llm.output_tokens"] = completion_tokens
+                if total_tokens is not None:
+                    llm_metrics["llm.total_tokens"] = total_tokens
+
+                # Model info from metadata
+                metadata = getattr(metrics, "metadata", None)
+                if metadata:
+                    model_name = getattr(metadata, "model_name", None)
+                    model_provider = getattr(metadata, "model_provider", None)
+                    if model_name:
+                        llm_metrics["llm.model"] = model_name
+                    if model_provider:
+                        llm_metrics["llm.provider"] = model_provider
+
+                # Performance metrics
+                ttft = getattr(metrics, "ttft", None)
+                tokens_per_second = getattr(metrics, "tokens_per_second", None)
+                duration = getattr(metrics, "duration", None)
+                request_id = getattr(metrics, "request_id", None)
+                cancelled = getattr(metrics, "cancelled", None)
+
+                if ttft is not None:
+                    llm_metrics["llm.time_to_first_token_ms"] = (
+                        ttft * 1000
+                    )  # Convert to ms
+                if tokens_per_second is not None:
+                    llm_metrics["llm.tokens_per_second"] = tokens_per_second
+                if duration is not None:
+                    llm_metrics["llm.latency_ms"] = duration * 1000  # Convert to ms
+                if request_id is not None:
+                    llm_metrics["llm.request_id"] = request_id
+                if cancelled is not None:
+                    llm_metrics["llm.cancelled"] = cancelled
+
+                # Calculate cost using the same utility as LangChain
+                if (
+                    llm_metrics.get("llm.model")
+                    and llm_metrics.get("llm.input_tokens") is not None
+                ):
+                    try:
+                        from noveum_trace.utils.llm_utils import estimate_cost
+
+                        cost_info = estimate_cost(
+                            llm_metrics["llm.model"],
+                            input_tokens=llm_metrics.get("llm.input_tokens", 0),
+                            output_tokens=llm_metrics.get("llm.output_tokens", 0),
+                        )
+                        llm_metrics["llm.cost.input"] = cost_info.get("input_cost", 0)
+                        llm_metrics["llm.cost.output"] = cost_info.get("output_cost", 0)
+                        llm_metrics["llm.cost.total"] = cost_info.get("total_cost", 0)
+                        llm_metrics["llm.cost.currency"] = cost_info.get(
+                            "currency", "USD"
+                        )
+                    except Exception as cost_err:
+                        logger.debug(f"Could not calculate LLM cost: {cost_err}")
+
+                # Store metrics for merging with speech span
+                if llm_metrics:
+                    # If we already have metrics for this speech_id, merge them
+                    # (there can be multiple LLM calls for follow-up tool calls)
+                    if speech_id in self._pending_llm_metrics:
+                        existing = self._pending_llm_metrics[speech_id]
+                        # Accumulate tokens
+                        for key in [
+                            "llm.input_tokens",
+                            "llm.output_tokens",
+                            "llm.total_tokens",
+                        ]:
+                            if key in llm_metrics and key in existing:
+                                llm_metrics[key] += existing[key]
+                        # Accumulate costs
+                        for key in [
+                            "llm.cost.input",
+                            "llm.cost.output",
+                            "llm.cost.total",
+                        ]:
+                            if key in llm_metrics and key in existing:
+                                llm_metrics[key] += existing[key]
+                        # Merge (new values override except for accumulated)
+                        existing.update(llm_metrics)
+                    else:
+                        self._pending_llm_metrics[speech_id] = llm_metrics
+
+                    logger.debug(
+                        f"Stored LLM metrics for speech {speech_id}: "
+                        f"tokens={llm_metrics.get('llm.total_tokens')}, "
+                        f"model={llm_metrics.get('llm.model')}"
+                    )
+
+                    # Try to update the speech span if it already exists
+                    if speech_id in self._speech_spans:
+                        span = self._speech_spans[speech_id]
+                        try:
+                            span.attributes.update(llm_metrics)
+                            logger.debug(
+                                f"Updated speech span {span.span_id} with LLM metrics"
+                            )
+                        except Exception as update_err:
+                            logger.debug(
+                                f"Could not update speech span with LLM metrics: {update_err}"
+                            )
+
+            except Exception as e:
+                logger.warning(
+                    f"Error extracting LLM metrics from metrics_collected: {e}",
+                    exc_info=True,
+                )
+
+        try:
+            asyncio.create_task(_handle_with_llm_metrics())
+        except Exception as e:
+            logger.warning(
+                f"Failed to create task for metrics_collected: {e}", exc_info=True
+            )
 
     def _on_speech_created(self, ev: SpeechCreatedEvent) -> None:
         """Handle speech_created event."""
@@ -645,6 +792,9 @@ class _LiveKitTracingManager:
                 # Clean up pending speech spans (background tasks will handle their own cleanup,
                 # but we clear the dict to prevent memory leaks)
                 self._speech_spans.clear()
+
+                # Clean up pending LLM metrics
+                self._pending_llm_metrics.clear()
 
                 # Flush any pending generation span before ending the trace
                 # This ensures function call data is persisted even if no
