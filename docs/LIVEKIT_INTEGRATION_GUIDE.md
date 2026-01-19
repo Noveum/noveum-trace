@@ -149,7 +149,7 @@ These components are designed to work together - session tracing creates the tra
 
 ### Data Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         LiveKit Agent Session                           │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -345,14 +345,14 @@ The integration automatically uploads the complete conversation audio when the s
 
 ### How to Enable Recording
 
-**Option 1: In Code (Recommended)**
+#### Option 1: In Code (Recommended)
 
 ```python
 # Enable recording when starting the session
 await session.start(agent, record=True)
 ```
 
-**Option 2: CLI Flag (Console Mode)**
+#### Option 2: CLI Flag (Console Mode)
 
 When running in console mode, add the `--record` flag:
 
@@ -397,7 +397,7 @@ The full conversation creates a span like:
 ### When Recording is NOT Available
 
 If `record=True` is not set, the SDK will log:
-```
+```log
 _upload_full_conversation_audio: No recording available. Ensure session.start(record=True) was called.
 ```
 

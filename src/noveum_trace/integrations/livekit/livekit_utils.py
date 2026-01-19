@@ -375,7 +375,12 @@ def get_recorder_audio_path(session: Any) -> Optional[Path]:
         Path to the recorded audio file, or None if not available
     """
     try:
-        # Access LiveKit's built-in RecorderIO
+        # NOTE: Intentionally accessing LiveKit's private attribute session._recorder_io
+        # because LiveKit does not expose a public API for accessing RecorderIO.
+        # This creates a coupling risk: future LiveKit SDK changes may require updates
+        # to this code. The implementation mitigates this with defensive coding:
+        # getattr() with None defaults, null checks, exception handling, and file
+        # existence validation (see below).
         recorder = getattr(session, "_recorder_io", None)
         if recorder is None:
             logger.debug("Session does not have '_recorder_io' attribute")

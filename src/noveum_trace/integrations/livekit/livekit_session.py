@@ -882,9 +882,8 @@ class _LiveKitTracingManager:
         if recorder_io is not None:
             try:
                 # Check if recorder is already closed (various ways it might be indicated)
-                is_closed = (
-                    getattr(recorder_io, "closed", False)
-                    or getattr(recorder_io, "_closed", False)
+                is_closed = getattr(recorder_io, "closed", False) or getattr(
+                    recorder_io, "_closed", False
                 )
                 if not is_closed and hasattr(recorder_io, "aclose"):
                     logger.debug("Finalizing RecorderIO before reading audio file")
