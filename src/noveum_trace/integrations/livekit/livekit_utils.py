@@ -19,7 +19,6 @@ from noveum_trace.core.context import get_current_span, get_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.livekit.livekit_constants import (
     AUDIO_DURATION_MS_DEFAULT_VALUE,
-    MAX_AUDIO_FRAMES,
     MAX_CONVERSATION_HISTORY,
     MAX_PENDING_FUNCTION_CALLS,
     MAX_PENDING_FUNCTION_OUTPUTS,
@@ -95,7 +94,6 @@ def create_constants_metadata() -> dict[str, Any]:
                 "MAX_CONVERSATION_HISTORY": MAX_CONVERSATION_HISTORY,
                 "MAX_PENDING_FUNCTION_CALLS": MAX_PENDING_FUNCTION_CALLS,
                 "MAX_PENDING_FUNCTION_OUTPUTS": MAX_PENDING_FUNCTION_OUTPUTS,
-                "MAX_AUDIO_FRAMES": MAX_AUDIO_FRAMES,
             }
         }
     }
