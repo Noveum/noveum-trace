@@ -409,6 +409,67 @@ def get_recorder_audio_path(session: Any) -> Optional[Path]:
         return None
 
 
+async def finalize_recorder_io(recorder_io: Any) -> None:
+    """Finalize RecorderIO if it is open."""
+    if recorder_io is None:
+        return
+    try:
+        is_closed = getattr(recorder_io, "closed", False) or getattr(
+            recorder_io, "_closed", False
+        )
+        if not is_closed and hasattr(recorder_io, "aclose"):
+            await recorder_io.aclose()
+    except Exception as e:
+        logger.warning(
+            f"Failed to finalize RecorderIO: {e}. Audio file may be incomplete.",
+            exc_info=True,
+        )
+
+
+def resolve_recorder_audio_path(session: Any) -> Optional[Path]:
+    """Resolve the recorder audio path from the session."""
+    audio_path = get_recorder_audio_path(session)
+    if audio_path is not None:
+        return audio_path
+    recorder_io = getattr(session, "_recorder_io", None)
+    recorder_path = getattr(recorder_io, "output_path", None)
+    if recorder_path is None:
+        return None
+    return recorder_path if isinstance(recorder_path, Path) else Path(recorder_path)
+
+
+async def wait_for_audio_path(
+    audio_path: Optional[Path],
+    max_wait_seconds: float = 5.0,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Wait until the audio file is present and non-empty."""
+    if audio_path is None:
+        return False
+    max_attempts = int(max_wait_seconds / poll_interval) if poll_interval > 0 else 1
+    for _ in range(max_attempts):
+        if audio_path.exists() and audio_path.stat().st_size > 0:
+            return True
+        await asyncio.sleep(poll_interval)
+    return audio_path.exists()
+
+
+def get_session_system_prompt(session: Any) -> Optional[str]:
+    """Return the system prompt if available on the session."""
+    try:
+        if hasattr(session, "agent_activity"):
+            agent_activity = session.agent_activity
+            if agent_activity and hasattr(agent_activity, "_agent"):
+                agent = agent_activity._agent
+                if hasattr(agent, "instructions") and agent.instructions:
+                    return agent.instructions
+                if hasattr(agent, "_instructions") and agent._instructions:
+                    return agent._instructions
+    except Exception:
+        return None
+    return None
+
+
 def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> Path:
     """
     Ensure audio storage directory exists for a session.

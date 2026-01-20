@@ -24,12 +24,15 @@ from noveum_trace.integrations.livekit.livekit_constants import (
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_event_span,
     extract_available_tools,
+    finalize_recorder_io,
     get_conversation_history_from_session,
-    get_recorder_audio_path,
+    get_session_system_prompt,
+    resolve_recorder_audio_path,
     serialize_function_calls,
     serialize_tools_for_attributes,
     update_speech_span_with_chat_items,
     upload_audio_file,
+    wait_for_audio_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -538,161 +541,15 @@ class _LiveKitTracingManager:
 
         async def _handle_with_llm_metrics() -> None:
             try:
-                # Create the event span (standard handling)
                 create_event_span("metrics_collected", ev, manager=self)
-
-                # Extract LLM metrics if this is an llm_metrics type event
-                metrics = getattr(ev, "metrics", None)
-                if metrics is None:
+                llm_payload = self._extract_llm_metrics_from_event(ev)
+                if not llm_payload:
                     return
-
-                # Check if this is an LLM metrics event
-                metrics_type = getattr(metrics, "type", None)
-                if metrics_type != "llm_metrics":
+                speech_id, llm_metrics = llm_payload
+                if not llm_metrics:
                     return
-
-                # Get speech_id to correlate with speech_created span
-                speech_id = getattr(metrics, "speech_id", None)
-                if not speech_id:
-                    return
-
-                # Extract LLM metrics
-                llm_metrics: dict[str, Any] = {}
-
-                # Token usage
-                prompt_tokens = getattr(metrics, "prompt_tokens", None)
-                completion_tokens = getattr(metrics, "completion_tokens", None)
-                total_tokens = getattr(metrics, "total_tokens", None)
-
-                if prompt_tokens is not None:
-                    llm_metrics["llm.input_tokens"] = prompt_tokens
-                if completion_tokens is not None:
-                    llm_metrics["llm.output_tokens"] = completion_tokens
-                if total_tokens is not None:
-                    llm_metrics["llm.total_tokens"] = total_tokens
-
-                # Model info from metadata
-                metadata = getattr(metrics, "metadata", None)
-                if metadata:
-                    model_name = getattr(metadata, "model_name", None)
-                    model_provider = getattr(metadata, "model_provider", None)
-                    if model_name:
-                        llm_metrics["llm.model"] = model_name
-                    if model_provider:
-                        llm_metrics["llm.provider"] = model_provider
-
-                # Performance metrics
-                ttft = getattr(metrics, "ttft", None)
-                tokens_per_second = getattr(metrics, "tokens_per_second", None)
-                duration = getattr(metrics, "duration", None)
-                request_id = getattr(metrics, "request_id", None)
-                cancelled = getattr(metrics, "cancelled", None)
-
-                if ttft is not None:
-                    llm_metrics["llm.time_to_first_token_ms"] = (
-                        ttft * 1000
-                    )  # Convert to ms
-                if tokens_per_second is not None:
-                    llm_metrics["llm.tokens_per_second"] = tokens_per_second
-                if duration is not None:
-                    llm_metrics["llm.latency_ms"] = duration * 1000  # Convert to ms
-                if request_id is not None:
-                    llm_metrics["llm.request_id"] = request_id
-                if cancelled is not None:
-                    llm_metrics["llm.cancelled"] = cancelled
-
-                # Calculate cost using the same utility as LangChain
-                if (
-                    llm_metrics.get("llm.model")
-                    and llm_metrics.get("llm.input_tokens") is not None
-                ):
-                    try:
-                        from noveum_trace.utils.llm_utils import estimate_cost
-
-                        cost_info = estimate_cost(
-                            llm_metrics["llm.model"],
-                            input_tokens=llm_metrics.get("llm.input_tokens", 0),
-                            output_tokens=llm_metrics.get("llm.output_tokens", 0),
-                        )
-                        llm_metrics["llm.cost.input"] = cost_info.get("input_cost", 0)
-                        llm_metrics["llm.cost.output"] = cost_info.get("output_cost", 0)
-                        llm_metrics["llm.cost.total"] = cost_info.get("total_cost", 0)
-                        llm_metrics["llm.cost.currency"] = cost_info.get(
-                            "currency", "USD"
-                        )
-                    except Exception as cost_err:
-                        logger.debug(f"Could not calculate LLM cost: {cost_err}")
-
-                # Store metrics for merging with speech span
-                if llm_metrics:
-                    # If we already have metrics for this speech_id, merge them
-                    # (there can be multiple LLM calls for follow-up tool calls)
-                    if speech_id in self._pending_llm_metrics:
-                        existing = self._pending_llm_metrics[speech_id]
-                        existing_model = existing.get("llm.model")
-                        new_model = llm_metrics.get("llm.model")
-                        # Accumulate tokens
-                        for key in [
-                            "llm.input_tokens",
-                            "llm.output_tokens",
-                            "llm.total_tokens",
-                        ]:
-                            if key in llm_metrics and key in existing:
-                                llm_metrics[key] += existing[key]
-                        # Accumulate costs
-                        for key in [
-                            "llm.cost.input",
-                            "llm.cost.output",
-                            "llm.cost.total",
-                        ]:
-                            if key in llm_metrics and key in existing:
-                                llm_metrics[key] += existing[key]
-                        if existing_model and new_model and existing_model != new_model:
-                            existing_models = existing.get("llm.models")
-                            if existing_models:
-                                if isinstance(existing_models, list):
-                                    models = list(existing_models)
-                                else:
-                                    models = [existing_models]
-                            else:
-                                models = [existing_model]
-                            models.append(new_model)
-                            deduped_models = []
-                            for model_name in models:
-                                if model_name and model_name not in deduped_models:
-                                    deduped_models.append(model_name)
-                            llm_metrics["llm.models"] = deduped_models
-                            # Preserve the original model for compatibility.
-                            llm_metrics["llm.model"] = existing_model
-                        elif existing.get("llm.models") and new_model:
-                            models = existing["llm.models"]
-                            if not isinstance(models, list):
-                                models = [models]
-                            if new_model not in models:
-                                llm_metrics["llm.models"] = models + [new_model]
-                        # Merge (new values override except for accumulated)
-                        existing.update(llm_metrics)
-                    else:
-                        self._pending_llm_metrics[speech_id] = llm_metrics
-
-                    logger.debug(
-                        f"Stored LLM metrics for speech {speech_id}: "
-                        f"tokens={llm_metrics.get('llm.total_tokens')}, "
-                        f"model={llm_metrics.get('llm.model')}"
-                    )
-
-                    # Try to update the speech span if it already exists
-                    if speech_id in self._speech_spans:
-                        span = self._speech_spans[speech_id]
-                        try:
-                            span.attributes.update(llm_metrics)
-                            logger.debug(
-                                f"Updated speech span {span.span_id} with LLM metrics"
-                            )
-                        except Exception as update_err:
-                            logger.debug(
-                                f"Could not update speech span with LLM metrics: {update_err}"
-                            )
+                merged_metrics = self._store_llm_metrics(speech_id, llm_metrics)
+                self._update_speech_span_with_metrics(speech_id, merged_metrics)
 
             except Exception as e:
                 logger.warning(
@@ -706,6 +563,151 @@ class _LiveKitTracingManager:
             logger.warning(
                 f"Failed to create task for metrics_collected: {e}", exc_info=True
             )
+
+    def _extract_llm_metrics_from_event(
+        self, ev: MetricsCollectedEvent
+    ) -> Optional[tuple[str, dict[str, Any]]]:
+        metrics = getattr(ev, "metrics", None)
+        if metrics is None:
+            return None
+        if getattr(metrics, "type", None) != "llm_metrics":
+            return None
+        speech_id = getattr(metrics, "speech_id", None)
+        if not speech_id:
+            return None
+        return speech_id, self._build_llm_metrics(metrics)
+
+    def _build_llm_metrics(self, metrics: Any) -> dict[str, Any]:
+        llm_metrics: dict[str, Any] = {}
+        prompt_tokens = getattr(metrics, "prompt_tokens", None)
+        completion_tokens = getattr(metrics, "completion_tokens", None)
+        total_tokens = getattr(metrics, "total_tokens", None)
+
+        if prompt_tokens is not None:
+            llm_metrics["llm.input_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            llm_metrics["llm.output_tokens"] = completion_tokens
+        if total_tokens is not None:
+            llm_metrics["llm.total_tokens"] = total_tokens
+
+        metadata = getattr(metrics, "metadata", None)
+        if metadata:
+            model_name = getattr(metadata, "model_name", None)
+            model_provider = getattr(metadata, "model_provider", None)
+            if model_name:
+                llm_metrics["llm.model"] = model_name
+            if model_provider:
+                llm_metrics["llm.provider"] = model_provider
+
+        ttft = getattr(metrics, "ttft", None)
+        tokens_per_second = getattr(metrics, "tokens_per_second", None)
+        duration = getattr(metrics, "duration", None)
+        request_id = getattr(metrics, "request_id", None)
+        cancelled = getattr(metrics, "cancelled", None)
+
+        if ttft is not None:
+            llm_metrics["llm.time_to_first_token_ms"] = ttft * 1000
+        if tokens_per_second is not None:
+            llm_metrics["llm.tokens_per_second"] = tokens_per_second
+        if duration is not None:
+            llm_metrics["llm.latency_ms"] = duration * 1000
+        if request_id is not None:
+            llm_metrics["llm.request_id"] = request_id
+        if cancelled is not None:
+            llm_metrics["llm.cancelled"] = cancelled
+
+        self._add_llm_cost_metrics(llm_metrics)
+        return llm_metrics
+
+    def _add_llm_cost_metrics(self, llm_metrics: dict[str, Any]) -> None:
+        if (
+            llm_metrics.get("llm.model")
+            and llm_metrics.get("llm.input_tokens") is not None
+        ):
+            try:
+                from noveum_trace.utils.llm_utils import estimate_cost
+
+                cost_info = estimate_cost(
+                    llm_metrics["llm.model"],
+                    input_tokens=llm_metrics.get("llm.input_tokens", 0),
+                    output_tokens=llm_metrics.get("llm.output_tokens", 0),
+                )
+                llm_metrics["llm.cost.input"] = cost_info.get("input_cost", 0)
+                llm_metrics["llm.cost.output"] = cost_info.get("output_cost", 0)
+                llm_metrics["llm.cost.total"] = cost_info.get("total_cost", 0)
+                llm_metrics["llm.cost.currency"] = cost_info.get("currency", "USD")
+            except Exception as cost_err:
+                logger.debug(f"Could not calculate LLM cost: {cost_err}")
+
+    def _store_llm_metrics(
+        self, speech_id: str, llm_metrics: dict[str, Any]
+    ) -> dict[str, Any]:
+        if speech_id in self._pending_llm_metrics:
+            existing = self._pending_llm_metrics[speech_id]
+            merged = self._merge_llm_metrics(existing, llm_metrics)
+            self._pending_llm_metrics[speech_id] = merged
+        else:
+            self._pending_llm_metrics[speech_id] = llm_metrics
+            merged = llm_metrics
+
+        logger.debug(
+            f"Stored LLM metrics for speech {speech_id}: "
+            f"tokens={merged.get('llm.total_tokens')}, "
+            f"model={merged.get('llm.model')}"
+        )
+        return merged
+
+    def _merge_llm_metrics(
+        self, existing: dict[str, Any], incoming: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged = dict(incoming)
+        for key in ["llm.input_tokens", "llm.output_tokens", "llm.total_tokens"]:
+            if key in merged and key in existing:
+                merged[key] = merged[key] + existing[key]
+        for key in ["llm.cost.input", "llm.cost.output", "llm.cost.total"]:
+            if key in merged and key in existing:
+                merged[key] = merged[key] + existing[key]
+
+        existing_model = existing.get("llm.model")
+        new_model = merged.get("llm.model")
+        if existing_model and new_model and existing_model != new_model:
+            existing_models = existing.get("llm.models")
+            if existing_models:
+                models = (
+                    list(existing_models)
+                    if isinstance(existing_models, list)
+                    else [existing_models]
+                )
+            else:
+                models = [existing_model]
+            models.append(new_model)
+            deduped_models: list[str] = []
+            for model_name in models:
+                if model_name and model_name not in deduped_models:
+                    deduped_models.append(model_name)
+            merged["llm.models"] = deduped_models
+            merged["llm.model"] = existing_model
+        elif existing.get("llm.models") and new_model:
+            models = existing["llm.models"]
+            models = list(models) if isinstance(models, list) else [models]
+            if new_model not in models:
+                merged["llm.models"] = models + [new_model]
+
+        combined = dict(existing)
+        combined.update(merged)
+        return combined
+
+    def _update_speech_span_with_metrics(
+        self, speech_id: str, llm_metrics: dict[str, Any]
+    ) -> None:
+        if speech_id not in self._speech_spans:
+            return
+        span = self._speech_spans[speech_id]
+        try:
+            span.attributes.update(llm_metrics)
+            logger.debug(f"Updated speech span {span.span_id} with LLM metrics")
+        except Exception as update_err:
+            logger.debug(f"Could not update speech span with LLM metrics: {update_err}")
 
     def _on_speech_created(self, ev: SpeechCreatedEvent) -> None:
         """Handle speech_created event."""
@@ -858,51 +860,12 @@ class _LiveKitTracingManager:
                 )
 
     async def _upload_full_conversation_audio(self) -> None:
-        """Upload full conversation audio from LiveKit's RecorderIO.
-
-        LiveKit's RecorderIO automatically records the entire conversation as a
-        stereo OGG/Opus file (left channel = user audio, right channel = agent audio).
-        This provides a properly synchronized recording without manual frame collection.
-        """
-        # Finalize the recorder before reading the audio file to ensure
-        # the OGG encoding is fully flushed and complete
+        """Upload full conversation audio from LiveKit's RecorderIO."""
         recorder_io = getattr(self.session, "_recorder_io", None)
-        if recorder_io is not None:
-            try:
-                # Check if recorder is already closed (various ways it might be indicated)
-                is_closed = getattr(recorder_io, "closed", False) or getattr(
-                    recorder_io, "_closed", False
-                )
-                if not is_closed and hasattr(recorder_io, "aclose"):
-                    logger.debug("Finalizing RecorderIO before reading audio file")
-                    await recorder_io.aclose()
-                    logger.debug("RecorderIO finalized successfully")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to finalize RecorderIO: {e}. "
-                    "Audio file may be incomplete or corrupted.",
-                    exc_info=True,
-                )
+        await finalize_recorder_io(recorder_io)
 
-        # Get the recording path from LiveKit's RecorderIO
-        audio_path = get_recorder_audio_path(self.session)
-        if audio_path is None:
-            # RecorderIO may have an output_path but the file isn't visible yet.
-            recorder_io = getattr(self.session, "_recorder_io", None)
-            recorder_path = getattr(recorder_io, "output_path", None)
-            if recorder_path is not None:
-                audio_path = (
-                    recorder_path
-                    if isinstance(recorder_path, Path)
-                    else Path(recorder_path)
-                )
-
-        # Wait briefly for the recorder to flush the file to disk
-        if audio_path is not None:
-            for _ in range(25):  # ~5s max wait
-                if audio_path.exists() and audio_path.stat().st_size > 0:
-                    break
-                await asyncio.sleep(0.2)
+        audio_path = resolve_recorder_audio_path(self.session)
+        await wait_for_audio_path(audio_path)
 
         if audio_path is None or not audio_path.exists():
             logger.debug(
@@ -911,136 +874,117 @@ class _LiveKitTracingManager:
             )
             return
 
-        if not self._trace:
-            logger.warning(
-                "_upload_full_conversation_audio: No trace available, skipping"
-            )
+        trace = self._get_active_trace_for_upload()
+        if not trace:
             return
 
         try:
-            trace = self._trace
-            if trace.is_finished():
-                logger.warning(
-                    "_upload_full_conversation_audio: Trace already finished, skipping"
-                )
-                return
-
             audio_uuid = str(uuid.uuid4())
-
             logger.info(
-                f"Uploading full conversation audio from RecorderIO: "
+                "Uploading full conversation audio from RecorderIO: "
                 f"path={audio_path}, uuid={audio_uuid}"
             )
 
-            # Build attributes for the full conversation audio span
-            # Include crucial details: system prompt, tools, and chat history
-            attributes: dict[str, Any] = {
-                "stt.audio_uuid": audio_uuid,
-                "stt.audio_format": "ogg",
-                "stt.audio_channels": "stereo",
-                "stt.audio_channel_left": "user",
-                "stt.audio_channel_right": "agent",
-                "stt.audio_source": "livekit_recorder_io",
-                "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
-            }
-
-            # Add available tools
-            if self._available_tools:
-                tool_attrs = serialize_tools_for_attributes(self._available_tools)
-                attributes.update(tool_attrs)
-
-            # Add conversation history from LiveKit's built-in ChatContext
-            history_dict = get_conversation_history_from_session(self.session)
-            if history_dict:
-                items = history_dict.get("items", [])
-                # Bound to prevent oversized attributes
-                if len(items) > MAX_CONVERSATION_HISTORY:
-                    items = items[-MAX_CONVERSATION_HISTORY:]
-                    history_dict = {"items": items}
-                attributes["llm.conversation.message_count"] = len(items)
-                try:
-                    attributes["llm.conversation.history"] = json.dumps(
-                        history_dict, default=str
-                    )
-                except Exception:
-                    pass
-
-            # Try to get system prompt synchronously if agent_activity is available
-            system_prompt = None
-            try:
-                if hasattr(self.session, "agent_activity"):
-                    agent_activity = self.session.agent_activity
-                    if agent_activity and hasattr(agent_activity, "_agent"):
-                        agent = agent_activity._agent
-                        if hasattr(agent, "instructions") and agent.instructions:
-                            system_prompt = agent.instructions
-                        elif hasattr(agent, "_instructions") and agent._instructions:
-                            system_prompt = agent._instructions
-            except Exception:
-                pass  # Will try via background task if not available
-
-            if system_prompt:
-                attributes["llm.system_prompt"] = system_prompt
-
-            # Create span for the full conversation audio
-            # UI expects this name for full-conversation playback
+            attributes = self._build_full_conversation_attributes(audio_uuid)
             span = trace.create_span(
                 name="livekit.full_conversation",
                 attributes=attributes,
             )
+            self._maybe_update_span_with_system_prompt(span, attributes)
 
-            # If system prompt not already added, start background task to update span
-            if "llm.system_prompt" not in attributes:
-                from noveum_trace.integrations.livekit.livekit_utils import (
-                    _update_span_with_system_prompt,
-                )
-
-                asyncio.create_task(_update_span_with_system_prompt(span, self))
-
-            # Track upload success to set appropriate status
             upload_success = False
-
             try:
-                # Upload the OGG audio file directly
                 upload_success = upload_audio_file(
                     audio_path,
                     audio_uuid,
-                    "stt",  # Use "stt" type so UI recognizes it
+                    "stt",
                     span.trace_id,
                     span.span_id,
                     content_type="audio/ogg",
                 )
-
                 if upload_success:
                     logger.info(
                         f"Successfully uploaded conversation audio: {audio_path}"
                     )
                 else:
                     logger.warning(f"Failed to upload conversation audio: {audio_path}")
-
             except Exception as e:
-                # Set error status on exception
                 span.set_status(SpanStatus.ERROR, str(e))
                 logger.warning(
                     f"Exception while uploading full conversation audio: {e}",
                     exc_info=True,
                 )
-                # Re-raise to let outer handler log it
                 raise
             finally:
-                # Always finish the span, setting status based on upload result
                 if upload_success:
                     span.set_status(SpanStatus.OK)
-                else:
-                    # Only set error status if not already set (i.e., upload returned False)
-                    if span.status != SpanStatus.ERROR:
-                        span.set_status(SpanStatus.ERROR, "Upload failed")
+                elif span.status != SpanStatus.ERROR:
+                    span.set_status(SpanStatus.ERROR, "Upload failed")
                 trace.finish_span(span.span_id)
 
         except Exception as e:
             logger.warning(
                 f"Failed to upload full conversation audio: {e}", exc_info=True
             )
+
+    def _get_active_trace_for_upload(self) -> Optional[Trace]:
+        if not self._trace:
+            logger.warning(
+                "_upload_full_conversation_audio: No trace available, skipping"
+            )
+            return None
+        if self._trace.is_finished():
+            logger.warning(
+                "_upload_full_conversation_audio: Trace already finished, skipping"
+            )
+            return None
+        return self._trace
+
+    def _build_full_conversation_attributes(self, audio_uuid: str) -> dict[str, Any]:
+        attributes: dict[str, Any] = {
+            "stt.audio_uuid": audio_uuid,
+            "stt.audio_format": "ogg",
+            "stt.audio_channels": "stereo",
+            "stt.audio_channel_left": "user",
+            "stt.audio_channel_right": "agent",
+            "stt.audio_source": "livekit_recorder_io",
+            "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
+        }
+
+        if self._available_tools:
+            tool_attrs = serialize_tools_for_attributes(self._available_tools)
+            attributes.update(tool_attrs)
+
+        history_dict = get_conversation_history_from_session(self.session)
+        if history_dict:
+            items = history_dict.get("items", [])
+            if len(items) > MAX_CONVERSATION_HISTORY:
+                items = items[-MAX_CONVERSATION_HISTORY:]
+                history_dict = {"items": items}
+            attributes["llm.conversation.message_count"] = len(items)
+            try:
+                attributes["llm.conversation.history"] = json.dumps(
+                    history_dict, default=str
+                )
+            except Exception:
+                pass
+
+        system_prompt = get_session_system_prompt(self.session)
+        if system_prompt:
+            attributes["llm.system_prompt"] = system_prompt
+
+        return attributes
+
+    def _maybe_update_span_with_system_prompt(
+        self, span: Any, attributes: dict[str, Any]
+    ) -> None:
+        if "llm.system_prompt" in attributes:
+            return
+        from noveum_trace.integrations.livekit.livekit_utils import (
+            _update_span_with_system_prompt,
+        )
+
+        asyncio.create_task(_update_span_with_system_prompt(span, self))
 
     # RealtimeSession event handlers (synchronous, use asyncio.create_task internally)
     def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
@@ -1208,40 +1152,7 @@ def setup_livekit_tracing(
     enabled: bool = True,
     trace_name_prefix: Optional[str] = None,
 ) -> _LiveKitTracingManager:
-    """
-    Setup automatic tracing for a LiveKit AgentSession.
-
-    This function hooks into the session's event system to automatically:
-    - Create a trace when session.start(agent) is called
-    - Create spans for each AgentSession event
-    - Create spans for RealtimeSession events (if using RealtimeModel)
-    - End trace on close or error events
-    - Upload full conversation audio from LiveKit's RecorderIO (when record=True)
-    - Export conversation history from LiveKit's ChatContext
-
-    Note:
-        For full conversation audio, ensure session.start(record=True) is called.
-        LiveKit's RecorderIO automatically records as a stereo OGG file
-        (left channel = user, right channel = agent).
-
-    Args:
-        session: The AgentSession to trace
-        enabled: Whether tracing is enabled (default: True)
-        trace_name_prefix: Optional prefix for trace names (default: "livekit")
-
-    Returns:
-        Tracing manager instance for cleanup if needed
-
-    Example:
-        >>> from livekit.agents import AgentSession, Agent
-        >>> from noveum_trace.integrations.livekit import setup_livekit_tracing
-        >>>
-        >>> session = AgentSession(stt=stt, tts=tts, llm=llm)
-        >>> setup_livekit_tracing(session)
-        >>>
-        >>> agent = Agent(instructions="You are helpful.")
-        >>> await session.start(agent, record=True)  # Enables audio recording
-    """
+    """Setup tracing for a LiveKit AgentSession."""
     manager = _LiveKitTracingManager(
         session, enabled=enabled, trace_name_prefix=trace_name_prefix
     )
