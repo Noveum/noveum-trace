@@ -11,22 +11,22 @@ import asyncio
 import functools
 import json
 import logging
+from pathlib import Path
 import uuid
 from typing import Any, Callable, Optional
 
-from noveum_trace.core.context import set_current_trace
+from noveum_trace.core.context import set_current_span, set_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.core.trace import Trace
 from noveum_trace.integrations.livekit.livekit_constants import (
     MAX_CONVERSATION_HISTORY,
-    MAX_PENDING_FUNCTION_CALLS,
-    MAX_PENDING_FUNCTION_OUTPUTS,
 )
 from noveum_trace.integrations.livekit.livekit_utils import (
     create_event_span,
     extract_available_tools,
     get_conversation_history_from_session,
     get_recorder_audio_path,
+    serialize_function_calls,
     serialize_tools_for_attributes,
     update_speech_span_with_chat_items,
     upload_audio_file,
@@ -47,7 +47,6 @@ try:
         AgentStateChangedEvent,
         CloseEvent,
         CloseReason,
-        ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,
         MetricsCollectedEvent,
         SpeechCreatedEvent,
@@ -92,7 +91,6 @@ class _LiveKitTracingManager:
         self._event_handlers: list[tuple[str, Any]] = []
         self._realtime_session: Optional[Any] = None
         self._realtime_handlers: list[tuple[str, Any]] = []
-        self._wrapped = False
         # Track the latest agent_state_changed span ID to use as parent for metrics_collected
         self._last_agent_state_changed_span_id: Optional[str] = None
         # Track finished speech spans by speech_handle.id for later attribute updates
@@ -105,10 +103,9 @@ class _LiveKitTracingManager:
         # Available tools extracted from agent
         self._available_tools: list[dict[str, Any]] = []
 
-        # Pending function calls/outputs (to merge with generation span)
+        # Pending generation span (to merge function calls/outputs into)
+        # Function calls/outputs come directly from function_tools_executed event
         self._pending_generation_span: Optional[Any] = None
-        self._pending_function_calls: list[dict[str, Any]] = []
-        self._pending_function_outputs: list[dict[str, Any]] = []
 
         if not LIVEKIT_AVAILABLE:
             logger.error(
@@ -122,8 +119,8 @@ class _LiveKitTracingManager:
         if not self.enabled:
             return
 
-        if self._wrapped:
-            return
+        if self._original_start is not None:
+            return  # Already wrapped
 
         self._original_start = self.session.start
         assert self._original_start is not None, "session.start must be callable"
@@ -221,6 +218,10 @@ class _LiveKitTracingManager:
                 assert self._original_start is not None
                 result = await self._original_start(agent, **kwargs)
 
+                # Ensure RecorderIO actually starts when record=True in console mode.
+                # LiveKit console requires --record, but tracing expects recording if record=True.
+                await self._ensure_recorder_started(bool(kwargs.get("record", False)))
+
                 # Check for RealtimeSession after start (with retry)
                 # agent_activity might not be immediately available
                 # Small delay to let session initialize
@@ -239,7 +240,41 @@ class _LiveKitTracingManager:
 
         # Replace method
         self.session.start = wrapped_start
-        self._wrapped = True
+
+    async def _ensure_recorder_started(self, record_enabled: bool) -> None:
+        """Start RecorderIO if record=True but console didn't start it."""
+        if not record_enabled:
+            return
+        if not LIVEKIT_AVAILABLE:
+            return
+
+        recorder_io = getattr(self.session, "_recorder_io", None)
+        if recorder_io is None:
+            return
+
+        # If already recording or output_path is set, nothing to do
+        if getattr(recorder_io, "recording", False) or getattr(
+            recorder_io, "output_path", None
+        ):
+            return
+
+        try:
+            from livekit.agents import get_job_context
+
+            job_ctx = get_job_context()
+            if not job_ctx or not hasattr(job_ctx, "session_directory"):
+                return
+
+            output_path = Path(job_ctx.session_directory) / "audio.ogg"
+            await recorder_io.start(output_path=output_path)
+            logger.debug(
+                "RecorderIO started by tracing helper for console mode: %s",
+                output_path,
+            )
+        except Exception as e:
+            logger.debug(
+                f"Failed to start RecorderIO from tracing helper: {e}", exc_info=True
+            )
 
     def _setup_realtime_handlers(self) -> None:
         """Setup handlers for RealtimeSession events if available."""
@@ -384,131 +419,30 @@ class _LiveKitTracingManager:
         """Handle user_input_transcribed event."""
         self._create_async_handler("user_input_transcribed")(ev)
 
-    def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        """Handle conversation_item_added event.
-
-        Note: Conversation history is automatically tracked by LiveKit's ChatContext
-        (accessible via session.history). We only need to track pending function calls/outputs
-        for merging with generation spans.
-        """
-
-        async def _handle_conversation_item() -> None:
-            try:
-                # Track pending function calls/outputs for generation span merging
-                item = ev.item if hasattr(ev, "item") else ev
-                self._track_pending_function_item(item)
-
-                # Create span
-                create_event_span("conversation_item_added", ev, manager=self)
-            except Exception as e:
-                logger.warning(
-                    f"Error in conversation_item_added handler: {e}", exc_info=True
-                )
-
-        try:
-            asyncio.create_task(_handle_conversation_item())
-        except Exception as e:
-            logger.warning(
-                f"Failed to create task for conversation_item_added: {e}", exc_info=True
-            )
-
-    def _track_pending_function_item(self, item: Any) -> None:
-        """Track pending function calls/outputs for merging with generation spans.
-
-        Note: This only tracks function-related items for span merging.
-        Full conversation history is maintained by LiveKit's ChatContext.
-        """
-        try:
-            # Determine item type
-            item_type = getattr(item, "type", None)
-            if not item_type:
-                if hasattr(item, "name") and hasattr(item, "arguments"):
-                    item_type = "function_call"
-                elif hasattr(item, "name") and hasattr(item, "output"):
-                    item_type = "function_call_output"
-                else:
-                    return  # Not a function item, skip
-
-            if item_type == "function_call":
-                call_dict: dict[str, Any] = {
-                    "type": "function_call",
-                    "name": str(item.name) if hasattr(item, "name") else "unknown",
-                    "arguments": (
-                        str(item.arguments) if hasattr(item, "arguments") else ""
-                    ),
-                }
-                self._pending_function_calls.append(call_dict)
-                if len(self._pending_function_calls) > MAX_PENDING_FUNCTION_CALLS:
-                    self._pending_function_calls = self._pending_function_calls[
-                        -MAX_PENDING_FUNCTION_CALLS:
-                    ]
-
-            elif item_type == "function_call_output":
-                output_dict: dict[str, Any] = {
-                    "type": "function_call_output",
-                    "name": str(item.name) if hasattr(item, "name") else "unknown",
-                    "output": str(item.output) if hasattr(item, "output") else "",
-                    "is_error": (
-                        bool(item.is_error) if hasattr(item, "is_error") else False
-                    ),
-                }
-                self._pending_function_outputs.append(output_dict)
-                if len(self._pending_function_outputs) > MAX_PENDING_FUNCTION_OUTPUTS:
-                    self._pending_function_outputs = self._pending_function_outputs[
-                        -MAX_PENDING_FUNCTION_OUTPUTS:
-                    ]
-
-        except Exception as e:
-            logger.debug(f"Failed to track pending function item: {e}")
+    def _on_conversation_item_added(self, ev: Any) -> None:
+        """Handle conversation_item_added event."""
+        self._create_async_handler("conversation_item_added")(ev)
 
     def _on_agent_false_interruption(self, ev: Any) -> None:
         """Handle agent_false_interruption event."""
         self._create_async_handler("agent_false_interruption")(ev)
 
     def _on_function_tools_executed(self, ev: FunctionToolsExecutedEvent) -> None:
-        """Handle function_tools_executed event - merge into pending generation span."""
+        """Handle function_tools_executed event - merge into pending generation span.
+
+        LiveKit provides both function_calls and function_call_outputs in this event,
+        so we use them directly instead of manually tracking.
+        """
 
         async def _handle_function_tools() -> None:
             try:
-                # Extract function call results
-                if hasattr(ev, "results") and ev.results:
-                    for result in ev.results:
-                        output_dict = {
-                            "name": (
-                                str(result.name)
-                                if hasattr(result, "name")
-                                else "unknown"
-                            ),
-                            "output": (
-                                str(result.output) if hasattr(result, "output") else ""
-                            ),
-                            "is_error": (
-                                bool(result.is_error)
-                                if hasattr(result, "is_error")
-                                else False
-                            ),
-                        }
-                        self._pending_function_outputs.append(output_dict)
-                        if (
-                            len(self._pending_function_outputs)
-                            > MAX_PENDING_FUNCTION_OUTPUTS
-                        ):
-                            self._pending_function_outputs = (
-                                self._pending_function_outputs[
-                                    -MAX_PENDING_FUNCTION_OUTPUTS:
-                                ]
-                            )
-
                 # If we have a pending generation span, update it with function data
                 if self._pending_generation_span:
-                    self._finalize_generation_span_with_functions()
+                    self._finalize_generation_span_with_functions(ev)
                 else:
                     # No pending span, create a minimal event span
                     # (fallback, should rarely happen)
                     create_event_span("function_tools_executed", ev, manager=self)
-                    # Avoid leaking outputs/calls into a later generation
-                    self._pending_function_outputs.clear()
-                    self._pending_function_calls.clear()
 
             except Exception as e:
                 logger.warning(
@@ -522,8 +456,15 @@ class _LiveKitTracingManager:
                 f"Failed to create task for function_tools_executed: {e}", exc_info=True
             )
 
-    def _finalize_generation_span_with_functions(self) -> None:
-        """Finalize the pending generation span with function call data and finish it."""
+    def _finalize_generation_span_with_functions(
+        self, ev: Optional[FunctionToolsExecutedEvent] = None
+    ) -> None:
+        """Finalize the pending generation span with function call data and finish it.
+
+        Args:
+            ev: Optional FunctionToolsExecutedEvent containing function_calls and function_call_outputs.
+                If provided, uses data from the event directly. Otherwise, span is finished without function data.
+        """
         if not self._pending_generation_span:
             return
 
@@ -533,44 +474,58 @@ class _LiveKitTracingManager:
             client = get_client()
             if not client:
                 # Can't finish span without client, clear pending data anyway
-                self._pending_function_calls.clear()
-                self._pending_function_outputs.clear()
                 self._pending_generation_span = None
                 return
 
             span = self._pending_generation_span
 
-            # Add function calls to span
-            if self._pending_function_calls:
-                span.attributes["llm.function_calls.count"] = len(
-                    self._pending_function_calls
-                )
-                try:
-                    span.attributes["llm.function_calls"] = json.dumps(
-                        self._pending_function_calls, default=str
-                    )
-                except Exception:
-                    pass
+            # Extract function calls and outputs from event (LiveKit provides both)
+            if ev and hasattr(ev, "function_calls") and ev.function_calls:
+                serialized_calls = serialize_function_calls(ev.function_calls)
+                if serialized_calls:
+                    span.attributes["llm.function_calls.count"] = len(serialized_calls)
+                    try:
+                        span.attributes["llm.function_calls"] = json.dumps(
+                            serialized_calls, default=str
+                        )
+                    except Exception:
+                        pass
 
-            # Add function outputs to span
-            if self._pending_function_outputs:
-                span.attributes["llm.function_outputs.count"] = len(
-                    self._pending_function_outputs
-                )
-                try:
-                    span.attributes["llm.function_outputs"] = json.dumps(
-                        self._pending_function_outputs, default=str
+            if ev and hasattr(ev, "function_call_outputs") and ev.function_call_outputs:
+                # Serialize function outputs
+                serialized_outputs: list[dict[str, Any]] = []
+                for output in ev.function_call_outputs:
+                    if output is None:
+                        continue
+                    try:
+                        output_dict: dict[str, Any] = {}
+                        if hasattr(output, "name"):
+                            output_dict["name"] = str(output.name)
+                        if hasattr(output, "output"):
+                            output_dict["output"] = str(output.output)
+                        if hasattr(output, "is_error"):
+                            output_dict["is_error"] = bool(output.is_error)
+                        if output_dict:
+                            serialized_outputs.append(output_dict)
+                    except Exception:
+                        continue
+
+                if serialized_outputs:
+                    span.attributes["llm.function_outputs.count"] = len(
+                        serialized_outputs
                     )
-                except Exception:
-                    pass
+                    try:
+                        span.attributes["llm.function_outputs"] = json.dumps(
+                            serialized_outputs, default=str
+                        )
+                    except Exception:
+                        pass
 
             # Now finish the span with all merged data
             span.set_status(SpanStatus.OK)
             client.finish_span(span)
 
-            # Clear pending data
-            self._pending_function_calls.clear()
-            self._pending_function_outputs.clear()
+            # Clear pending span
             self._pending_generation_span = None
 
             logger.debug("Finalized generation span with function data")
@@ -743,6 +698,10 @@ class _LiveKitTracingManager:
 
         async def _handle_close() -> None:
             try:
+                if self._trace:
+                    # Ensure trace context is available in this task
+                    set_current_trace(self._trace)
+                    set_current_span(None)
                 create_event_span("close", ev, manager=self)
 
                 # Clean up pending speech spans (background tasks will handle their own cleanup,
@@ -795,6 +754,10 @@ class _LiveKitTracingManager:
                                     ),
                                     "agent.available_tools.names": [
                                         t.get("name", "unknown")
+                                        for t in self._available_tools
+                                    ],
+                                    "agent.available_tools.descriptions": [
+                                        t.get("description", "")
                                         for t in self._available_tools
                                     ],
                                 }
@@ -898,8 +861,25 @@ class _LiveKitTracingManager:
 
         # Get the recording path from LiveKit's RecorderIO
         audio_path = get_recorder_audio_path(self.session)
-
         if audio_path is None:
+            # RecorderIO may have an output_path but the file isn't visible yet.
+            recorder_io = getattr(self.session, "_recorder_io", None)
+            recorder_path = getattr(recorder_io, "output_path", None)
+            if recorder_path is not None:
+                audio_path = (
+                    recorder_path
+                    if isinstance(recorder_path, Path)
+                    else Path(recorder_path)
+                )
+
+        # Wait briefly for the recorder to flush the file to disk
+        if audio_path is not None:
+            for _ in range(25):  # ~5s max wait
+                if audio_path.exists() and audio_path.stat().st_size > 0:
+                    break
+                await asyncio.sleep(0.2)
+
+        if audio_path is None or not audio_path.exists():
             logger.debug(
                 "_upload_full_conversation_audio: No recording available. "
                 "Ensure session.start(record=True) was called."
@@ -913,12 +893,10 @@ class _LiveKitTracingManager:
             return
 
         try:
-            from noveum_trace import get_client
-
-            client = get_client()
-            if not client:
+            trace = self._trace
+            if trace.is_finished():
                 logger.warning(
-                    "_upload_full_conversation_audio: No client available, skipping"
+                    "_upload_full_conversation_audio: Trace already finished, skipping"
                 )
                 return
 
@@ -929,20 +907,70 @@ class _LiveKitTracingManager:
                 f"path={audio_path}, uuid={audio_uuid}"
             )
 
+            # Build attributes for the full conversation audio span
+            # Include crucial details: system prompt, tools, and chat history
+            attributes: dict[str, Any] = {
+                "stt.audio_uuid": audio_uuid,
+                "stt.audio_format": "ogg",
+                "stt.audio_channels": "stereo",
+                "stt.audio_channel_left": "user",
+                "stt.audio_channel_right": "agent",
+                "stt.audio_source": "livekit_recorder_io",
+                "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
+            }
+
+            # Add available tools
+            if self._available_tools:
+                tool_attrs = serialize_tools_for_attributes(self._available_tools)
+                attributes.update(tool_attrs)
+
+            # Add conversation history from LiveKit's built-in ChatContext
+            history_dict = get_conversation_history_from_session(self.session)
+            if history_dict:
+                items = history_dict.get("items", [])
+                # Bound to prevent oversized attributes
+                if len(items) > MAX_CONVERSATION_HISTORY:
+                    items = items[-MAX_CONVERSATION_HISTORY:]
+                    history_dict = {"items": items}
+                attributes["llm.conversation.message_count"] = len(items)
+                try:
+                    attributes["llm.conversation.history"] = json.dumps(
+                        history_dict, default=str
+                    )
+                except Exception:
+                    pass
+
+            # Try to get system prompt synchronously if agent_activity is available
+            system_prompt = None
+            try:
+                if hasattr(self.session, "agent_activity"):
+                    agent_activity = self.session.agent_activity
+                    if agent_activity and hasattr(agent_activity, "_agent"):
+                        agent = agent_activity._agent
+                        if hasattr(agent, "instructions") and agent.instructions:
+                            system_prompt = agent.instructions
+                        elif hasattr(agent, "_instructions") and agent._instructions:
+                            system_prompt = agent._instructions
+            except Exception:
+                pass  # Will try via background task if not available
+
+            if system_prompt:
+                attributes["llm.system_prompt"] = system_prompt
+
             # Create span for the full conversation audio
-            # Use stt.audio_uuid attribute pattern so UI can play it (same as stt.stream)
-            span = client.start_span(
-                name="stt.full_conversation",
-                attributes={
-                    "stt.audio_uuid": audio_uuid,
-                    "stt.audio_format": "ogg",
-                    "stt.audio_channels": "stereo",
-                    "stt.audio_channel_left": "user",
-                    "stt.audio_channel_right": "agent",
-                    "stt.audio_source": "livekit_recorder_io",
-                    "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
-                },
+            # UI expects this name for full-conversation playback
+            span = trace.create_span(
+                name="livekit.full_conversions",
+                attributes=attributes,
             )
+
+            # If system prompt not already added, start background task to update span
+            if "llm.system_prompt" not in attributes:
+                from noveum_trace.integrations.livekit.livekit_utils import (
+                    _update_span_with_system_prompt,
+                )
+
+                asyncio.create_task(_update_span_with_system_prompt(span, self))
 
             # Track upload success to set appropriate status
             upload_success = False
@@ -982,7 +1010,7 @@ class _LiveKitTracingManager:
                     # Only set error status if not already set (i.e., upload returned False)
                     if span.status != SpanStatus.ERROR:
                         span.set_status(SpanStatus.ERROR, "Upload failed")
-                client.finish_span(span)
+                trace.finish_span(span.span_id)
 
         except Exception as e:
             logger.warning(
@@ -1034,6 +1062,25 @@ class _LiveKitTracingManager:
                     tool_attrs = serialize_tools_for_attributes(self._available_tools)
                     attributes.update(tool_attrs)
 
+                # Try to get system prompt synchronously if agent_activity is available
+                system_prompt = None
+                try:
+                    if hasattr(self.session, "agent_activity"):
+                        agent_activity = self.session.agent_activity
+                        if agent_activity and hasattr(agent_activity, "_agent"):
+                            agent = agent_activity._agent
+                            if hasattr(agent, "instructions") and agent.instructions:
+                                system_prompt = agent.instructions
+                            elif (
+                                hasattr(agent, "_instructions") and agent._instructions
+                            ):
+                                system_prompt = agent._instructions
+                except Exception:
+                    pass  # Will try via background task if not available
+
+                if system_prompt:
+                    attributes["llm.system_prompt"] = system_prompt
+
                 # Add conversation history from LiveKit's built-in ChatContext
                 history_dict = get_conversation_history_from_session(self.session)
                 if history_dict:
@@ -1068,6 +1115,15 @@ class _LiveKitTracingManager:
                 # The span will be finished in _finalize_generation_span_with_functions
                 # after function calls/outputs are merged
                 self._pending_generation_span = span
+
+                # If system prompt not already added, start background task to update span
+                # (waiting for agent_activity to become available)
+                if "llm.system_prompt" not in attributes:
+                    from noveum_trace.integrations.livekit.livekit_utils import (
+                        _update_span_with_system_prompt,
+                    )
+
+                    asyncio.create_task(_update_span_with_system_prompt(span, self))
 
             except Exception as e:
                 logger.warning(
@@ -1117,9 +1173,8 @@ class _LiveKitTracingManager:
                     )
 
         # Restore original start method
-        if self._original_start and self._wrapped:
+        if self._original_start is not None:
             self.session.start = self._original_start
-            self._wrapped = False
 
 
 def setup_livekit_tracing(

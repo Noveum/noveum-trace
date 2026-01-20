@@ -376,7 +376,6 @@ class TestLiveKitTracingManager:
         assert manager.session == mock_session
         assert manager.enabled is True
         assert manager.trace_name_prefix == "livekit"
-        assert manager._wrapped is False
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     def test_init_with_custom_prefix(self, mock_session: Mock) -> None:
@@ -400,7 +399,6 @@ class TestLiveKitTracingManager:
         manager = _LiveKitTracingManager(session=mock_session)
         manager._wrap_start_method()
 
-        assert manager._wrapped is True
         assert manager.session.start != manager._original_start
 
     @pytest.mark.asyncio
@@ -519,7 +517,6 @@ class TestLiveKitTracingManager:
         assert mock_session.off.call_count > 0
         # Check that start method was restored
         assert manager.session.start == original_start
-        assert manager._wrapped is False
 
 
 @pytest.mark.skipif(
@@ -535,7 +532,6 @@ class TestSetupLiveKitTracing:
 
         assert isinstance(manager, _LiveKitTracingManager)
         assert manager.session == mock_session
-        assert manager._wrapped is True
         assert mock_session.on.call_count > 0  # Handlers registered
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)

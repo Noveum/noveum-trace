@@ -285,7 +285,6 @@ class LiveKitSTTWrapper:
             model=self.model,
             counter_ref=self._counter_ref,
             audio_dir=self._audio_dir,
-            wrapper=self,  # Pass wrapper for dynamic frame_collector access
         )
 
     async def aclose(self) -> None:
@@ -310,7 +309,6 @@ class _WrappedSpeechStream:
         model: str,
         counter_ref: list[int],
         audio_dir: Path,
-        wrapper: Optional[Any] = None,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -319,9 +317,6 @@ class _WrappedSpeechStream:
         self._model = model
         self._counter_ref = counter_ref
         self._audio_dir = audio_dir
-        self._wrapper = (
-            wrapper  # Reference to parent wrapper for dynamic frame_collector access
-        )
 
         # State management
         self._buffered_frames: list[Any] = []

@@ -7,6 +7,7 @@ and context extraction for LiveKit integration with noveum-trace.
 
 from __future__ import annotations
 
+import json
 import asyncio
 import inspect
 import logging
@@ -990,7 +991,6 @@ def create_event_span(
     Returns:
         The created Span instance, or None if creation failed
     """
-    import json
 
     try:
         # Get current trace (should exist from session.start())
@@ -1260,6 +1260,7 @@ def serialize_tools_for_attributes(tools: list[dict[str, Any]]) -> dict[str, Any
     attributes: dict[str, Any] = {
         "llm.available_tools.count": len(tools),
         "llm.available_tools.names": [t.get("name", "unknown") for t in tools],
+        "llm.available_tools.descriptions": [t.get("description", "") for t in tools],
     }
 
     # Add full schemas as JSON

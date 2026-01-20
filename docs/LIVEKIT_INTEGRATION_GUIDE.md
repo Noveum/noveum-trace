@@ -223,7 +223,7 @@ These components are designed to work together - session tracing creates the tra
 - `llm.function_outputs`: Function outputs (when merged)
 
 **Full Conversation Audio** (`stt.full_conversation`):
-- `stt.audio_uuid`: UUID for audio retrieval (UI-compatible format)
+- `stt.audio_uuid`: UUID for audio retrieval
 - `stt.audio_format`: "ogg"
 - `stt.audio_channels`: "stereo"
 - `stt.audio_channel_left`: "user"
@@ -369,7 +369,6 @@ python your_agent.py --test console --record
 3. **At session close**, the SDK:
    - Creates an `stt.full_conversation` span
    - Uploads the OGG file to Noveum
-   - Uses `stt.audio_uuid` format so UI can play it
 
 ### Recording Storage
 
@@ -949,20 +948,6 @@ async def entrypoint(ctx: JobContext):
    # The SDK checks session._recorder_io for the recording path
    # If None, recording wasn't enabled
    ```
-
-### Issue: Full Conversation Audio Not Playable in UI
-
-**Problem**: `stt.full_conversation` span exists but audio doesn't play.
-
-**Solutions**:
-
-1. **Verify the span has correct attributes**:
-   - Must have `stt.audio_uuid` (not `audio.uuid`)
-   - The UI looks for the `stt.` prefix to identify playable audio
-
-2. **Check audio format**:
-   - The audio should be OGG/Opus format
-   - UI supports OGG playback directly
 
 ## Complete Examples
 
