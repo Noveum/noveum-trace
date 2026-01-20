@@ -451,7 +451,7 @@ async def wait_for_audio_path(
         if audio_path.exists() and audio_path.stat().st_size > 0:
             return True
         await asyncio.sleep(poll_interval)
-    return audio_path.exists()
+    return audio_path.exists() and audio_path.stat().st_size > 0
 
 
 def get_session_system_prompt(session: Any) -> Optional[str]:
