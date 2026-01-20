@@ -5,31 +5,30 @@ This example demonstrates:
 1. A LangGraph agent that generates captions for images
 2. A LangChain chain that generates captions for images
 3. Integration with Noveum Trace for both examples
-4. Using vision models (GPT-4 Vision) for image understanding
+4. Using vision models (Claude with vision) for image understanding
 
 Prerequisites:
     pip install noveum-trace[langchain]
-    pip install langchain langchain-openai langgraph pillow python-dotenv
+    pip install langchain langchain-anthropic langgraph pillow python-dotenv
 
 Environment Variables (loaded from .env file):
     Create a .env file in the project root with:
         NOVEUM_API_KEY=your_noveum_api_key
-        OPENAI_API_KEY=your_openai_api_key
+        ANTHROPIC_API_KEY=your_anthropic_api_key
         NOVEUM_PROJECT=image-captioning  # optional, defaults to "image-captioning"
         NOVEUM_ENVIRONMENT=dev           # optional, defaults to "dev"
 """
 
-import os
 import base64
+import os
 from pathlib import Path
-from typing import Annotated, Literal, TypedDict
+from typing import TypedDict
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
 from PIL import Image
 
 import noveum_trace
@@ -44,7 +43,7 @@ def setup_noveum_trace():
     if not api_key:
         print("⚠️  Warning: NOVEUM_API_KEY not found in environment variables.")
         print("   Please create a .env file with: NOVEUM_API_KEY=your_key")
-    
+
     noveum_trace.init(
         project=os.getenv("NOVEUM_PROJECT", "image-captioning"),
         api_key=api_key,
@@ -75,10 +74,9 @@ def example_chain_caption_generator(image_path: str) -> str:
     """
     Example 1: LangChain Chain for image caption generation.
 
-    This creates a sequential chain that:
+    This creates a chain that:
     1. Analyzes the image using a vision model
-    2. Generates an initial caption
-    3. Refines the caption to be more engaging
+    2. Generates a descriptive caption
 
     Args:
         image_path: Path to the image file
@@ -95,19 +93,13 @@ def example_chain_caption_generator(image_path: str) -> str:
     base64_image = load_image_as_base64(image_path)
     print(f"✓ Loaded image from: {image_path}")
 
-    vision_llm = ChatOpenAI(
-        model="gpt-4o",
+    vision_llm = ChatAnthropic(
+        model="claude-sonnet-4-5-20250929",
         temperature=0.7,
         callbacks=[callback_handler],
     )
 
-    text_llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.7,
-        callbacks=[callback_handler],
-    )
-
-    print("\n📸 Step 1: Analyzing image with vision model...")
+    print("\n📸 Analyzing image with vision model...")
     vision_prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -123,24 +115,10 @@ def example_chain_caption_generator(image_path: str) -> str:
         ]
     )
 
-    initial_caption_chain = vision_prompt | vision_llm
-    initial_caption = initial_caption_chain.invoke({"image_url": base64_image})
-    initial_caption_text = initial_caption.content
-    print(f"✓ Initial caption: {initial_caption_text}")
-
-    print("\n✨ Step 2: Refining caption...")
-    refinement_prompt = ChatPromptTemplate.from_template(
-        """Here is an initial image caption: {caption}
-
-Enhance this caption to be more vivid, engaging, and descriptive while keeping it concise (one sentence). 
-Make it suitable for social media or a photography portfolio."""
-    )
-
-    refinement_chain = refinement_prompt | text_llm
-
-    refined_caption = refinement_chain.invoke({"caption": initial_caption_text})
-    final_caption = refined_caption.content
-    print(f"✓ Refined caption: {final_caption}")
+    caption_chain = vision_prompt | vision_llm
+    caption_response = caption_chain.invoke({"image_url": base64_image})
+    final_caption = caption_response.content
+    print(f"✓ Caption generated: {final_caption}")
 
     print("\n" + "=" * 80)
     print("✅ Chain execution completed")
@@ -154,21 +132,17 @@ class CaptionState(TypedDict):
 
     image_path: str
     image_base64: str
-    messages: Annotated[list, add_messages]
-    current_caption: str
-    iteration_count: int
     final_caption: str
 
 
-def analyze_image_node(state: CaptionState) -> CaptionState:
-    """Node that analyzes the image using a vision model."""
-    print("\n🔍 ANALYZE IMAGE NODE")
+def generate_caption_node(state: CaptionState) -> CaptionState:
+    """Node that generates a caption from the image using a vision model."""
+    print("\n📸 Generating caption from image...")
 
-    callback_handler = NoveumTraceCallbackHandler()
-    vision_llm = ChatOpenAI(
-        model="gpt-4o",
+    # No need to pass callbacks here - LangGraph propagates them from config
+    vision_llm = ChatAnthropic(
+        model="claude-sonnet-4-5-20250929",
         temperature=0.7,
-        callbacks=[callback_handler],
     )
 
     messages = [
@@ -176,7 +150,7 @@ def analyze_image_node(state: CaptionState) -> CaptionState:
             content=[
                 {
                     "type": "text",
-                    "text": "Analyze this image in detail. Describe the main subject, setting, colors, mood, and any notable features. Be comprehensive but concise.",
+                    "text": "Analyze this image and generate a concise, descriptive caption (one sentence). Focus on the main subject, setting, and key visual elements.",
                 },
                 {
                     "type": "image_url",
@@ -187,134 +161,21 @@ def analyze_image_node(state: CaptionState) -> CaptionState:
     ]
 
     response = vision_llm.invoke(messages)
-    analysis = response.content
-    print(f"✓ Image analysis completed ({len(analysis)} characters)")
-
-    state["messages"].append(HumanMessage(content="Analyze this image and generate a caption."))
-    state["messages"].append(AIMessage(content=f"Image Analysis:\n{analysis}"))
-    return state
-
-
-def generate_caption_node(state: CaptionState) -> CaptionState:
-    """Node that generates an initial caption based on the analysis."""
-    print("\n✍️  GENERATE CAPTION NODE")
-
-    callback_handler = NoveumTraceCallbackHandler()
-    text_llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.7,
-        callbacks=[callback_handler],
-    )
-
-    analysis = ""
-    for msg in reversed(state["messages"]):
-        if isinstance(msg, AIMessage) and "Image Analysis:" in msg.content:
-            analysis = msg.content.replace("Image Analysis:\n", "")
-            break
-
-    prompt = f"""Based on this image analysis, generate a creative and engaging caption:
-
-{analysis}
-
-Create a caption that:
-- Is one sentence long
-- Captures the essence and mood of the image
-- Is suitable for social media or photography portfolio
-- Is vivid and descriptive
-
-Caption:"""
-
-    response = text_llm.invoke([HumanMessage(content=prompt)])
     caption = response.content.strip()
-    print(f"✓ Generated caption: {caption}")
+    print(f"✓ Caption generated: {caption}")
 
-    state["current_caption"] = caption
-    state["iteration_count"] += 1
-    state["messages"].append(AIMessage(content=f"Generated Caption: {caption}"))
-    return state
-
-
-def refine_caption_node(state: CaptionState) -> CaptionState:
-    """Node that refines the caption to make it more engaging."""
-    print("\n✨ REFINE CAPTION NODE")
-
-    callback_handler = NoveumTraceCallbackHandler()
-    text_llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.8,
-        callbacks=[callback_handler],
-    )
-
-    prompt = f"""Here is a caption for an image: {state['current_caption']}
-
-Refine this caption to be more vivid, engaging, and polished while keeping it concise (one sentence). 
-Make it stand out and capture attention. Return only the refined caption, nothing else."""
-
-    response = text_llm.invoke([HumanMessage(content=prompt)])
-    refined_caption = response.content.strip()
-    print(f"✓ Refined caption: {refined_caption}")
-
-    state["current_caption"] = refined_caption
-    state["iteration_count"] += 1
-    state["messages"].append(AIMessage(content=f"Refined Caption: {refined_caption}"))
-    return state
-
-
-def should_refine(state: CaptionState) -> Literal["refine", "finalize"]:
-    """Decision node: determine if caption needs refinement or is ready."""
-    if state["iteration_count"] < 2:
-        print("\n🔄 Caption needs refinement")
-        return "refine"
-    else:
-        print("\n✅ Caption is ready")
-        return "finalize"
-
-
-def finalize_caption_node(state: CaptionState) -> CaptionState:
-    """
-    Final node that sets the final caption.
-    """
-    print("\n🎯 FINALIZE CAPTION NODE")
-
-    state["final_caption"] = state["current_caption"]
-    state["messages"].append(AIMessage(content=f"Final Caption: {state['final_caption']}"))
-
-    print(f"✓ Final caption set: {state['final_caption']}")
-
-    return state
+    # Only return the fields we modified (not the entire state with the image)
+    return {"final_caption": caption}
 
 
 def create_caption_agent() -> StateGraph:
     """Create the LangGraph agent for caption generation."""
     workflow = StateGraph(CaptionState)
 
-    workflow.add_node("analyze_image", analyze_image_node)
     workflow.add_node("generate_caption", generate_caption_node)
-    workflow.add_node("refine_caption", refine_caption_node)
-    workflow.add_node("finalize", finalize_caption_node)
+    workflow.set_entry_point("generate_caption")
+    workflow.add_edge("generate_caption", END)
 
-    workflow.set_entry_point("analyze_image")
-    workflow.add_edge("analyze_image", "generate_caption")
-
-    workflow.add_conditional_edges(
-        "generate_caption",
-        should_refine,
-        {
-            "refine": "refine_caption",
-            "finalize": "finalize",
-        },
-    )
-
-    workflow.add_conditional_edges(
-        "refine_caption",
-        should_refine,
-        {
-            "refine": "refine_caption",
-            "finalize": "finalize",
-        },
-    )
-
-    workflow.add_edge("finalize", END)
     return workflow
 
 
@@ -322,11 +183,7 @@ def example_agent_caption_generator(image_path: str) -> str:
     """
     Example 2: LangGraph Agent for image caption generation.
 
-    This creates an agent that:
-    1. Analyzes the image using a vision model
-    2. Generates an initial caption
-    3. Refines the caption iteratively
-    4. Finalizes the best caption
+    This creates an agent that generates a caption from an image using a vision model.
 
     Args:
         image_path: Path to the image file
@@ -349,9 +206,6 @@ def example_agent_caption_generator(image_path: str) -> str:
     initial_state: CaptionState = {
         "image_path": image_path,
         "image_base64": base64_image,
-        "messages": [],
-        "current_caption": "",
-        "iteration_count": 0,
         "final_caption": "",
     }
 
@@ -378,8 +232,9 @@ def example_agent_caption_generator(image_path: str) -> str:
         print("=" * 80)
 
         print("\n📊 EXECUTION SUMMARY:")
-        print(f"   • Iterations performed: {final_state['iteration_count']}")
-        print(f"   • Final caption length: {len(final_state['final_caption'])} characters")
+        print(
+            f"   • Final caption length: {len(final_state['final_caption'])} characters"
+        )
 
         print("\n📝 FINAL CAPTION:")
         print("─" * 80)
@@ -396,33 +251,35 @@ def example_agent_caption_generator(image_path: str) -> str:
 def main():
     """Run both examples."""
     noveum_key = os.getenv("NOVEUM_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
-    
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+
     if not noveum_key:
         print("❌ Error: NOVEUM_API_KEY not found in environment variables.")
         print("   Please create a .env file in the project root with:")
         print("   NOVEUM_API_KEY=your_noveum_api_key")
         return
-    
-    if not openai_key:
-        print("❌ Error: OPENAI_API_KEY not found in environment variables.")
+
+    if not anthropic_key:
+        print("❌ Error: ANTHROPIC_API_KEY not found in environment variables.")
         print("   Please create a .env file in the project root with:")
-        print("   OPENAI_API_KEY=your_openai_api_key")
+        print("   ANTHROPIC_API_KEY=your_anthropic_api_key")
         return
-    
-    project_root = Path(__file__).parent.parent.parent
-    sample_image_path = project_root / "sample_img.jpeg"
+
+    # Hardcoded path to the sample image in docs/examples/sample_image/
+    sample_image_path = Path(__file__).parent / "sample_image" / "sample_img.jpeg"
 
     if not sample_image_path.exists():
         print(f"❌ Error: Image not found at {sample_image_path}")
-        print("Please ensure sample_img.jpeg exists in the project root.")
+        print(
+            "Please ensure sample_img.jpeg exists in docs/examples/sample_image/ directory."
+        )
         return
 
     print("\n" + "=" * 80)
     print("🖼️  IMAGE CAPTION GENERATION EXAMPLES")
     print("=" * 80)
     print(f"Using image: {sample_image_path}")
-    print(f"✓ API keys loaded from .env file")
+    print("✓ API keys loaded from .env file")
     print("=" * 80)
 
     try:
@@ -443,8 +300,7 @@ def main():
     print("\nCheck your Noveum Trace dashboard to see:")
     print("  • Chain-level spans for the LangChain example")
     print("  • Graph-level spans for the LangGraph agent")
-    print("  • Vision model calls (GPT-4 Vision)")
-    print("  • Text model calls for refinement")
+    print("  • Vision model calls (Claude with vision)")
     print("  • Node-level spans in the agent workflow")
 
     noveum_trace.flush()

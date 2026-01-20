@@ -208,3 +208,50 @@ def process_chain_inputs_outputs(data: dict[str, Any]) -> dict[str, Any]:
             attributes[key] = str(value)
 
     return attributes
+
+
+def extract_images_from_messages(
+    message_dicts: list[list[dict[str, Any]]],
+) -> list[str]:
+    """
+    Extract image URLs and data URIs from message dictionaries.
+
+    Looks for images in message content with type "image_url" that contain
+    either HTTP/HTTPS URLs or data URIs (base64-encoded images).
+
+    Args:
+        message_dicts: List of message batches as dictionaries (already converted)
+
+    Returns:
+        List of image URLs/data URIs found in message content
+    """
+    images = []
+
+    try:
+        for batch in message_dicts:
+            for msg in batch:
+                # Get content from dict
+                content = msg.get("content") if isinstance(msg, dict) else None
+
+                if content is None:
+                    continue
+
+                if isinstance(content, list):
+                    # Multimodal content (text + images)
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "image_url":
+                            image_url = item.get("image_url")
+                            if isinstance(image_url, dict):
+                                url = image_url.get("url")
+                            elif isinstance(image_url, str):
+                                url = image_url
+                            else:
+                                url = None
+
+                            if url and url not in images:
+                                images.append(url)
+
+    except Exception as e:
+        logger.debug(f"Error extracting images from messages: {e}")
+
+    return images

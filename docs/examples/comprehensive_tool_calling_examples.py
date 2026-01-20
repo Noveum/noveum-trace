@@ -252,7 +252,6 @@ def pattern1_openai_functions_agent():
         {"input": "What's the weather in Paris?"},
         config={
             "callbacks": [handler],
-            "metadata": {"noveum": {"name": "pattern1_openai_functions"}},
         },
     )
 
@@ -315,7 +314,6 @@ def pattern2_manual_injection():
             "metadata": {
                 "noveum": {
                     "available_tools": TOOLS,  # ✅ Explicit injection
-                    "name": "pattern2_manual_injection",
                 }
             },
         },
@@ -416,7 +414,6 @@ def pattern3_langgraph_custom_stategraph():
             },
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": "pattern3_langgraph_stategraph"}},
             },
         )
 
@@ -475,7 +472,6 @@ def pattern4_langgraph_react_agent():
             {"messages": [HumanMessage(content="Search for LangGraph")]},
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": "pattern4_langgraph_react"}},
             },
         )
 
@@ -551,7 +547,6 @@ def pattern5_multinode_different_tools():
                 "callbacks": [handler],
                 "metadata": {
                     "noveum": {
-                        "name": "researcher_node",
                         "available_tools": [web_search],  # ✅ Only web_search
                     }
                 },
@@ -577,7 +572,6 @@ def pattern5_multinode_different_tools():
                 "callbacks": [handler],
                 "metadata": {
                     "noveum": {
-                        "name": "calculator_node",
                         "available_tools": [calculator],  # ✅ Only calculator
                     }
                 },
@@ -603,7 +597,6 @@ def pattern5_multinode_different_tools():
                 "callbacks": [handler],
                 "metadata": {
                     "noveum": {
-                        "name": "weather_node",
                         # ✅ Only weather_tool
                         "available_tools": [weather_tool],
                     }
@@ -703,7 +696,6 @@ def pattern5_multinode_different_tools():
             {"input": query, "results": [], "visited_specialists": []},
             config={
                 "callbacks": [handler],
-                "metadata": {"noveum": {"name": "pattern5_multinode"}},
             },
         )
 

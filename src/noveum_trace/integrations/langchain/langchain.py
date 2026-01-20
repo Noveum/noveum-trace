@@ -39,6 +39,7 @@ from noveum_trace.integrations.langchain.langchain_utils import (
     get_operation_name,
 )
 from noveum_trace.integrations.langchain.message_utils import (
+    extract_images_from_messages,
     message_to_dict,
     process_chain_inputs_outputs,
 )
@@ -1050,6 +1051,39 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 skip_frames=1
             )  # Skip this frame
 
+            # Try to extract images from prompts (fallback - rare case)
+            # This handles edge cases where someone might pass JSON strings with image_url
+            images = []
+            if prompts:
+                for prompt in prompts:
+                    if isinstance(prompt, str) and '"type": "image_url"' in prompt:
+                        # Prompt contains JSON with image_url - try to parse
+                        try:
+                            import json as json_module
+
+                            # Try to find JSON objects in the string
+                            if prompt.strip().startswith(
+                                "["
+                            ) or prompt.strip().startswith("{"):
+                                parsed = json_module.loads(prompt)
+                                # Convert to list format expected by extract_images_from_messages
+                                if isinstance(parsed, dict):
+                                    parsed = [parsed]
+                                if isinstance(parsed, list):
+                                    # Wrap in batch format if needed
+                                    # extract_images_from_messages expects list[list[dict[str, Any]]]
+                                    prompt_dicts = (
+                                        [parsed]
+                                        if isinstance(parsed[0], dict)
+                                        else parsed
+                                    )
+                                    images.extend(
+                                        extract_images_from_messages(prompt_dicts)
+                                    )
+                        except Exception:
+                            # If parsing fails, skip this prompt
+                            pass
+
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
                 "llm.model": extracted_model_name,
@@ -1060,6 +1094,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "llm.input.prompt_count": len(prompts),
                 **attribute_kwargs,
             }
+
+            # Add images if found
+            if images:
+                span_attributes["llm.input.images"] = images
+                span_attributes["llm.input.image_count"] = len(images)
 
             # Add code location information if available
             if code_location_info:
@@ -1122,6 +1161,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
+                        span_attributes["llm.available_tools.descriptions"] = [
+                            t.get("description", "No description")
+                            for t in converted_tools
+                        ]
                         # Add complete tool schemas for better trace visibility
                         span_attributes["llm.available_tools.schemas"] = json.dumps(
                             converted_tools, default=str
@@ -1145,6 +1188,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                             ),
                                             "agent.available_tools.names": [
                                                 t["name"] for t in converted_tools
+                                            ],
+                                            "agent.available_tools.descriptions": [
+                                                t.get("description", "No description")
+                                                for t in converted_tools
                                             ],
                                             "agent.available_tools.schemas": json.dumps(
                                                 converted_tools, default=str
@@ -1232,6 +1279,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Flatten for analysis (messages is List[List[BaseMessage]])
             flat_messages = message_dicts[0] if message_dicts else []
 
+            # Extract images from message dicts
+            images = extract_images_from_messages(message_dicts)
+
             # Analyze message content
             has_system_prompt = any(m.get("type") == "system" for m in flat_messages)
             has_tool_calls = any(m.get("tool_calls") for m in flat_messages)
@@ -1280,6 +1330,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 **attribute_kwargs,
             }
 
+            # Add images if found
+            if images:
+                span_attributes["llm.input.images"] = images
+                span_attributes["llm.input.image_count"] = len(images)
+
             # Add code location information if available
             if code_location_info:
                 span_attributes.update(code_location_info)
@@ -1323,6 +1378,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
+                        span_attributes["llm.available_tools.descriptions"] = [
+                            t.get("description", "No description")
+                            for t in converted_tools
+                        ]
                         span_attributes["llm.available_tools.schemas"] = json.dumps(
                             converted_tools, default=str
                         )
@@ -1338,6 +1397,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                             ),
                                             "agent.available_tools.names": [
                                                 t["name"] for t in converted_tools
+                                            ],
+                                            "agent.available_tools.descriptions": [
+                                                t.get("description", "No description")
+                                                for t in converted_tools
                                             ],
                                             "agent.available_tools.schemas": json.dumps(
                                                 converted_tools, default=str
@@ -1670,6 +1733,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes["agent.available_tools.count"] = len(available_tools)
                 attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
+                ]
+                attributes["agent.available_tools.descriptions"] = [
+                    t.get("description", "No description") for t in available_tools
                 ]
                 attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str
@@ -2224,6 +2290,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_attributes["agent.available_tools.count"] = len(available_tools)
                 span_attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
+                ]
+                span_attributes["agent.available_tools.descriptions"] = [
+                    t.get("description", "No description") for t in available_tools
                 ]
                 span_attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str
