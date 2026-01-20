@@ -629,6 +629,8 @@ class _LiveKitTracingManager:
                     # (there can be multiple LLM calls for follow-up tool calls)
                     if speech_id in self._pending_llm_metrics:
                         existing = self._pending_llm_metrics[speech_id]
+                        existing_model = existing.get("llm.model")
+                        new_model = llm_metrics.get("llm.model")
                         # Accumulate tokens
                         for key in [
                             "llm.input_tokens",
@@ -645,6 +647,29 @@ class _LiveKitTracingManager:
                         ]:
                             if key in llm_metrics and key in existing:
                                 llm_metrics[key] += existing[key]
+                        if existing_model and new_model and existing_model != new_model:
+                            existing_models = existing.get("llm.models")
+                            if existing_models:
+                                if isinstance(existing_models, list):
+                                    models = list(existing_models)
+                                else:
+                                    models = [existing_models]
+                            else:
+                                models = [existing_model]
+                            models.append(new_model)
+                            deduped_models = []
+                            for model_name in models:
+                                if model_name and model_name not in deduped_models:
+                                    deduped_models.append(model_name)
+                            llm_metrics["llm.models"] = deduped_models
+                            # Preserve the original model for compatibility.
+                            llm_metrics["llm.model"] = existing_model
+                        elif existing.get("llm.models") and new_model:
+                            models = existing["llm.models"]
+                            if not isinstance(models, list):
+                                models = [models]
+                            if new_model not in models:
+                                llm_metrics["llm.models"] = models + [new_model]
                         # Merge (new values override except for accumulated)
                         existing.update(llm_metrics)
                     else:

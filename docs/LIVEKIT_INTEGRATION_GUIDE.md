@@ -13,15 +13,13 @@ The complete solution consists of two components working together:
 2. [Installation](#installation)
 3. [Quick Start](#quick-start)
 4. [How It Works](#how-it-works)
-5. [Architecture](#architecture)
-6. [Session Tracing Component](#session-tracing-component)
-7. [STT/TTS Tracing Component](#stttts-tracing-component)
-8. [Full Conversation Audio Recording](#full-conversation-audio-recording)
-9. [Configuration Options](#configuration-options)
-10. [Verification](#verification)
-11. [Common Use Cases](#common-use-cases)
-12. [Troubleshooting](#troubleshooting)
-
+5. [Session Tracing Component](#session-tracing-component)
+6. [STT/TTS Tracing Component](#stttts-tracing-component)
+7. [Full Conversation Audio Recording](#full-conversation-audio-recording)
+8. [Configuration Options](#configuration-options)
+9. [Verification](#verification)
+10. [Common Use Cases](#common-use-cases)
+11. [Troubleshooting](#troubleshooting)
 ---
 
 ## Prerequisites
