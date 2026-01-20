@@ -133,8 +133,8 @@ class TestLangChainIntegration:
                 == "tool.calculator"
             )
 
-            # Test with missing name (defaults to .node)
-            assert get_operation_name("llm_start", {}) == "llm.node"
+            # Test with missing name - llm_start uses extract_model_name() which defaults to "unknown"
+            assert get_operation_name("llm_start", {}) == "llm.unknown"
 
             # Test with unknown event type
             assert (

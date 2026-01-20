@@ -449,6 +449,7 @@ class _WrappedSpeechStream:
                     )
 
             # Clear buffer for next utterance
+            # Note: Full conversation audio is handled by LiveKit's RecorderIO
             self._buffered_frames = []
 
         return event

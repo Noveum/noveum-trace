@@ -7,9 +7,22 @@ This example demonstrates a realistic drive-thru ordering agent that:
 - Integrates with LiveKit for STT/TTS
 - Automatically traces all operations with noveum-trace
 
+Features (via setup_livekit_tracing):
+- Chat history tracked in generation spans
+- Function calls captured in session events (same span as LLM call)
+- Available tools extracted from agent
+- Full conversation audio uploaded at session end (stereo OGG)
+- Per-utterance STT/TTS audio captured via wrappers
+- LLM metrics (tokens, cost, latency) captured from LiveKit events
+
 Two modes:
 - Default: Runs with dummy inputs/outputs (text simulation)
 - --test: Actually runs with LiveKit voice agent
+
+Recording (for full conversation audio):
+- Add record=True to session.start() in code
+- For console mode, add --record flag: python livekit_integration_example.py --test console --record
+- Audio is saved as stereo OGG (left=user, right=agent) and uploaded to Noveum
 
 Prerequisites:
     - livekit
@@ -37,7 +50,10 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Callable, Optional
+
+# Disable LiveKit's built-in OpenTelemetry to prevent telemetry errors
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
 from pydantic import Field
 
@@ -96,11 +112,11 @@ MENU = {
 class Order:
     """Simple order tracking."""
 
-    def __init__(self):
-        self.items: list[dict] = []
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
         self.status = "collecting"
 
-    def add_item(self, item: str, quantity: int = 1):
+    def add_item(self, item: str, quantity: int = 1) -> bool:
         """Add item to order."""
         if item.lower() in MENU:
             for _ in range(quantity):
@@ -118,7 +134,7 @@ class Order:
         """Get order summary."""
         if not self.items:
             return "No items in order"
-        item_counts = {}
+        item_counts: dict[str, int] = {}
         for item in self.items:
             name = item["name"]
             item_counts[name] = item_counts.get(name, 0) + 1
@@ -134,6 +150,7 @@ class Userdata:
     """User data for the agent session."""
 
     order: Order
+    session: Optional["AgentSession"] = None  # Reference to session for closing
 
 
 # =============================================================================
@@ -213,7 +230,8 @@ class DriveThruAgent(Agent):
 3. Use the add_item_to_order tool to add items when the customer orders them
 4. Confirm items as they order
 5. Ask if they want anything else
-6. Tell them the total when they're done
+6. When customer says "bye", "done", "that's all", "thank you bye" or indicates they're finished,
+   use the complete_order tool to finalize and end the conversation
 
 Note: "coke" refers to a drink. Sizes (small, medium, large) don't affect price.
 
@@ -221,10 +239,10 @@ Be concise and friendly. Keep responses short (1-2 sentences)."""
 
         super().__init__(
             instructions=instructions,
-            tools=[self.build_add_item_tool()],
+            tools=[self.build_add_item_tool(), self.build_complete_order_tool()],
         )
 
-    def build_add_item_tool(self):
+    def build_add_item_tool(self) -> Callable[..., Any]:
         """Build the add_item_to_order tool."""
         available_items = list(MENU.keys())
 
@@ -273,6 +291,41 @@ Be concise and friendly. Keep responses short (1-2 sentences)."""
 
         return add_item_to_order
 
+    def build_complete_order_tool(self) -> Callable[..., Any]:
+        """Build the complete_order tool that ends the session."""
+
+        @function_tool
+        async def complete_order(
+            ctx: RunContext[Userdata],
+        ) -> str:
+            """
+            Call this when the customer is done ordering and wants to end the conversation.
+            Use when customer says: "bye", "done", "that's all", "thank you", "goodbye", etc.
+            This will finalize the order and end the call.
+            """
+            order = ctx.userdata.order
+            total = order.get_total()
+            summary = order.get_summary()
+
+            # Mark order as complete
+            order.status = "completed"
+
+            # Schedule session close after a short delay (to allow goodbye message)
+            async def close_session() -> None:
+                await asyncio.sleep(3)  # Wait for TTS to finish goodbye
+                if ctx.userdata.session:
+                    print("📞 Ending call - order complete")
+                    await ctx.userdata.session.aclose()
+
+            asyncio.create_task(close_session())
+
+            if order.items:
+                return f"Order complete! {summary}. Total: ${total:.2f}. Thank you, have a great day!"
+            else:
+                return "No items ordered. Thank you for visiting, have a great day!"
+
+        return complete_order
+
 
 # =============================================================================
 # TEXT SIMULATION AGENT (for default mode)
@@ -282,10 +335,10 @@ Be concise and friendly. Keep responses short (1-2 sentences)."""
 class DriveThruAgentText:
     """Drive-thru ordering agent for text simulation."""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.order = Order()
-        self.conversation_history: list[dict] = []
+        self.conversation_history: list[dict[str, str]] = []
 
     def process_customer_message(self, text: str) -> str:
         """
@@ -338,7 +391,7 @@ class DriveThruAgentText:
 
         return response
 
-    def get_order_summary(self) -> dict:
+    def get_order_summary(self) -> dict[str, Any]:
         """Get final order summary."""
         return {
             "items": self.order.items,
@@ -368,26 +421,33 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     LiveKit agent entrypoint for voice interaction.
 
     This sets up STT/TTS with tracing and handles the conversation.
+
+    All tracing is automatic:
+    - LiveKitSTTWrapper: Creates stt.stream spans with per-utterance audio + transcript
+    - LiveKitTTSWrapper: Creates tts.stream spans with per-utterance audio + input text
+    - setup_livekit_tracing: Handles session events including:
+        - LLM generation events with chat history and available tools
+        - Function calls merged into generation spans (not separate spans)
+        - Full conversation audio upload at session end (stereo OGG)
+        - LLM metrics (tokens, cost, latency) from LiveKit events
     """
     job_context = await extract_job_context(ctx)
 
     session_id = ctx.job.id
 
-    # Create STT provider
+    # Create STT provider and wrap with tracing
+    # Per-utterance audio is uploaded by the wrapper
     base_stt = deepgram.STT(model="nova-2", language="en-US")
-
-    # Wrap STT with tracing
     traced_stt = LiveKitSTTWrapper(
         stt=base_stt, session_id=session_id, job_context=job_context
     )
 
-    # Create TTS provider
+    # Create TTS provider and wrap with tracing
+    # Per-utterance audio is uploaded by the wrapper
     base_tts = cartesia.TTS(
         model="sonic-english",
         voice="a0e99841-438c-4a64-b679-ae501e7d6091",  # Friendly voice
     )
-
-    # Wrap TTS with tracing
     traced_tts = LiveKitTTSWrapper(
         tts=base_tts, session_id=session_id, job_context=job_context
     )
@@ -396,10 +456,11 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     order = Order()
     userdata = Userdata(order=order)
 
-    # Create LLM using livekit.plugins.openai
+    # Create LLM (setup_livekit_tracing handles LLM tracing via session events)
+    # It captures: available tools, chat history, function calls, LLM metrics
     llm = openai_plugin.LLM(model="gpt-4o-mini", temperature=0.7)
 
-    # Create agent session with userdata
+    # Create agent session with wrapped STT/TTS providers
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=traced_stt,
@@ -407,21 +468,29 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         tts=traced_tts,
     )
 
-    # Setup automatic tracing for the agent session (creates trace automatically)
+    # Store session reference in userdata for the complete_order tool
+    userdata.session = session
+
+    # Setup automatic tracing for the agent session
+    # This creates the trace, handles session events, and uploads full conversation audio
+    # Note: Full audio recording requires record=True in session.start()
+    # LiveKit's RecorderIO handles this as a stereo OGG file (left=user, right=agent)
     setup_livekit_tracing(session)
 
     print(f"🍔 Drive-thru agent connected to room: {ctx.room.name}")
     print(f"📝 Session ID: {session_id}")
 
     # Start session with the agent (which has tools)
-    await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
+    # record=True enables LiveKit's RecorderIO to capture full conversation audio
+    # The recording is automatically uploaded to Noveum at session close
+    await session.start(
+        agent=DriveThruAgent(userdata=userdata), room=ctx.room, record=True
+    )
 
-    # Print final order when session ends
-    order_summary = userdata.order.get_summary()
-    total = userdata.order.get_total()
-    print("\n✅ Order complete!")
-    print(f"   Items: {order_summary}")
-    print(f"   Total: ${total:.2f}")
+    # Note: In console mode, the session continues running after start() returns.
+    # Use 'bye' or 'done' to end gracefully (triggers complete_order tool)
+    print("🎤 Agent is listening... (say 'bye' or 'done' to end)")
+    print("💡 For full conversation audio, run with: --record flag in console mode")
 
 
 # =============================================================================
@@ -429,7 +498,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 # =============================================================================
 
 
-async def run_text_simulation():
+async def run_text_simulation() -> None:
     """
     Run drive-thru agent in text mode (default).
 
@@ -487,8 +556,9 @@ async def run_text_simulation():
         print("   - Order processing spans")
         print()
         print(
-            "💡 To run with actual voice agent, use: python livekit_integration_example.py --test"
+            "💡 To run with actual voice agent, use: python livekit_integration_example.py --test console"
         )
+        print("💡 To enable full conversation audio recording, add --record flag")
 
 
 # =============================================================================
@@ -496,7 +566,7 @@ async def run_text_simulation():
 # =============================================================================
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     # Print configuration info regardless of mode
     print("🍔 Drive-Thru Agent Example - Two modes available:")

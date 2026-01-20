@@ -389,6 +389,9 @@ class _WrappedSynthesizeStream:
                         f"Failed to create span for TTS streaming: {e}", exc_info=True
                     )
 
+            # Collect frames for full conversation audio before clearing
+            # Note: Full conversation audio is handled by LiveKit's RecorderIO
+
             # Clear buffer for next segment
             self._buffered_frames = []
             self._input_text = ""
@@ -491,6 +494,8 @@ class _WrappedChunkedStream:
             return
 
         self._span_created = True
+
+        # Note: Full conversation audio is handled by LiveKit's RecorderIO
 
         # Increment counter
         self._counter_ref[0] += 1

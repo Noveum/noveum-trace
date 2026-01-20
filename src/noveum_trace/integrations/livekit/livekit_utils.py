@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import time
 from dataclasses import asdict, is_dataclass
@@ -19,6 +20,9 @@ from noveum_trace.core.context import get_current_span, get_current_trace
 from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.livekit.livekit_constants import (
     AUDIO_DURATION_MS_DEFAULT_VALUE,
+    MAX_CONVERSATION_HISTORY,
+    MAX_PENDING_FUNCTION_CALLS,
+    MAX_PENDING_FUNCTION_OUTPUTS,
     STT_CONFIDENCE_DEFAULT_VALUE,
     STT_END_TIME_DEFAULT_VALUE,
     STT_IS_PRIMARY_SPEAKER_DEFAULT_VALUE,
@@ -87,6 +91,10 @@ def create_constants_metadata() -> dict[str, Any]:
                 # System prompt timing constants
                 "SYSTEM_PROMPT_MAX_WAIT_SECONDS": SYSTEM_PROMPT_MAX_WAIT_SECONDS,
                 "SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS": SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS,
+                # Buffer size limits (memory/attribute caps)
+                "MAX_CONVERSATION_HISTORY": MAX_CONVERSATION_HISTORY,
+                "MAX_PENDING_FUNCTION_CALLS": MAX_PENDING_FUNCTION_CALLS,
+                "MAX_PENDING_FUNCTION_OUTPUTS": MAX_PENDING_FUNCTION_OUTPUTS,
             }
         }
     }
@@ -234,6 +242,232 @@ def upload_audio_frames(
     except Exception as e:  # noqa: S110 - broad exception for graceful degradation
         logger.warning(f"Failed to export audio {audio_uuid}: {e}", exc_info=True)
         return False
+
+
+def upload_audio_file(
+    file_path: Path,
+    audio_uuid: str,
+    audio_type: str,
+    trace_id: str,
+    span_id: str,
+    content_type: str = "audio/ogg",
+) -> bool:
+    """
+    Upload an audio file to Noveum platform.
+
+    This utility function handles uploading pre-recorded audio files
+    (e.g., from LiveKit's RecorderIO which saves as OGG/Opus).
+
+    Args:
+        file_path: Path to the audio file
+        audio_uuid: Unique identifier for the audio file
+        audio_type: Type of audio ('conversation', 'stt', 'tts')
+        trace_id: Trace ID to associate audio with
+        span_id: Span ID to associate audio with
+        content_type: MIME type of the audio file (default: "audio/ogg")
+
+    Returns:
+        True if upload was successful, False otherwise
+    """
+    try:
+        if not file_path.exists():
+            logger.warning(f"Audio file not found: {file_path}")
+            return False
+
+        # Read the audio file
+        audio_bytes = file_path.read_bytes()
+        if not audio_bytes:
+            logger.warning(f"Audio file is empty: {file_path}")
+            return False
+
+        # Get client
+        from noveum_trace import get_client
+
+        client = get_client()
+        if not client:
+            logger.info("No client available, skipping audio upload")
+            return False
+
+        # Get file format from extension
+        file_format = file_path.suffix.lstrip(".") or "ogg"
+
+        # Prepare metadata
+        metadata = {
+            "format": file_format,
+            "type": audio_type,
+            "content_type": content_type,
+            "file_size_bytes": len(audio_bytes),
+        }
+
+        # Export audio (non-blocking, queued)
+        client.export_audio(
+            audio_data=audio_bytes,
+            trace_id=trace_id,
+            span_id=span_id,
+            audio_uuid=audio_uuid,
+            metadata=metadata,
+        )
+
+        logger.debug(f"Queued audio file upload: {audio_uuid} ({file_path.name})")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Failed to upload audio file {audio_uuid}: {e}", exc_info=True)
+        return False
+
+
+def get_conversation_history_from_session(session: Any) -> dict[str, Any]:
+    """
+    Extract conversation history from a LiveKit AgentSession.
+
+    Uses LiveKit's built-in ChatContext (session.history) which already
+    tracks all messages, function calls, and function outputs.
+
+    Args:
+        session: LiveKit AgentSession instance
+
+    Returns:
+        Dictionary with conversation history in serializable format
+    """
+    try:
+        # Access LiveKit's built-in conversation history
+        if not hasattr(session, "history"):
+            logger.debug("Session does not have 'history' attribute")
+            return {}
+
+        chat_ctx = session.history
+        if chat_ctx is None:
+            return {}
+
+        # Use LiveKit's built-in to_dict() method for serialization
+        if hasattr(chat_ctx, "to_dict"):
+            return chat_ctx.to_dict()
+
+        # Fallback: manually extract items
+        if hasattr(chat_ctx, "items"):
+            items = []
+            for item in chat_ctx.items:
+                if hasattr(item, "model_dump"):
+                    items.append(item.model_dump(mode="json", exclude_none=True))
+                elif hasattr(item, "dict"):
+                    items.append(item.dict())
+                else:
+                    items.append(str(item))
+            return {"items": items}
+
+        return {}
+
+    except Exception as e:
+        logger.warning(f"Failed to extract conversation history: {e}", exc_info=True)
+        return {}
+
+
+def get_recorder_audio_path(session: Any) -> Optional[Path]:
+    """
+    Get the audio recording path from a LiveKit AgentSession's RecorderIO.
+
+    LiveKit's RecorderIO automatically records the full conversation as a
+    stereo OGG/Opus file (left channel = user, right channel = agent).
+
+    Args:
+        session: LiveKit AgentSession instance
+
+    Returns:
+        Path to the recorded audio file, or None if not available
+    """
+    try:
+        # NOTE: Intentionally accessing LiveKit's private attribute session._recorder_io
+        # because LiveKit does not expose a public API for accessing RecorderIO.
+        # This creates a coupling risk: future LiveKit SDK changes may require updates
+        # to this code. The implementation mitigates this with defensive coding:
+        # getattr() with None defaults, null checks, exception handling, and file
+        # existence validation (see below).
+        recorder = getattr(session, "_recorder_io", None)
+        if recorder is None:
+            logger.debug("Session does not have '_recorder_io' attribute")
+            return None
+
+        # Get the output path
+        output_path = getattr(recorder, "output_path", None)
+        if output_path is None:
+            logger.debug("RecorderIO does not have 'output_path'")
+            return None
+
+        # Ensure it's a Path object
+        if not isinstance(output_path, Path):
+            output_path = Path(output_path)
+
+        # Check if file exists
+        if not output_path.exists():
+            logger.debug(f"Recording file does not exist: {output_path}")
+            return None
+
+        return output_path
+
+    except Exception as e:
+        logger.warning(f"Failed to get recorder audio path: {e}", exc_info=True)
+        return None
+
+
+async def finalize_recorder_io(recorder_io: Any) -> None:
+    """Finalize RecorderIO if it is open."""
+    if recorder_io is None:
+        return
+    try:
+        is_closed = getattr(recorder_io, "closed", False) or getattr(
+            recorder_io, "_closed", False
+        )
+        if not is_closed and hasattr(recorder_io, "aclose"):
+            await recorder_io.aclose()
+    except Exception as e:
+        logger.warning(
+            f"Failed to finalize RecorderIO: {e}. Audio file may be incomplete.",
+            exc_info=True,
+        )
+
+
+def resolve_recorder_audio_path(session: Any) -> Optional[Path]:
+    """Resolve the recorder audio path from the session."""
+    audio_path = get_recorder_audio_path(session)
+    if audio_path is not None:
+        return audio_path
+    recorder_io = getattr(session, "_recorder_io", None)
+    recorder_path = getattr(recorder_io, "output_path", None)
+    if recorder_path is None:
+        return None
+    return recorder_path if isinstance(recorder_path, Path) else Path(recorder_path)
+
+
+async def wait_for_audio_path(
+    audio_path: Optional[Path],
+    max_wait_seconds: float = 5.0,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Wait until the audio file is present and non-empty."""
+    if audio_path is None:
+        return False
+    max_attempts = int(max_wait_seconds / poll_interval) if poll_interval > 0 else 1
+    for _ in range(max_attempts):
+        if audio_path.exists() and audio_path.stat().st_size > 0:
+            return True
+        await asyncio.sleep(poll_interval)
+    return audio_path.exists() and audio_path.stat().st_size > 0
+
+
+def get_session_system_prompt(session: Any) -> Optional[str]:
+    """Return the system prompt if available on the session."""
+    try:
+        if hasattr(session, "agent_activity"):
+            agent_activity = session.agent_activity
+            if agent_activity and hasattr(agent_activity, "_agent"):
+                agent = agent_activity._agent
+                if hasattr(agent, "instructions") and agent.instructions:
+                    return agent.instructions
+                if hasattr(agent, "_instructions") and agent._instructions:
+                    return agent._instructions
+    except Exception:
+        return None
+    return None
 
 
 def ensure_audio_directory(session_id: str, base_dir: Optional[Path] = None) -> Path:
@@ -674,13 +908,15 @@ async def update_speech_span_with_chat_items(
     manager: Any,
 ) -> None:
     """
-    Wait for speech playout to complete, then update span with chat_items.
+    Wait for speech playout to complete, then update span with chat_items and LLM metrics.
 
     Args:
         speech_handle: SpeechHandle instance
         span: Span to update
         manager: _LiveKitTracingManager instance
     """
+    speech_id = speech_handle.id
+
     try:
         # Wait for speech to complete (all tasks done, playout finished)
         await speech_handle.wait_for_playout()
@@ -699,8 +935,22 @@ async def update_speech_span_with_chat_items(
                 f"Updated speech span {span.span_id} with {len(chat_items)} chat items"
             )
 
-        # Remove from tracking
-        speech_id = speech_handle.id
+        # Merge pending LLM metrics if available
+        # This handles cases where metrics_collected fires before or after speech completes
+        if (
+            hasattr(manager, "_pending_llm_metrics")
+            and speech_id in manager._pending_llm_metrics
+        ):
+            llm_metrics = manager._pending_llm_metrics.pop(speech_id)
+            span.attributes.update(llm_metrics)
+            logger.debug(
+                f"Updated speech span {span.span_id} with LLM metrics: "
+                f"tokens={llm_metrics.get('llm.total_tokens')}, "
+                f"model={llm_metrics.get('llm.model')}, "
+                f"cost={llm_metrics.get('llm.cost.total')}"
+            )
+
+        # Remove from speech spans tracking
         if speech_id in manager._speech_spans:
             del manager._speech_spans[speech_id]
 
@@ -708,10 +958,15 @@ async def update_speech_span_with_chat_items(
         logger.warning(
             f"Failed to update speech span with chat_items: {e}", exc_info=True
         )
-        # Still remove from tracking to prevent memory leak
-        speech_id = speech_handle.id
+        # Still clean up tracking to prevent memory leak
         if speech_id in manager._speech_spans:
             del manager._speech_spans[speech_id]
+        # Also clean up any pending LLM metrics
+        if (
+            hasattr(manager, "_pending_llm_metrics")
+            and speech_id in manager._pending_llm_metrics
+        ):
+            del manager._pending_llm_metrics[speech_id]
 
 
 async def _update_span_with_system_prompt(
@@ -797,6 +1052,7 @@ def create_event_span(
     Returns:
         The created Span instance, or None if creation failed
     """
+
     try:
         # Get current trace (should exist from session.start())
         trace = get_current_trace()
@@ -824,6 +1080,31 @@ def create_event_span(
         # Add constants metadata
         constants_metadata = create_constants_metadata()
         attributes["metadata"] = constants_metadata
+
+        # For speech_created events, add conversation history and available tools
+        # This makes each speech_created span a complete "dataset item" with full context
+        if event_type == "speech_created" and manager:
+            # Add conversation history from LiveKit's built-in ChatContext
+            if hasattr(manager, "session") and manager.session:
+                history_dict = get_conversation_history_from_session(manager.session)
+                if history_dict:
+                    items = history_dict.get("items", [])
+                    # Bound to prevent oversized attributes
+                    if len(items) > MAX_CONVERSATION_HISTORY:
+                        items = items[-MAX_CONVERSATION_HISTORY:]
+                        history_dict = {"items": items}
+                    attributes["llm.conversation.message_count"] = len(items)
+                    try:
+                        attributes["llm.conversation.history"] = json.dumps(
+                            history_dict, default=str
+                        )
+                    except Exception:
+                        pass
+
+            # Add available tools to span (same span as LLM call)
+            if hasattr(manager, "_available_tools") and manager._available_tools:
+                tool_attrs = serialize_tools_for_attributes(manager._available_tools)
+                attributes.update(tool_attrs)
 
         # Create span name
         span_name = f"livekit.{event_type}"
@@ -946,3 +1227,247 @@ def create_event_span(
             f"Failed to create span for event {event_type}: {e}", exc_info=True
         )
         return None
+
+
+# =============================================================================
+# Tool and Message Serialization Utilities
+# (Moved from livekit_llm.py for cleaner organization)
+# =============================================================================
+
+
+def extract_available_tools(agent: Any) -> list[dict[str, Any]]:
+    """
+    Extract available tools from a LiveKit Agent.
+
+    Args:
+        agent: LiveKit Agent instance
+
+    Returns:
+        List of tool dictionaries with name, description, and args_schema
+    """
+    tools: list[dict[str, Any]] = []
+
+    if not agent:
+        return tools
+
+    # Try to get tools from agent
+    agent_tools = None
+    if hasattr(agent, "tools"):
+        agent_tools = agent.tools
+    elif hasattr(agent, "_tools"):
+        agent_tools = agent._tools
+
+    if not agent_tools:
+        return tools
+
+    for tool in agent_tools:
+        try:
+            tool_info: dict[str, Any] = {}
+
+            # Get tool name
+            if hasattr(tool, "name"):
+                tool_info["name"] = str(tool.name)
+            elif hasattr(tool, "__name__"):
+                tool_info["name"] = str(tool.__name__)
+            elif hasattr(tool, "func") and hasattr(tool.func, "__name__"):
+                tool_info["name"] = str(tool.func.__name__)
+            else:
+                tool_info["name"] = "unknown_tool"
+
+            # Get tool description
+            if hasattr(tool, "description"):
+                tool_info["description"] = str(tool.description)
+            elif hasattr(tool, "__doc__") and tool.__doc__:
+                tool_info["description"] = str(tool.__doc__).strip()
+            else:
+                tool_info["description"] = ""
+
+            # Get args schema if available
+            if hasattr(tool, "args_schema"):
+                args_schema = tool.args_schema
+                if hasattr(args_schema, "model_json_schema"):
+                    tool_info["args_schema"] = args_schema.model_json_schema()
+                elif hasattr(args_schema, "schema"):
+                    tool_info["args_schema"] = args_schema.schema()
+                elif isinstance(args_schema, dict):
+                    tool_info["args_schema"] = args_schema
+            elif hasattr(tool, "parameters"):
+                tool_info["args_schema"] = tool.parameters
+
+            tools.append(tool_info)
+
+        except Exception as e:
+            logger.debug(f"Failed to extract tool info: {e}")
+            continue
+
+    return tools
+
+
+def serialize_tools_for_attributes(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Serialize tools list into span attributes format.
+
+    Args:
+        tools: List of tool dictionaries
+
+    Returns:
+        Dictionary of span attributes for tools
+    """
+    import json
+
+    if not tools:
+        return {}
+
+    attributes: dict[str, Any] = {
+        "llm.available_tools.count": len(tools),
+        "llm.available_tools.names": [t.get("name", "unknown") for t in tools],
+        "llm.available_tools.descriptions": [t.get("description", "") for t in tools],
+    }
+
+    # Add full schemas as JSON
+    try:
+        attributes["llm.available_tools.schemas"] = json.dumps(tools, default=str)
+    except Exception as e:
+        logger.debug(f"Failed to serialize tools schemas: {e}")
+
+    return attributes
+
+
+def serialize_chat_history(messages: list[Any]) -> list[dict[str, Any]]:
+    """
+    Serialize chat messages into a list of dictionaries.
+
+    Args:
+        messages: List of chat messages (ChatMessage, dict, or similar)
+
+    Returns:
+        List of serialized message dictionaries
+    """
+    serialized: list[dict[str, Any]] = []
+
+    for msg in messages:
+        try:
+            msg_dict: dict[str, Any] = {}
+
+            # Handle dict messages
+            if isinstance(msg, dict):
+                msg_dict = {
+                    "role": msg.get("role", "unknown"),
+                }
+
+                # Extract content - handle both str and list with dict parts
+                # Mirroring behavior in _serialize_chat_items to handle dict parts correctly
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    msg_dict["content"] = content
+                elif isinstance(content, list):
+                    # Handle list of content parts (same logic as _serialize_chat_items)
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, str):
+                            text_parts.append(part)
+                        elif hasattr(part, "text"):
+                            text_parts.append(str(part.text))
+                        elif isinstance(part, dict) and "text" in part:
+                            text_parts.append(str(part["text"]))
+                    msg_dict["content"] = "\n".join(text_parts) if text_parts else ""
+                else:
+                    msg_dict["content"] = str(content) if content else ""
+
+                if msg.get("name"):
+                    msg_dict["name"] = msg["name"]
+                serialized.append(msg_dict)
+                continue
+
+            # Handle ChatMessage or similar objects
+            if hasattr(msg, "role"):
+                role = msg.role
+                # Handle enum roles
+                if hasattr(role, "value"):
+                    msg_dict["role"] = str(role.value)
+                else:
+                    msg_dict["role"] = str(role)
+
+            # Extract content
+            if hasattr(msg, "text_content"):
+                msg_dict["content"] = str(msg.text_content)
+            elif hasattr(msg, "content"):
+                content = msg.content
+                if isinstance(content, str):
+                    msg_dict["content"] = content
+                elif isinstance(content, list):
+                    # Handle list of content parts
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, str):
+                            text_parts.append(part)
+                        elif hasattr(part, "text"):
+                            text_parts.append(str(part.text))
+                        elif isinstance(part, dict) and "text" in part:
+                            text_parts.append(str(part["text"]))
+                    msg_dict["content"] = "\n".join(text_parts)
+                else:
+                    msg_dict["content"] = str(content)
+
+            # Extract name if present
+            if hasattr(msg, "name") and msg.name:
+                msg_dict["name"] = str(msg.name)
+
+            if msg_dict:
+                serialized.append(msg_dict)
+
+        except Exception as e:
+            logger.debug(f"Failed to serialize message: {e}")
+            continue
+
+    return serialized
+
+
+def serialize_function_calls(function_calls: list[Any]) -> list[dict[str, Any]]:
+    """
+    Serialize function calls into a list of dictionaries.
+
+    Args:
+        function_calls: List of function call objects
+
+    Returns:
+        List of serialized function call dictionaries
+    """
+    import json
+
+    serialized: list[dict[str, Any]] = []
+
+    for call in function_calls:
+        try:
+            call_dict: dict[str, Any] = {}
+
+            if isinstance(call, dict):
+                call_dict = {
+                    "name": call.get("name", "unknown"),
+                    "arguments": call.get("arguments", ""),
+                }
+                if call.get("call_id"):
+                    call_dict["call_id"] = call["call_id"]
+                serialized.append(call_dict)
+                continue
+
+            # Handle FunctionCall objects
+            if hasattr(call, "name"):
+                call_dict["name"] = str(call.name)
+            if hasattr(call, "arguments"):
+                args = call.arguments
+                if isinstance(args, str):
+                    call_dict["arguments"] = args
+                else:
+                    call_dict["arguments"] = json.dumps(args, default=str)
+            if hasattr(call, "call_id"):
+                call_dict["call_id"] = str(call.call_id)
+
+            if call_dict:
+                serialized.append(call_dict)
+
+        except Exception as e:
+            logger.debug(f"Failed to serialize function call: {e}")
+            continue
+
+    return serialized
