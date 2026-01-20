@@ -145,46 +145,6 @@ These components are designed to work together - session tracing creates the tra
 
 ---
 
-## Architecture
-
-### Data Flow
-
-```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         LiveKit Agent Session                           │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
-│  │ User Audio   │───▶│ STT Wrapper  │───▶│ stt.stream   │ Per-utterance│
-│  │ (microphone) │    │ (Deepgram)   │    │    spans     │ audio+text   │
-│  └──────────────┘    └──────────────┘    └──────────────┘              │
-│         │                                                               │
-│         │            ┌──────────────┐    ┌──────────────┐              │
-│         │            │   LLM Call   │───▶│ generation   │ Chat history │
-│         │            │  (OpenAI)    │    │    spans     │ Tools, Tokens│
-│         │            └──────────────┘    └──────────────┘              │
-│         │                   │                                           │
-│         │            ┌──────────────┐    ┌──────────────┐              │
-│         │            │ TTS Wrapper  │───▶│ tts.stream   │ Per-utterance│
-│         │            │ (Cartesia)   │    │    spans     │ audio+text   │
-│         │            └──────────────┘    └──────────────┘              │
-│         │                   │                                           │
-│         ▼                   ▼                                           │
-│  ┌──────────────────────────────────────┐    ┌────────────────────┐   │
-│  │         LiveKit RecorderIO           │───▶│stt.full_conversation│   │
-│  │  (Stereo OGG: left=user, right=agent)│    │   (at session end) │   │
-│  └──────────────────────────────────────┘    └────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                         ┌──────────────────┐
-                         │  Noveum Platform │
-                         │  - Traces        │
-                         │  - Spans         │
-                         │  - Audio Files   │
-                         └──────────────────┘
-```
 
 ### What Gets Captured
 
@@ -195,7 +155,7 @@ These components are designed to work together - session tracing creates the tra
 | Session Events | `livekit.*` | All AgentSession and RealtimeSession events |
 | LLM Generation | `livekit.realtime.generation_created` | Chat history, available tools, function calls |
 | LLM Metrics | (merged into spans) | Token usage, cost, latency, model info |
-| Full Audio | `stt.full_conversation` | Complete conversation (OGG stereo), uploaded at session end |
+| Full Audio | `livekit.full_conversation` | Complete conversation (OGG stereo), uploaded at session end |
 
 ### Span Attributes
 
@@ -222,7 +182,7 @@ These components are designed to work together - session tracing creates the tra
 - `llm.function_calls`: Function calls made (when merged)
 - `llm.function_outputs`: Function outputs (when merged)
 
-**Full Conversation Audio** (`stt.full_conversation`):
+**Full Conversation Audio** (`livekit.full_conversation`):
 - `stt.audio_uuid`: UUID for audio retrieval
 - `stt.audio_format`: "ogg"
 - `stt.audio_channels`: "stereo"
@@ -367,7 +327,7 @@ python your_agent.py --test console --record
    - Left channel: User audio (microphone)
    - Right channel: Agent audio (TTS output)
 3. **At session close**, the SDK:
-   - Creates an `stt.full_conversation` span
+   - Creates an `livekit.full_conversation` span
    - Uploads the OGG file to Noveum
 
 ### Recording Storage
@@ -381,7 +341,7 @@ The full conversation creates a span like:
 
 ```json
 {
-  "name": "stt.full_conversation",
+  "name": "livekit.full_conversation",
   "attributes": {
     "stt.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
     "stt.audio_format": "ogg",
@@ -912,7 +872,7 @@ async def entrypoint(ctx: JobContext):
 
 ### Issue: Full Conversation Audio Not Uploaded
 
-**Problem**: No `stt.full_conversation` span appears in traces.
+**Problem**: No `livekit.full_conversation` span appears in traces.
 
 **Solutions**:
 

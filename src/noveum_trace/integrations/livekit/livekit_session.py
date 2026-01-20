@@ -960,7 +960,7 @@ class _LiveKitTracingManager:
             # Create span for the full conversation audio
             # UI expects this name for full-conversation playback
             span = trace.create_span(
-                name="livekit.full_conversions",
+                name="livekit.full_conversation",
                 attributes=attributes,
             )
 
