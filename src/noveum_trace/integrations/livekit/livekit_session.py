@@ -11,8 +11,8 @@ import asyncio
 import functools
 import json
 import logging
-from pathlib import Path
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from noveum_trace.core.context import set_current_span, set_current_trace

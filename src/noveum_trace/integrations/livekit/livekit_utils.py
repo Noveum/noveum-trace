@@ -7,9 +7,9 @@ and context extraction for LiveKit integration with noveum-trace.
 
 from __future__ import annotations
 
-import json
 import asyncio
 import inspect
+import json
 import logging
 import time
 from dataclasses import asdict, is_dataclass
