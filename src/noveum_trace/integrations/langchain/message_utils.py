@@ -75,7 +75,8 @@ def is_langchain_message(obj: Any) -> bool:
         # This works for all message types: HumanMessage, AIMessage, etc.
         mro = type(obj).__mro__
         return any(
-            cls.__name__ == "BaseMessage" and cls.__module__.startswith("langchain")
+            cls.__name__ == "BaseMessage" and cls.__module__.startswith(
+                "langchain")
             for cls in mro
         )
     except Exception:
@@ -106,7 +107,8 @@ def parse_messages_list(messages: list[Any]) -> dict[str, list[Any]]:
     for msg in messages:
         try:
             # Get message type
-            msg_type = msg.type if hasattr(msg, "type") else type(msg).__name__.lower()
+            msg_type = msg.type if hasattr(
+                msg, "type") else type(msg).__name__.lower()
 
             # Handle regular messages (human, system, chat, remove)
             if msg_type in ["human", "system", "chat", "remove"]:
@@ -283,8 +285,10 @@ def download_image_from_url(url: str) -> Optional[tuple[bytes, str]]:
         # Detect image format using PIL
         try:
             img = Image.open(BytesIO(image_bytes))
-            format_map = {"JPEG": "jpeg", "PNG": "png", "GIF": "gif", "WEBP": "webp"}
-            img_format = format_map.get(img.format, "jpeg")
+            format_map = {"JPEG": "jpeg", "PNG": "png",
+                          "GIF": "gif", "WEBP": "webp"}
+            # img.format can be None, so handle that case
+            img_format = format_map.get(img.format or "JPEG", "jpeg")
         except Exception:
             # If PIL can't detect, try from Content-Type header
             content_type = response.headers.get("content-type", "").lower()
@@ -405,7 +409,8 @@ def extract_and_process_images(
                                     image_uuids.append(image_uuid)
 
                                     # Replace base64 with UUID reference
-                                    image_reference = format_image_reference(image_uuid)
+                                    image_reference = format_image_reference(
+                                        image_uuid)
                                     if isinstance(image_url_data, dict):
                                         image_url_data["url"] = image_reference
                                     elif isinstance(image_url_data, str):
@@ -426,7 +431,8 @@ def extract_and_process_images(
                             elif url.startswith(("http://", "https://")):
                                 try:
                                     # Download image from URL
-                                    download_result = download_image_from_url(url)
+                                    download_result = download_image_from_url(
+                                        url)
                                     if download_result is None:
                                         logger.debug(
                                             f"Skipping image URL (download failed): {url}"
@@ -457,7 +463,8 @@ def extract_and_process_images(
                                     image_uuids.append(image_uuid)
 
                                     # Replace URL with UUID reference
-                                    image_reference = format_image_reference(image_uuid)
+                                    image_reference = format_image_reference(
+                                        image_uuid)
                                     if isinstance(image_url_data, dict):
                                         image_url_data["url"] = image_reference
                                     elif isinstance(image_url_data, str):
@@ -475,7 +482,8 @@ def extract_and_process_images(
                                     # Keep original URL if upload fails
 
     except Exception as e:
-        logger.error(f"Error processing images from messages: {e}", exc_info=True)
+        logger.error(
+            f"Error processing images from messages: {e}", exc_info=True)
         # Return original messages if processing fails
         return ([], message_dicts)
 
@@ -555,7 +563,8 @@ def process_images_from_prompts(
                         # Find matching processed message dict and convert back
                         if processed_message_dicts:
                             processed_prompts.append(
-                                json_module.dumps(processed_message_dicts.pop(0))
+                                json_module.dumps(
+                                    processed_message_dicts.pop(0))
                             )
                         else:
                             processed_prompts.append(prompt)
@@ -567,7 +576,8 @@ def process_images_from_prompts(
                 processed_prompts.append(prompt)
 
     except Exception as e:
-        logger.warning(f"Error processing images from prompts: {e}", exc_info=True)
+        logger.warning(
+            f"Error processing images from prompts: {e}", exc_info=True)
         return ([], prompts)
 
     return (image_uuids, processed_prompts)
