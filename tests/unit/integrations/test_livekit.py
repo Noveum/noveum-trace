@@ -84,7 +84,6 @@ class TestLiveKitSTTWrapper:
             stt=mock_stt_provider,
             session_id="session_123",
             job_context={"job_id": "job_456"},
-            audio_base_dir=tmp_path,
         )
 
         assert wrapper._base_stt == mock_stt_provider
@@ -105,16 +104,11 @@ class TestLiveKitSTTWrapper:
         # Verify attributes are initialized
         assert wrapper._base_stt == mock_stt_provider
         assert wrapper._session_id == "session_123"
-        # Audio directory is always created regardless of LiveKit availability
-        assert wrapper._audio_dir is not None
-        assert wrapper._audio_dir.name == "session_123"
 
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     def test_properties(self, mock_stt_provider, tmp_path):
         """Test STT wrapper property access."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         assert wrapper.capabilities == mock_stt_provider.capabilities
         assert wrapper.model == "nova-2"
@@ -128,9 +122,7 @@ class TestLiveKitSTTWrapper:
         minimal_stt.capabilities = Mock()
         # Missing model, provider, label - getattr will raise AttributeError
 
-        wrapper = LiveKitSTTWrapper(
-            stt=minimal_stt, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=minimal_stt, session_id="session_123")
 
         # getattr with default will return "unknown" when attribute doesn't exist
         assert wrapper.model == "unknown"
@@ -157,9 +149,7 @@ class TestLiveKitSTTWrapper:
         tmp_path,
     ):
         """Test recognize() method with active trace."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         # Mock speech event
         mock_event = Mock()
@@ -209,9 +199,7 @@ class TestLiveKitSTTWrapper:
         self, mock_get_trace, mock_stt_provider, tmp_path
     ):
         """Test recognize() method without active trace."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_event = Mock()
         mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
@@ -227,9 +215,7 @@ class TestLiveKitSTTWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     def test_stream(self, mock_stt_provider, tmp_path):
         """Test stream() method creates wrapped stream."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_base_stream = Mock()
         mock_stt_provider.stream.return_value = mock_base_stream
@@ -246,9 +232,7 @@ class TestLiveKitSTTWrapper:
     @pytest.mark.asyncio
     async def test_aclose(self, mock_stt_provider, tmp_path):
         """Test aclose() method."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_stt_provider.aclose = AsyncMock()
 
@@ -265,9 +249,7 @@ class TestLiveKitSTTWrapper:
         minimal_stt.capabilities = Mock()
         # No aclose method
 
-        wrapper = LiveKitSTTWrapper(
-            stt=minimal_stt, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=minimal_stt, session_id="session_123")
 
         # Should not raise error
         await wrapper.aclose()
@@ -275,9 +257,7 @@ class TestLiveKitSTTWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     def test_getattr_delegation(self, mock_stt_provider, tmp_path):
         """Test __getattr__ delegates to base STT."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_stt_provider.custom_method = Mock(return_value="custom_value")
 
@@ -308,7 +288,6 @@ class TestWrappedSpeechStream:
             provider="deepgram",
             model="nova-2",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         mock_frame = Mock()
@@ -345,7 +324,6 @@ class TestWrappedSpeechStream:
                 provider="deepgram",
                 model="nova-2",
                 counter_ref=[0],
-                audio_dir=tmp_path,
             )
 
             result = await stream.__anext__()
@@ -371,7 +349,6 @@ class TestWrappedSpeechStream:
             provider="deepgram",
             model="nova-2",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         async with stream:
@@ -396,7 +373,6 @@ class TestWrappedSpeechStream:
             provider="deepgram",
             model="nova-2",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         await stream.aclose()
@@ -417,7 +393,6 @@ class TestLiveKitTTSWrapper:
             tts=mock_tts_provider,
             session_id="session_123",
             job_context={"job_id": "job_456"},
-            audio_base_dir=tmp_path,
         )
 
         assert wrapper._base_tts == mock_tts_provider
@@ -428,9 +403,7 @@ class TestLiveKitTTSWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     def test_properties(self, mock_tts_provider, tmp_path):
         """Test TTS wrapper property access."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         assert wrapper.capabilities == mock_tts_provider.capabilities
         assert wrapper.model == "sonic"
@@ -442,9 +415,7 @@ class TestLiveKitTTSWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     def test_synthesize(self, mock_tts_provider, tmp_path):
         """Test synthesize() method creates wrapped chunked stream."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         mock_base_stream = Mock()
         mock_tts_provider.synthesize.return_value = mock_base_stream
@@ -460,9 +431,7 @@ class TestLiveKitTTSWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     def test_stream(self, mock_tts_provider, tmp_path):
         """Test stream() method creates wrapped synthesize stream."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         mock_base_stream = Mock()
         mock_tts_provider.stream.return_value = mock_base_stream
@@ -477,9 +446,7 @@ class TestLiveKitTTSWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     def test_prewarm(self, mock_tts_provider, tmp_path):
         """Test prewarm() method."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         mock_tts_provider.prewarm = Mock()
 
@@ -491,9 +458,7 @@ class TestLiveKitTTSWrapper:
     @pytest.mark.asyncio
     async def test_aclose(self, mock_tts_provider, tmp_path):
         """Test aclose() method."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         mock_tts_provider.aclose = AsyncMock()
 
@@ -504,9 +469,7 @@ class TestLiveKitTTSWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
     def test_getattr_delegation(self, mock_tts_provider, tmp_path):
         """Test __getattr__ delegates to base TTS."""
-        wrapper = LiveKitTTSWrapper(
-            tts=mock_tts_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitTTSWrapper(tts=mock_tts_provider, session_id="session_123")
 
         mock_tts_provider.custom_method = Mock(return_value="custom_value")
 
@@ -539,7 +502,6 @@ class TestWrappedSynthesizeStream:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream.push_text("Hello ")
@@ -586,7 +548,6 @@ class TestWrappedSynthesizeStream:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._input_text = "Hello world"
@@ -632,7 +593,6 @@ class TestWrappedSynthesizeStream:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         result = await stream.__anext__()
@@ -682,7 +642,6 @@ class TestWrappedChunkedStream:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         mock_get_trace.return_value = mock_trace
@@ -721,7 +680,6 @@ class TestWrappedChunkedStream:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._buffered_frames = [Mock(), Mock()]
@@ -754,9 +712,7 @@ class TestLiveKitSTTWrapperErrorHandling:
         tmp_path,
     ):
         """Test _recognize_impl when span creation fails."""
-        wrapper = LiveKitSTTWrapper(
-            stt=mock_stt_provider, session_id="session_123", audio_base_dir=tmp_path
-        )
+        wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_event = Mock()
         mock_alternative = Mock()
@@ -816,7 +772,6 @@ class TestWrappedSpeechStreamErrorHandling:
                 provider="deepgram",
                 model="nova-2",
                 counter_ref=[0],
-                audio_dir=tmp_path,
             )
 
             stream._buffered_frames = [Mock()]
@@ -851,7 +806,6 @@ class TestWrappedSpeechStreamErrorHandling:
             provider="deepgram",
             model="nova-2",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         await stream.__aexit__(None, None, None)
@@ -874,7 +828,6 @@ class TestWrappedSpeechStreamErrorHandling:
             provider="deepgram",
             model="nova-2",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         await stream.flush()
@@ -913,7 +866,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._input_text = "Hello"
@@ -958,7 +910,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._input_text = ""  # Empty
@@ -1002,7 +953,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._input_text = ""  # Empty
@@ -1039,7 +989,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         await stream.__aexit__(None, None, None)
@@ -1064,7 +1013,6 @@ class TestWrappedSynthesizeStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         await stream.flush()
@@ -1097,7 +1045,6 @@ class TestWrappedChunkedStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._buffered_frames = [Mock()]
@@ -1133,7 +1080,6 @@ class TestWrappedChunkedStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         result = await stream.__anext__()
@@ -1159,7 +1105,6 @@ class TestWrappedChunkedStreamErrorHandling:
             provider="cartesia",
             model="sonic",
             counter_ref=[0],
-            audio_dir=tmp_path,
         )
 
         stream._span_created = True
