@@ -11,6 +11,7 @@ import asyncio
 import functools
 import json
 import logging
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -75,6 +76,8 @@ class _LiveKitTracingManager:
         session: Any,
         enabled: bool = True,
         trace_name_prefix: Optional[str] = None,
+        record: bool = True,
+        cleanup_audio_files: bool = True,
     ):
         """
         Initialize tracing manager.
@@ -83,11 +86,15 @@ class _LiveKitTracingManager:
             session: AgentSession instance
             enabled: Whether tracing is enabled
             trace_name_prefix: Optional prefix for trace names
+            record: Whether to force recording (sets record=True in session.start)
+            cleanup_audio_files: Whether to delete local audio files after upload
         """
         # Always initialize fields so manager is safe to use when LiveKit is unavailable
         self.session = session
         self.enabled = enabled and LIVEKIT_AVAILABLE
         self.trace_name_prefix = trace_name_prefix or "livekit"
+        self._force_record = record
+        self._cleanup_audio_files = cleanup_audio_files
         self._original_start: Optional[Callable[..., Any]] = None
         self._trace: Optional[Trace] = None
         # List of (event_type, handler)
@@ -135,6 +142,10 @@ class _LiveKitTracingManager:
                 assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
 
+            # Force record=True if configured
+            if self._force_record:
+                kwargs["record"] = True
+
             # Try to create trace first (separate from calling original start)
             try:
                 # Get client
@@ -177,7 +188,8 @@ class _LiveKitTracingManager:
                 # Extract available tools from agent
                 self._available_tools = extract_available_tools(agent)
                 if self._available_tools:
-                    tool_attrs = serialize_tools_for_attributes(self._available_tools)
+                    tool_attrs = serialize_tools_for_attributes(
+                        self._available_tools)
                     attributes.update(tool_attrs)
                     logger.debug(
                         f"Extracted {len(self._available_tools)} tools from agent"
@@ -191,7 +203,8 @@ class _LiveKitTracingManager:
                     if job_ctx:
                         attributes["livekit.job.id"] = job_ctx.job.id
                         attributes["livekit.room.name"] = (
-                            job_ctx.room.name if hasattr(job_ctx, "room") else None
+                            job_ctx.room.name if hasattr(
+                                job_ctx, "room") else None
                         )
                 except Exception as e:
                     logger.debug(
@@ -299,7 +312,8 @@ class _LiveKitTracingManager:
                         self._register_realtime_handlers(rt_session)
                         logger.debug("RealtimeSession handlers registered")
         except Exception as e:
-            logger.debug(f"RealtimeSession not available or failed to setup: {e}")
+            logger.debug(
+                f"RealtimeSession not available or failed to setup: {e}")
 
     def _try_setup_realtime_handlers_later(self) -> None:
         """Try to setup RealtimeSession handlers later (called from event handlers)."""
@@ -445,7 +459,8 @@ class _LiveKitTracingManager:
                 else:
                     # No pending span, create a minimal event span
                     # (fallback, should rarely happen)
-                    create_event_span("function_tools_executed", ev, manager=self)
+                    create_event_span(
+                        "function_tools_executed", ev, manager=self)
 
             except Exception as e:
                 logger.warning(
@@ -486,7 +501,8 @@ class _LiveKitTracingManager:
             if ev and hasattr(ev, "function_calls") and ev.function_calls:
                 serialized_calls = serialize_function_calls(ev.function_calls)
                 if serialized_calls:
-                    span.attributes["llm.function_calls.count"] = len(serialized_calls)
+                    span.attributes["llm.function_calls.count"] = len(
+                        serialized_calls)
                     try:
                         span.attributes["llm.function_calls"] = json.dumps(
                             serialized_calls, default=str
@@ -534,7 +550,8 @@ class _LiveKitTracingManager:
             logger.debug("Finalized generation span with function data")
 
         except Exception as e:
-            logger.warning(f"Failed to finalize generation span: {e}", exc_info=True)
+            logger.warning(
+                f"Failed to finalize generation span: {e}", exc_info=True)
 
     def _on_metrics_collected(self, ev: MetricsCollectedEvent) -> None:
         """Handle metrics_collected event and extract LLM metrics."""
@@ -548,8 +565,10 @@ class _LiveKitTracingManager:
                 speech_id, llm_metrics = llm_payload
                 if not llm_metrics:
                     return
-                merged_metrics = self._store_llm_metrics(speech_id, llm_metrics)
-                self._update_speech_span_with_metrics(speech_id, merged_metrics)
+                merged_metrics = self._store_llm_metrics(
+                    speech_id, llm_metrics)
+                self._update_speech_span_with_metrics(
+                    speech_id, merged_metrics)
 
             except Exception as e:
                 logger.warning(
@@ -633,9 +652,11 @@ class _LiveKitTracingManager:
                     output_tokens=llm_metrics.get("llm.output_tokens", 0),
                 )
                 llm_metrics["llm.cost.input"] = cost_info.get("input_cost", 0)
-                llm_metrics["llm.cost.output"] = cost_info.get("output_cost", 0)
+                llm_metrics["llm.cost.output"] = cost_info.get(
+                    "output_cost", 0)
                 llm_metrics["llm.cost.total"] = cost_info.get("total_cost", 0)
-                llm_metrics["llm.cost.currency"] = cost_info.get("currency", "USD")
+                llm_metrics["llm.cost.currency"] = cost_info.get(
+                    "currency", "USD")
             except Exception as cost_err:
                 logger.debug(f"Could not calculate LLM cost: {cost_err}")
 
@@ -705,9 +726,11 @@ class _LiveKitTracingManager:
         span = self._speech_spans[speech_id]
         try:
             span.attributes.update(llm_metrics)
-            logger.debug(f"Updated speech span {span.span_id} with LLM metrics")
+            logger.debug(
+                f"Updated speech span {span.span_id} with LLM metrics")
         except Exception as update_err:
-            logger.debug(f"Could not update speech span with LLM metrics: {update_err}")
+            logger.debug(
+                f"Could not update speech span with LLM metrics: {update_err}")
 
     def _on_speech_created(self, ev: SpeechCreatedEvent) -> None:
         """Handle speech_created event."""
@@ -817,14 +840,16 @@ class _LiveKitTracingManager:
                         else:
                             # LiveKit not available, use default status
                             if hasattr(ev, "error") and ev.error:
-                                self._trace.set_status(SpanStatus.ERROR, str(ev.error))
+                                self._trace.set_status(
+                                    SpanStatus.ERROR, str(ev.error))
                             else:
                                 self._trace.set_status(SpanStatus.OK)
 
                         client.finish_trace(self._trace)
                         set_current_trace(None)
                         self._trace = None
-                        logger.info("Trace finished successfully in close handler")
+                        logger.info(
+                            "Trace finished successfully in close handler")
                     except Exception as e:
                         logger.warning(
                             f"Failed to end trace on close: {e}", exc_info=True
@@ -846,7 +871,8 @@ class _LiveKitTracingManager:
             )
         except RuntimeError:
             # No running event loop - try to run synchronously
-            logger.debug("No running event loop, running close handler synchronously")
+            logger.debug(
+                "No running event loop, running close handler synchronously")
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -907,7 +933,8 @@ class _LiveKitTracingManager:
                         f"Successfully uploaded conversation audio: {audio_path}"
                     )
                 else:
-                    logger.warning(f"Failed to upload conversation audio: {audio_path}")
+                    logger.warning(
+                        f"Failed to upload conversation audio: {audio_path}")
             except Exception as e:
                 span.set_status(SpanStatus.ERROR, str(e))
                 logger.warning(
@@ -926,6 +953,22 @@ class _LiveKitTracingManager:
             logger.warning(
                 f"Failed to upload full conversation audio: {e}", exc_info=True
             )
+        finally:
+            # Cleanup local audio files if configured
+            if self._cleanup_audio_files and audio_path and audio_path.exists():
+                try:
+                    logger.debug(f"Cleaning up local audio file: {audio_path}")
+                    audio_path.unlink(missing_ok=True)
+                    # Remove parent directory (session directory)
+                    if audio_path.parent.exists():
+                        shutil.rmtree(audio_path.parent, ignore_errors=True)
+                        logger.debug(
+                            f"Cleaned up session directory: {audio_path.parent}"
+                        )
+                except Exception as cleanup_error:
+                    logger.debug(
+                        f"Failed to cleanup audio files: {cleanup_error}", exc_info=True
+                    )
 
     def _get_active_trace_for_upload(self) -> Optional[Trace]:
         if not self._trace:
@@ -999,7 +1042,8 @@ class _LiveKitTracingManager:
         self, ev: InputTranscriptionCompleted
     ) -> None:
         """Handle input_audio_transcription_completed event."""
-        self._create_async_handler("realtime.input_audio_transcription_completed")(ev)
+        self._create_async_handler(
+            "realtime.input_audio_transcription_completed")(ev)
 
     def _on_generation_created(self, ev: GenerationCreatedEvent) -> None:
         """Handle generation_created event with tools and history."""
@@ -1023,12 +1067,14 @@ class _LiveKitTracingManager:
                     create_constants_metadata,
                 )
 
-                attributes = _serialize_event_data(ev, "realtime.generation_created")
+                attributes = _serialize_event_data(
+                    ev, "realtime.generation_created")
                 attributes["event.type"] = "realtime.generation_created"
 
                 # Add available tools
                 if self._available_tools:
-                    tool_attrs = serialize_tools_for_attributes(self._available_tools)
+                    tool_attrs = serialize_tools_for_attributes(
+                        self._available_tools)
                     attributes.update(tool_attrs)
 
                 # Try to get system prompt synchronously if agent_activity is available
@@ -1041,7 +1087,8 @@ class _LiveKitTracingManager:
                             if hasattr(agent, "instructions") and agent.instructions:
                                 system_prompt = agent.instructions
                             elif (
-                                hasattr(agent, "_instructions") and agent._instructions
+                                hasattr(
+                                    agent, "_instructions") and agent._instructions
                             ):
                                 system_prompt = agent._instructions
                 except Exception:
@@ -1051,7 +1098,8 @@ class _LiveKitTracingManager:
                     attributes["llm.system_prompt"] = system_prompt
 
                 # Add conversation history from LiveKit's built-in ChatContext
-                history_dict = get_conversation_history_from_session(self.session)
+                history_dict = get_conversation_history_from_session(
+                    self.session)
                 if history_dict:
                     items = history_dict.get("items", [])
                     # Bound to prevent oversized attributes
@@ -1092,7 +1140,8 @@ class _LiveKitTracingManager:
                         _update_span_with_system_prompt,
                     )
 
-                    asyncio.create_task(_update_span_with_system_prompt(span, self))
+                    asyncio.create_task(
+                        _update_span_with_system_prompt(span, self))
 
             except Exception as e:
                 logger.warning(
@@ -1151,10 +1200,28 @@ def setup_livekit_tracing(
     *,
     enabled: bool = True,
     trace_name_prefix: Optional[str] = None,
+    record: bool = True,
+    cleanup_audio_files: bool = True,
 ) -> _LiveKitTracingManager:
-    """Setup tracing for a LiveKit AgentSession."""
+    """Setup tracing for a LiveKit AgentSession.
+
+    Args:
+        session: AgentSession instance to trace
+        enabled: Whether tracing is enabled. Default True.
+        trace_name_prefix: Optional prefix for trace names. Default "livekit".
+        record: When True automatically enables recording via RecorderIO.
+        cleanup_audio_files: When True, removes both the audio file and its parent
+                session directory after upload. Default True.
+
+    Returns:
+        _LiveKitTracingManager instance managing the tracing
+    """
     manager = _LiveKitTracingManager(
-        session, enabled=enabled, trace_name_prefix=trace_name_prefix
+        session,
+        enabled=enabled,
+        trace_name_prefix=trace_name_prefix,
+        record=record,
+        cleanup_audio_files=cleanup_audio_files,
     )
 
     if not manager.enabled:
