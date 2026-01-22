@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from pathlib import Path
 from typing import Any, Optional, Union
 
 from noveum_trace.core.context import get_current_trace
@@ -25,7 +24,6 @@ from noveum_trace.integrations.livekit.livekit_constants import (
 from noveum_trace.integrations.livekit.livekit_utils import (
     calculate_audio_duration_ms,
     create_span_attributes,
-    ensure_audio_directory,
     upload_audio_frames,
 )
 
@@ -79,7 +77,6 @@ class LiveKitTTSWrapper:
         tts: Any,  # noqa: F811 - parameter shadows import
         session_id: str,
         job_context: Optional[dict[str, Any]] = None,
-        audio_base_dir: Optional[Path] = None,
     ):
         """
         Initialize TTS wrapper.
@@ -88,16 +85,12 @@ class LiveKitTTSWrapper:
             tts: Base LiveKit TTS provider instance
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
-            audio_base_dir: Base directory for audio files (defaults to 'audio_files')
         """
         # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
         self._base_tts = tts
         self._session_id = session_id
         self._job_context = job_context or {}
         self._counter_ref = [0]  # Mutable reference for sharing with streams
-
-        # Always create audio directory (doesn't require LiveKit)
-        self._audio_dir = ensure_audio_directory(session_id, audio_base_dir)
 
         if not LIVEKIT_AVAILABLE:
             logger.error(
@@ -177,7 +170,6 @@ class LiveKitTTSWrapper:
             provider=self.provider,
             model=self.model,
             counter_ref=self._counter_ref,
-            audio_dir=self._audio_dir,
         )
 
     def stream(self, **kwargs: Any) -> _WrappedSynthesizeStream:
@@ -198,7 +190,6 @@ class LiveKitTTSWrapper:
             provider=self.provider,
             model=self.model,
             counter_ref=self._counter_ref,
-            audio_dir=self._audio_dir,
         )
 
     def prewarm(self) -> None:
@@ -227,7 +218,6 @@ class _WrappedSynthesizeStream:
         provider: str,
         model: str,
         counter_ref: list[int],
-        audio_dir: Path,
     ):
         self._base_stream = base_stream
         self._session_id = session_id
@@ -235,7 +225,6 @@ class _WrappedSynthesizeStream:
         self._provider = provider
         self._model = model
         self._counter_ref = counter_ref
-        self._audio_dir = audio_dir
 
         # State management
         self._buffered_frames: list[Any] = []
@@ -450,7 +439,6 @@ class _WrappedChunkedStream:
         provider: str,
         model: str,
         counter_ref: list[int],
-        audio_dir: Path,
     ):
         self._base_stream = base_stream
         self._input_text = input_text
@@ -459,7 +447,6 @@ class _WrappedChunkedStream:
         self._provider = provider
         self._model = model
         self._counter_ref = counter_ref
-        self._audio_dir = audio_dir
 
         # State management
         self._buffered_frames: list[Any] = []
