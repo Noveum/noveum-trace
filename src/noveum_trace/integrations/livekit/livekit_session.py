@@ -11,6 +11,7 @@ import asyncio
 import functools
 import json
 import logging
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -75,6 +76,8 @@ class _LiveKitTracingManager:
         session: Any,
         enabled: bool = True,
         trace_name_prefix: Optional[str] = None,
+        record: bool = True,
+        cleanup_audio_files: bool = True,
     ):
         """
         Initialize tracing manager.
@@ -83,11 +86,15 @@ class _LiveKitTracingManager:
             session: AgentSession instance
             enabled: Whether tracing is enabled
             trace_name_prefix: Optional prefix for trace names
+            record: Whether to force recording (sets record=True in session.start)
+            cleanup_audio_files: Whether to delete local audio files after upload
         """
         # Always initialize fields so manager is safe to use when LiveKit is unavailable
         self.session = session
         self.enabled = enabled and LIVEKIT_AVAILABLE
         self.trace_name_prefix = trace_name_prefix or "livekit"
+        self._force_record = record
+        self._cleanup_audio_files = cleanup_audio_files
         self._original_start: Optional[Callable[..., Any]] = None
         self._trace: Optional[Trace] = None
         # List of (event_type, handler)
@@ -134,6 +141,10 @@ class _LiveKitTracingManager:
             if not self.enabled:
                 assert self._original_start is not None
                 return await self._original_start(agent, **kwargs)
+
+            # Force record=True if configured
+            if self._force_record:
+                kwargs["record"] = True
 
             # Try to create trace first (separate from calling original start)
             try:
@@ -926,6 +937,22 @@ class _LiveKitTracingManager:
             logger.warning(
                 f"Failed to upload full conversation audio: {e}", exc_info=True
             )
+        finally:
+            # Cleanup local audio files if configured
+            if self._cleanup_audio_files and audio_path and audio_path.exists():
+                try:
+                    logger.debug(f"Cleaning up local audio file: {audio_path}")
+                    audio_path.unlink(missing_ok=True)
+                    # Remove parent directory (session directory)
+                    if audio_path.parent.exists():
+                        shutil.rmtree(audio_path.parent, ignore_errors=True)
+                        logger.debug(
+                            f"Cleaned up session directory: {audio_path.parent}"
+                        )
+                except Exception as cleanup_error:
+                    logger.debug(
+                        f"Failed to cleanup audio files: {cleanup_error}", exc_info=True
+                    )
 
     def _get_active_trace_for_upload(self) -> Optional[Trace]:
         if not self._trace:
@@ -1151,10 +1178,28 @@ def setup_livekit_tracing(
     *,
     enabled: bool = True,
     trace_name_prefix: Optional[str] = None,
+    record: bool = True,
+    cleanup_audio_files: bool = True,
 ) -> _LiveKitTracingManager:
-    """Setup tracing for a LiveKit AgentSession."""
+    """Setup tracing for a LiveKit AgentSession.
+
+    Args:
+        session: AgentSession instance to trace
+        enabled: Whether tracing is enabled. Default True.
+        trace_name_prefix: Optional prefix for trace names. Default "livekit".
+        record: When True automatically enables recording via RecorderIO.
+        cleanup_audio_files: When True, removes both the audio file and its parent
+                session directory after upload. Default True.
+
+    Returns:
+        _LiveKitTracingManager instance managing the tracing
+    """
     manager = _LiveKitTracingManager(
-        session, enabled=enabled, trace_name_prefix=trace_name_prefix
+        session,
+        enabled=enabled,
+        trace_name_prefix=trace_name_prefix,
+        record=record,
+        cleanup_audio_files=cleanup_audio_files,
     )
 
     if not manager.enabled:

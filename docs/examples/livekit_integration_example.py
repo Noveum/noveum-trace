@@ -20,9 +20,9 @@ Two modes:
 - --test: Actually runs with LiveKit voice agent
 
 Recording (for full conversation audio):
-- Add record=True to session.start() in code
-- For console mode, add --record flag: python livekit_integration_example.py --test console --record
+- Recording is automatically enabled via setup_livekit_tracing (record=True by default)
 - Audio is saved as stereo OGG (left=user, right=agent) and uploaded to Noveum
+- Local files are automatically cleaned up after upload (cleanup_audio_files=True by default)
 
 Prerequisites:
     - livekit
@@ -52,10 +52,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable, Optional
 
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    JobContext,
+    RunContext,
+    ToolError,
+    cli,
+    function_tool,
+)
+from livekit.agents.voice import AgentSession
+from livekit.plugins import cartesia, deepgram
+from livekit.plugins import openai as openai_plugin
+from openai import OpenAI
+from pydantic import Field
+
+import noveum_trace
+from noveum_trace.integrations.livekit import (
+    LiveKitSTTWrapper,
+    LiveKitTTSWrapper,
+    setup_livekit_tracing,
+)
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
+
 # Disable LiveKit's built-in OpenTelemetry to prevent telemetry errors
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
-from pydantic import Field
 
 # Load environment variables from .env file in project root
 try:
@@ -73,29 +95,8 @@ except ImportError:
     # python-dotenv not installed, will use system environment variables only
     pass
 
-from livekit.agents import (
-    Agent,
-    AgentServer,
-    JobContext,
-    RunContext,
-    ToolError,
-    cli,
-    function_tool,
-)
-from livekit.agents.voice import AgentSession
-from livekit.plugins import cartesia, deepgram
-from livekit.plugins import openai as openai_plugin
-from openai import OpenAI
-
-import noveum_trace
 
 # Import LiveKit wrappers
-from noveum_trace.integrations.livekit import (
-    LiveKitSTTWrapper,
-    LiveKitTTSWrapper,
-    setup_livekit_tracing,
-)
-from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 # =============================================================================
 # MENU & ORDER MANAGEMENT
@@ -150,7 +151,8 @@ class Userdata:
     """User data for the agent session."""
 
     order: Order
-    session: Optional["AgentSession"] = None  # Reference to session for closing
+    # Reference to session for closing
+    session: Optional["AgentSession"] = None
 
 
 # =============================================================================
@@ -473,7 +475,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     # Setup automatic tracing for the agent session
     # This creates the trace, handles session events, and uploads full conversation audio
-    # Note: Full audio recording requires record=True in session.start()
     # LiveKit's RecorderIO handles this as a stereo OGG file (left=user, right=agent)
     setup_livekit_tracing(session)
 
@@ -481,16 +482,12 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     print(f"📝 Session ID: {session_id}")
 
     # Start session with the agent (which has tools)
-    # record=True enables LiveKit's RecorderIO to capture full conversation audio
     # The recording is automatically uploaded to Noveum at session close
-    await session.start(
-        agent=DriveThruAgent(userdata=userdata), room=ctx.room, record=True
-    )
+    await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
 
     # Note: In console mode, the session continues running after start() returns.
     # Use 'bye' or 'done' to end gracefully (triggers complete_order tool)
     print("🎤 Agent is listening... (say 'bye' or 'done' to end)")
-    print("💡 For full conversation audio, run with: --record flag in console mode")
 
 
 # =============================================================================
@@ -558,7 +555,6 @@ async def run_text_simulation() -> None:
         print(
             "💡 To run with actual voice agent, use: python livekit_integration_example.py --test console"
         )
-        print("💡 To enable full conversation audio recording, add --record flag")
 
 
 # =============================================================================

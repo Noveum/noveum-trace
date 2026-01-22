@@ -1866,7 +1866,8 @@ class TestTraceCreationEdgeCases:
         # Should fallback to original start
         await manager.session.start(mock_agent)
 
-        manager._original_start.assert_called_once_with(mock_agent)
+        # record=True is automatically added by default
+        manager._original_start.assert_called_once_with(mock_agent, record=True)
 
     @pytest.mark.asyncio
     async def test_wrapped_start_error_handling(
