@@ -45,17 +45,13 @@ Environment Variables:
     - NOVEUM_API_KEY (optional, for sending traces)
 """
 
-from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
-from noveum_trace.integrations.livekit import (
-    LiveKitSTTWrapper,
-    LiveKitTTSWrapper,
-    setup_livekit_tracing,
-)
-import noveum_trace
-from openai import OpenAI
-from livekit.plugins import openai as openai_plugin
-from livekit.plugins import cartesia, deepgram
-from livekit.agents.voice import AgentSession
+import asyncio
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated, Any, Callable, Optional
+
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -65,13 +61,19 @@ from livekit.agents import (
     cli,
     function_tool,
 )
+from livekit.agents.voice import AgentSession
+from livekit.plugins import cartesia, deepgram
+from livekit.plugins import openai as openai_plugin
+from openai import OpenAI
 from pydantic import Field
-import asyncio
-import os
-import sys
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated, Any, Callable, Optional
+
+import noveum_trace
+from noveum_trace.integrations.livekit import (
+    LiveKitSTTWrapper,
+    LiveKitTTSWrapper,
+    setup_livekit_tracing,
+)
+from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 
 # Disable LiveKit's built-in OpenTelemetry to prevent telemetry errors
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
@@ -120,8 +122,7 @@ class Order:
         if item.lower() in MENU:
             for _ in range(quantity):
                 self.items.append(
-                    {"name": item.lower(),
-                     "price": MENU[item.lower()]["price"]}
+                    {"name": item.lower(), "price": MENU[item.lower()]["price"]}
                 )
             return True
         return False
@@ -193,8 +194,7 @@ def create_system_prompt(order: Order) -> str:
     # Filter out "coke" from menu display since it's the same as "drink"
     menu_display = {k: v for k, v in MENU.items() if k != "coke"}
     menu_text = "\n".join(
-        [f"- {name}: ${info['price']:.2f}" for name,
-            info in menu_display.items()]
+        [f"- {name}: ${info['price']:.2f}" for name, info in menu_display.items()]
     )
     menu_text += "\n- coke: $1.99 (same as drink)"
 
@@ -386,12 +386,10 @@ class DriveThruAgentText:
 
         # Replace placeholder with actual total
         if "${:.2f}" in response:
-            response = response.replace(
-                "${:.2f}", f"${self.order.get_total():.2f}")
+            response = response.replace("${:.2f}", f"${self.order.get_total():.2f}")
 
         # Add to conversation history
-        self.conversation_history.append(
-            {"role": "agent", "content": response})
+        self.conversation_history.append({"role": "agent", "content": response})
 
         return response
 
@@ -485,9 +483,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     # Start session with the agent (which has tools)
     # The recording is automatically uploaded to Noveum at session close
-    await session.start(
-        agent=DriveThruAgent(userdata=userdata), room=ctx.room
-    )
+    await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
 
     # Note: In console mode, the session continues running after start() returns.
     # Use 'bye' or 'done' to end gracefully (triggers complete_order tool)
