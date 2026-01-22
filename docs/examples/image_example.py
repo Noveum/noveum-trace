@@ -6,6 +6,17 @@ This example demonstrates:
 2. A LangChain chain that generates captions for images
 3. Integration with Noveum Trace for both examples
 4. Using vision models (Claude with vision) for image understanding
+5. Automatic image upload and UUID-based referencing (replaces base64 in traces)
+
+Image Handling:
+    When using vision models with base64-encoded images, Noveum Trace automatically:
+    - Detects base64 image data URIs in messages (data:image/...)
+    - Uploads images separately to the platform via /v1/image endpoint
+    - Replaces base64 data with compact UUID references (image://{uuid})
+    - Stores list of image UUIDs in span attributes (llm.input.image_uuids)
+
+    This significantly reduces trace payload size and improves performance.
+    HTTP/HTTPS image URLs are passed through unchanged.
 
 Prerequisites:
     pip install noveum-trace[langchain]
