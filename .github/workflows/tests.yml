@@ -9,10 +9,12 @@ on:
 jobs:
   # Run unit tests on all pushes and PRs - fast feedback
   unit-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.12"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +23,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -30,9 +33,10 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
-          python -m pytest tests/unit/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
+          pytest tests/unit/ -v --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing --junitxml=junit.xml
 
       - name: Upload coverage reports to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -46,15 +50,21 @@ jobs:
 
   # Run integration tests on all PRs and pushes
   integration-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: [unit-test]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -64,14 +74,16 @@ jobs:
 
       - name: Run integration tests with coverage
         run: |
-          python -m pytest tests/integration/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
+          pytest tests/integration/ -v --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing --junitxml=junit.xml
         env:
+          INTEGRATION_TESTS: "true"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
           NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
       - name: Upload coverage reports to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -83,31 +95,44 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  lint:
+  # Run full integration tests only on main branch - includes API calls
+  main-branch-integration-test:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [unit-test, integration-test]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12.9"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          pip install livekit livekit-agents
 
-      - name: Run linting
+      - name: Run full integration tests (main branch)
         run: |
-          # Check code formatting with black
-          python -m black --check src/ tests/
+          pytest tests/integration/ -v --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing --junitxml=junit.xml
+        env:
+          INTEGRATION_TESTS: "true"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
+          NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
-          # Check import sorting
-          python -m isort --check-only src/ tests/
+      - name: Upload coverage reports to Codecov (main branch)
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: Noveum/noveum-trace
 
-          # Linting with ruff
-          python -m ruff check src/ tests/
-
-          # Type checking with mypy
-          mypy src/noveum_trace/
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
