@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Skip all tests if LiveKit is not available
+# Skip all tests if LiveKit wrappers are not importable
 try:
     from noveum_trace.integrations.livekit.livekit_stt import LiveKitSTTWrapper
     from noveum_trace.integrations.livekit.livekit_tts import LiveKitTTSWrapper
@@ -21,6 +21,16 @@ try:
     LIVEKIT_WRAPPER_AVAILABLE = True
 except (ImportError, NameError, AttributeError):
     LIVEKIT_WRAPPER_AVAILABLE = False
+
+# Check if real LiveKit package is available (needed for inheritance-based wrapper tests)
+# The wrapper classes now inherit from base STT/TTS classes, so we need the real package
+try:
+    from livekit.agents.stt import STT as RealBaseSTT  # noqa: F401
+    from livekit.agents.tts import TTS as RealBaseTTS  # noqa: F401
+
+    LIVEKIT_PACKAGE_AVAILABLE = True
+except ImportError:
+    LIVEKIT_PACKAGE_AVAILABLE = False
 
 
 @pytest.fixture
@@ -34,6 +44,7 @@ def mock_stt_provider():
     stt._recognize_impl = AsyncMock()
     stt.stream = Mock()
     stt.aclose = AsyncMock()
+    stt.on = Mock()  # For event registration in wrapper __init__
     return stt
 
 
@@ -49,6 +60,7 @@ def mock_tts_provider():
     tts.num_channels = 1
     tts.synthesize = Mock()
     tts.stream = Mock()
+    tts.on = Mock()  # For event registration in wrapper __init__
     return tts
 
 
@@ -72,7 +84,7 @@ def mock_client():
 
 
 @pytest.mark.skipif(
-    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+    not LIVEKIT_PACKAGE_AVAILABLE, reason="LiveKit package not installed"
 )
 class TestLiveKitSTTWrapper:
     """Test LiveKitSTTWrapper class."""
@@ -120,6 +132,7 @@ class TestLiveKitSTTWrapper:
         """Test properties with base STT missing some attributes."""
         minimal_stt = Mock(spec=[])  # Empty spec so getattr returns AttributeError
         minimal_stt.capabilities = Mock()
+        minimal_stt.on = Mock()  # For event registration in wrapper __init__
         # Missing model, provider, label - getattr will raise AttributeError
 
         wrapper = LiveKitSTTWrapper(stt=minimal_stt, session_id="session_123")
@@ -136,7 +149,7 @@ class TestLiveKitSTTWrapper:
     @patch("noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms")
     @patch("noveum_trace.integrations.livekit.livekit_stt.create_span_attributes")
     @pytest.mark.asyncio
-    async def test_recognize_with_trace(
+    async def test_recognize_impl_with_trace(
         self,
         mock_create_attrs,
         mock_calc_duration,
@@ -148,7 +161,7 @@ class TestLiveKitSTTWrapper:
         mock_client,
         tmp_path,
     ):
-        """Test recognize() method with active trace."""
+        """Test _recognize_impl() method with active trace (our wrapper's tracing logic)."""
         wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         # Mock speech event
@@ -169,7 +182,8 @@ class TestLiveKitSTTWrapper:
         mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
 
         # Mock audio buffer
-        mock_buffer = [Mock(), Mock()]
+        mock_buffer = MagicMock()
+        mock_buffer.__iter__ = Mock(return_value=iter([Mock(), Mock()]))
 
         # Setup mocks
         mock_get_trace.return_value = mock_trace
@@ -184,30 +198,36 @@ class TestLiveKitSTTWrapper:
         mock_span.span_id = "span-456"
         mock_client.start_span.return_value = mock_span
 
-        result = await wrapper.recognize(mock_buffer)
+        # Call _recognize_impl directly (our wrapper's implementation)
+        result = await wrapper._recognize_impl(mock_buffer)
 
         assert result == mock_event
-        mock_stt_provider._recognize_impl.assert_called_once_with(mock_buffer)
+        mock_stt_provider._recognize_impl.assert_called_once()
         mock_upload_audio.assert_called_once()
         mock_client.start_span.assert_called_once()
         mock_client.finish_span.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.integrations.livekit.livekit_stt.get_current_trace")
+    @patch("noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms")
     @pytest.mark.asyncio
-    async def test_recognize_without_trace(
-        self, mock_get_trace, mock_stt_provider, tmp_path
+    async def test_recognize_impl_without_trace(
+        self, mock_calc_duration, mock_get_trace, mock_stt_provider, tmp_path
     ):
-        """Test recognize() method without active trace."""
+        """Test _recognize_impl() method without active trace."""
         wrapper = LiveKitSTTWrapper(stt=mock_stt_provider, session_id="session_123")
 
         mock_event = Mock()
         mock_stt_provider._recognize_impl = AsyncMock(return_value=mock_event)
         mock_get_trace.return_value = None
+        mock_calc_duration.return_value = 1000.0
 
-        mock_frame = Mock()
-        mock_frame.duration = 0.1
-        result = await wrapper.recognize([mock_frame])
+        # Mock audio buffer
+        mock_buffer = MagicMock()
+        mock_buffer.__iter__ = Mock(return_value=iter([Mock()]))
+
+        # Call _recognize_impl directly (our wrapper's implementation)
+        result = await wrapper._recognize_impl(mock_buffer)
 
         assert result == mock_event
         mock_stt_provider._recognize_impl.assert_called_once()
@@ -381,7 +401,7 @@ class TestWrappedSpeechStream:
 
 
 @pytest.mark.skipif(
-    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+    not LIVEKIT_PACKAGE_AVAILABLE, reason="LiveKit package not installed"
 )
 class TestLiveKitTTSWrapper:
     """Test LiveKitTTSWrapper class."""
@@ -693,7 +713,7 @@ class TestWrappedChunkedStream:
 
 
 @pytest.mark.skipif(
-    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+    not LIVEKIT_PACKAGE_AVAILABLE, reason="LiveKit package not installed"
 )
 class TestLiveKitSTTWrapperErrorHandling:
     """Test error handling in LiveKitSTTWrapper."""
@@ -724,13 +744,17 @@ class TestLiveKitSTTWrapperErrorHandling:
         mock_get_trace.return_value = mock_trace
         mock_get_client.side_effect = Exception("Client error")
 
+        # Mock audio buffer
+        mock_buffer = MagicMock()
+        mock_buffer.__iter__ = Mock(return_value=iter([Mock()]))
+
         # Patch calculate_audio_duration_ms to avoid duration issues
         with patch(
             "noveum_trace.integrations.livekit.livekit_stt.calculate_audio_duration_ms",
             return_value=1000.0,
         ):
-            # Should not raise exception
-            result = await wrapper.recognize([Mock()])
+            # Should not raise exception - call _recognize_impl directly
+            result = await wrapper._recognize_impl(mock_buffer)
 
         assert result == mock_event
 
@@ -813,13 +837,12 @@ class TestWrappedSpeechStreamErrorHandling:
         mock_base_stream.aclose.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_stt.LIVEKIT_AVAILABLE", True)
-    @pytest.mark.asyncio
-    async def test_flush(self, tmp_path):
-        """Test flush method."""
+    def test_flush(self, tmp_path):
+        """Test flush method (sync, matching base LiveKit interface)."""
         from noveum_trace.integrations.livekit.livekit_stt import _WrappedSpeechStream
 
         mock_base_stream = Mock()
-        mock_base_stream.flush = AsyncMock()
+        mock_base_stream.flush = Mock()
 
         stream = _WrappedSpeechStream(
             base_stream=mock_base_stream,
@@ -830,7 +853,7 @@ class TestWrappedSpeechStreamErrorHandling:
             counter_ref=[0],
         )
 
-        await stream.flush()
+        stream.flush()
 
         mock_base_stream.flush.assert_called_once()
 
@@ -996,15 +1019,14 @@ class TestWrappedSynthesizeStreamErrorHandling:
         mock_base_stream.aclose.assert_called_once()
 
     @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
-    @pytest.mark.asyncio
-    async def test_flush(self, tmp_path):
-        """Test flush method."""
+    def test_flush(self, tmp_path):
+        """Test flush method (sync, matching base LiveKit interface)."""
         from noveum_trace.integrations.livekit.livekit_tts import (
             _WrappedSynthesizeStream,
         )
 
         mock_base_stream = Mock()
-        mock_base_stream.flush = AsyncMock()
+        mock_base_stream.flush = Mock()
 
         stream = _WrappedSynthesizeStream(
             base_stream=mock_base_stream,
@@ -1015,7 +1037,7 @@ class TestWrappedSynthesizeStreamErrorHandling:
             counter_ref=[0],
         )
 
-        await stream.flush()
+        stream.flush()
 
         mock_base_stream.flush.assert_called_once()
 
