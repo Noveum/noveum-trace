@@ -30,11 +30,15 @@ from noveum_trace.integrations.livekit.livekit_utils import (
 logger = logging.getLogger(__name__)
 
 try:
-    from livekit.agents.tts import SynthesizedAudio, TTSCapabilities
+    from livekit.agents.tts import TTS as BaseTTS
+    from livekit.agents.tts import (
+        SynthesizedAudio,
+    )
 
     LIVEKIT_AVAILABLE = True
 except ImportError as e:
     LIVEKIT_AVAILABLE = False
+    BaseTTS = object  # Fallback for when LiveKit is not available
     logger.debug(
         "LiveKit is not importable. LiveKit TTS integration features will not be available. "
         "Install it with: pip install livekit livekit-agents",
@@ -42,12 +46,17 @@ except ImportError as e:
     )
 
 
-class LiveKitTTSWrapper:
+class LiveKitTTSWrapper(BaseTTS):
     """
     Wrapper for LiveKit TTS providers that automatically creates spans for synthesis.
 
-    This wrapper captures synthesized audio frames, saves them to disk, and creates
-    spans with metadata for each synthesis operation (both streaming and batch modes).
+    This wrapper inherits from the base TTS class to ensure proper event forwarding
+    and type compatibility. It captures synthesized audio frames, saves them to disk,
+    and creates spans with metadata for each synthesis operation (both streaming and
+    batch modes).
+
+    The wrapper forwards metrics_collected and error events from the base TTS instance
+    to ensure that downstream listeners (like agent_activity) receive all events.
 
     Example:
         >>> import noveum_trace
@@ -86,28 +95,46 @@ class LiveKitTTSWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
         """
-        # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
-        self._base_tts = tts
-        self._session_id = session_id
-        self._job_context = job_context or {}
-        self._counter_ref = [0]  # Mutable reference for sharing with streams
-
         if not LIVEKIT_AVAILABLE:
             logger.error(
                 "Cannot initialize LiveKitTTSWrapper: LiveKit is not available. "
                 "Install it with: pip install livekit livekit-agents"
             )
+            # Initialize with minimal state for graceful degradation
+            self._base_tts = tts
+            self._session_id = session_id
+            self._job_context = job_context or {}
+            self._counter_ref = [0]
             return
 
-    @property
-    def capabilities(self) -> TTSCapabilities:
-        """Get TTS capabilities from base provider."""
-        if not LIVEKIT_AVAILABLE or self._base_tts is None:
-            raise RuntimeError(
-                "LiveKit is not available. Cannot access capabilities. "
-                "Install it with: pip install livekit livekit-agents"
-            )
-        return self._base_tts.capabilities
+        # Initialize base class with parameters from the wrapped TTS
+        super().__init__(
+            capabilities=tts.capabilities,
+            sample_rate=tts.sample_rate,
+            num_channels=tts.num_channels,
+        )
+
+        # Store wrapper-specific state
+        self._base_tts = tts
+        self._session_id = session_id
+        self._job_context = job_context or {}
+        self._counter_ref = [0]  # Mutable reference for sharing with streams
+
+        # Forward metrics_collected and error events from base TTS to this wrapper
+        # This ensures that agent_activity and other listeners receive the events
+        self._base_tts.on("metrics_collected", self._forward_metrics)
+        self._base_tts.on("error", self._forward_error)
+
+    def _forward_metrics(self, metrics: Any) -> None:
+        """Forward metrics_collected events from base TTS to wrapper listeners."""
+        self.emit("metrics_collected", metrics)
+
+    def _forward_error(self, error: Any) -> None:
+        """Forward error events from base TTS to wrapper listeners."""
+        self.emit("error", error)
+
+    # Note: capabilities, sample_rate, and num_channels properties are inherited
+    # from BaseTTS and set in __init__ via super().__init__()
 
     @property
     def model(self) -> str:
@@ -129,26 +156,6 @@ class LiveKitTTSWrapper:
         if not LIVEKIT_AVAILABLE or self._base_tts is None:
             return "LiveKitTTSWrapper"
         return getattr(self._base_tts, "label", self._base_tts.__class__.__name__)
-
-    @property
-    def sample_rate(self) -> int:
-        """Get sample rate from base provider."""
-        if not LIVEKIT_AVAILABLE or self._base_tts is None:
-            raise RuntimeError(
-                "LiveKit is not available. Cannot access sample_rate. "
-                "Install it with: pip install livekit livekit-agents"
-            )
-        return self._base_tts.sample_rate
-
-    @property
-    def num_channels(self) -> int:
-        """Get number of channels from base provider."""
-        if not LIVEKIT_AVAILABLE or self._base_tts is None:
-            raise RuntimeError(
-                "LiveKit is not available. Cannot access num_channels. "
-                "Install it with: pip install livekit livekit-agents"
-            )
-        return self._base_tts.num_channels
 
     def synthesize(self, text: str, **kwargs: Any) -> _WrappedChunkedStream:
         """
@@ -198,7 +205,15 @@ class LiveKitTTSWrapper:
             self._base_tts.prewarm()
 
     async def aclose(self) -> None:
-        """Close the TTS provider."""
+        """Close the TTS provider and unregister event handlers."""
+        # Unregister event handlers to prevent memory leaks
+        if LIVEKIT_AVAILABLE and hasattr(self._base_tts, "off"):
+            try:
+                self._base_tts.off("metrics_collected", self._forward_metrics)
+                self._base_tts.off("error", self._forward_error)
+            except Exception:
+                pass  # Ignore errors during cleanup
+
         if hasattr(self._base_tts, "aclose"):
             await self._base_tts.aclose()
 
@@ -412,10 +427,10 @@ class _WrappedSynthesizeStream:
             # Fallback to aclose if no context manager support
             await self.aclose()
 
-    async def flush(self) -> None:
+    def flush(self) -> None:
         """Flush the stream."""
         if hasattr(self._base_stream, "flush"):
-            await self._base_stream.flush()
+            self._base_stream.flush()
 
     async def aclose(self) -> None:
         """Close the stream."""
@@ -596,6 +611,24 @@ class _WrappedChunkedStream:
     def __aiter__(self) -> _WrappedChunkedStream:
         """Return self as async iterator."""
         return self
+
+    async def __aenter__(self) -> _WrappedChunkedStream:
+        """Enter async context manager."""
+        if hasattr(self._base_stream, "__aenter__"):
+            await self._base_stream.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Union[type[BaseException], None],
+        exc: Union[BaseException, None],
+        exc_tb: Any,
+    ) -> None:
+        """Exit async context manager."""
+        if hasattr(self._base_stream, "__aexit__"):
+            await self._base_stream.__aexit__(exc_type, exc, exc_tb)
+        else:
+            await self.aclose()
 
     async def aclose(self) -> None:
         """Close the stream."""

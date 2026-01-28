@@ -31,12 +31,17 @@ from noveum_trace.integrations.livekit.livekit_utils import (
 logger = logging.getLogger(__name__)
 
 try:
-    from livekit.agents.stt import SpeechEvent, SpeechEventType, STTCapabilities
+    from livekit.agents.stt import STT as BaseSTT
+    from livekit.agents.stt import (
+        SpeechEvent,
+        SpeechEventType,
+    )
     from livekit.agents.utils import AudioBuffer
 
     LIVEKIT_AVAILABLE = True
 except ImportError as e:
     LIVEKIT_AVAILABLE = False
+    BaseSTT = object  # Fallback for when LiveKit is not available
     logger.debug(
         "LiveKit is not importable. LiveKit STT integration features will not be available. "
         "Install it with: pip install livekit livekit-agents",
@@ -44,12 +49,16 @@ except ImportError as e:
     )
 
 
-class LiveKitSTTWrapper:
+class LiveKitSTTWrapper(BaseSTT):
     """
     Wrapper for LiveKit STT providers that automatically creates spans for transcription.
 
-    This wrapper captures audio frames, saves them to disk, and creates spans with
-    metadata for each transcription operation (both streaming and batch modes).
+    This wrapper inherits from the base STT class to ensure proper event forwarding
+    and type compatibility. It captures audio frames, saves them to disk, and creates
+    spans with metadata for each transcription operation (both streaming and batch modes).
+
+    The wrapper forwards metrics_collected and error events from the base STT instance
+    to ensure that downstream listeners (like agent_activity) receive all events.
 
     Example:
         >>> import noveum_trace
@@ -88,28 +97,41 @@ class LiveKitSTTWrapper:
             session_id: Session identifier for organizing audio files
             job_context: Dictionary of job context information to attach to spans
         """
-        # Always initialize fields so wrapper is safe to use when LiveKit is unavailable
-        self._base_stt = stt
-        self._session_id = session_id
-        self._job_context = job_context or {}
-        self._counter_ref = [0]  # Mutable reference for sharing with streams
-
         if not LIVEKIT_AVAILABLE:
             logger.error(
                 "Cannot initialize LiveKitSTTWrapper: LiveKit is not available. "
                 "Install it with: pip install livekit livekit-agents"
             )
+            # Initialize with minimal state for graceful degradation
+            self._base_stt = stt
+            self._session_id = session_id
+            self._job_context = job_context or {}
+            self._counter_ref = [0]
             return
 
-    @property
-    def capabilities(self) -> STTCapabilities:
-        """Get STT capabilities from base provider."""
-        if not LIVEKIT_AVAILABLE or self._base_stt is None:
-            raise RuntimeError(
-                "LiveKit is not available. Cannot access capabilities. "
-                "Install it with: pip install livekit livekit-agents"
-            )
-        return self._base_stt.capabilities
+        # Initialize base class with capabilities from the wrapped STT
+        super().__init__(capabilities=stt.capabilities)
+
+        # Store wrapper-specific state
+        self._base_stt = stt
+        self._session_id = session_id
+        self._job_context = job_context or {}
+        self._counter_ref = [0]  # Mutable reference for sharing with streams
+
+        # Forward metrics_collected and error events from base STT to this wrapper
+        # This ensures that agent_activity and other listeners receive the events
+        self._base_stt.on("metrics_collected", self._forward_metrics)
+        self._base_stt.on("error", self._forward_error)
+
+    def _forward_metrics(self, metrics: Any) -> None:
+        """Forward metrics_collected events from base STT to wrapper listeners."""
+        self.emit("metrics_collected", metrics)
+
+    def _forward_error(self, error: Any) -> None:
+        """Forward error events from base STT to wrapper listeners."""
+        self.emit("error", error)
+
+    # Note: capabilities property is inherited from BaseSTT and set in __init__
 
     @property
     def model(self) -> str:
@@ -246,18 +268,8 @@ class LiveKitSTTWrapper:
 
         return event
 
-    async def recognize(self, buffer: AudioBuffer, **kwargs: Any) -> SpeechEvent:
-        """
-        Public recognition API.
-
-        Args:
-            buffer: Audio buffer to recognize
-            **kwargs: Additional arguments
-
-        Returns:
-            SpeechEvent with recognition results
-        """
-        return await self._recognize_impl(buffer, **kwargs)
+    # Note: recognize() method is inherited from BaseSTT.
+    # The base class calls _recognize_impl() and handles metrics emission.
 
     def stream(self, **kwargs: Any) -> _WrappedSpeechStream:
         """
@@ -279,8 +291,21 @@ class LiveKitSTTWrapper:
             counter_ref=self._counter_ref,
         )
 
+    def prewarm(self) -> None:
+        """Pre-warm connection to the STT service."""
+        if hasattr(self._base_stt, "prewarm"):
+            self._base_stt.prewarm()
+
     async def aclose(self) -> None:
-        """Close the STT provider."""
+        """Close the STT provider and unregister event handlers."""
+        # Unregister event handlers to prevent memory leaks
+        if LIVEKIT_AVAILABLE and hasattr(self._base_stt, "off"):
+            try:
+                self._base_stt.off("metrics_collected", self._forward_metrics)
+                self._base_stt.off("error", self._forward_error)
+            except Exception:
+                pass  # Ignore errors during cleanup
+
         if hasattr(self._base_stt, "aclose"):
             await self._base_stt.aclose()
 
@@ -469,10 +494,10 @@ class _WrappedSpeechStream:
             # Fallback to aclose if no context manager support
             await self.aclose()
 
-    async def flush(self) -> None:
+    def flush(self) -> None:
         """Flush the stream."""
         if hasattr(self._base_stream, "flush"):
-            await self._base_stream.flush()
+            self._base_stream.flush()
 
     async def aclose(self) -> None:
         """Close the stream."""
