@@ -39,8 +39,10 @@ from noveum_trace.integrations.langchain.langchain_utils import (
     get_operation_name,
 )
 from noveum_trace.integrations.langchain.message_utils import (
+    extract_and_process_images,
     message_to_dict,
     process_chain_inputs_outputs,
+    process_images_from_prompts,
 )
 from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 
@@ -1050,14 +1052,12 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 skip_frames=1
             )  # Skip this frame
 
+            # Build basic span attributes (without prompts and images yet)
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
                 "llm.model": extracted_model_name,
                 "llm.provider": extracted_provider,
                 "llm.operation": "completion",
-                # Input attributes
-                "llm.input.prompts": prompts[:5] if len(prompts) > 5 else prompts,
-                "llm.input.prompt_count": len(prompts),
                 **attribute_kwargs,
             }
 
@@ -1122,6 +1122,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
+                        span_attributes["llm.available_tools.descriptions"] = [
+                            t.get("description", "No description")
+                            for t in converted_tools
+                        ]
                         # Add complete tool schemas for better trace visibility
                         span_attributes["llm.available_tools.schemas"] = json.dumps(
                             converted_tools, default=str
@@ -1146,6 +1150,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                             "agent.available_tools.names": [
                                                 t["name"] for t in converted_tools
                                             ],
+                                            "agent.available_tools.descriptions": [
+                                                t.get("description", "No description")
+                                                for t in converted_tools
+                                            ],
                                             "agent.available_tools.schemas": json.dumps(
                                                 converted_tools, default=str
                                             ),
@@ -1162,7 +1170,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     custom_metadata, default=str
                 )
 
-            # Create span (either in new trace or existing trace)
+            # Create span first with basic attributes
             if not self._ensure_client():
                 return None
             assert self._client is not None  # Type guard after _ensure_client
@@ -1171,6 +1179,33 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 parent_span_id=parent_span_id,
                 attributes=span_attributes,
             )
+
+            # Now process images from prompts (if any) using the span_id
+            # This handles edge cases where someone might pass JSON strings with image_url
+            image_uuids, processed_prompts = process_images_from_prompts(
+                prompts, trace.trace_id, span.span_id
+            )
+
+            # Update span with prompts and image information
+            span.set_attributes(
+                {
+                    "llm.input.prompts": (
+                        processed_prompts[:5]
+                        if len(processed_prompts) > 5
+                        else processed_prompts
+                    ),
+                    "llm.input.prompt_count": len(processed_prompts),
+                }
+            )
+
+            # Add image UUIDs if found
+            if image_uuids:
+                span.set_attributes(
+                    {
+                        "llm.input.image_uuids": image_uuids,
+                        "llm.input.image_count": len(image_uuids),
+                    }
+                )
 
             # Store span for later cleanup
             self._set_run(run_id, span)
@@ -1229,13 +1264,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Convert messages to dicts using existing message_to_dict
             message_dicts = [[message_to_dict(m) for m in batch] for batch in messages]
 
-            # Flatten for analysis (messages is List[List[BaseMessage]])
-            flat_messages = message_dicts[0] if message_dicts else []
-
-            # Analyze message content
-            has_system_prompt = any(m.get("type") == "system" for m in flat_messages)
-            has_tool_calls = any(m.get("tool_calls") for m in flat_messages)
-
             # Extract the actual model name and provider
             model_from_kwargs = kwargs.get("invocation_params", {}).get(
                 "model"
@@ -1266,17 +1294,13 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             # Extract code location information
             code_location_info = extract_code_location_info(skip_frames=1)
 
+            # Build basic span attributes (without messages yet)
             span_attributes: dict[str, Any] = {
                 "langchain.run_id": str(run_id),
                 "llm.model": extracted_model_name,
                 "llm.provider": extracted_provider,
                 "llm.operation": "chat",
-                # Chat-specific input attributes
                 "llm.input.type": "chat",
-                "llm.input.messages": json.dumps(message_dicts, default=str),
-                "llm.input.message_count": len(flat_messages),
-                "llm.input.has_system_prompt": has_system_prompt,
-                "llm.input.has_tool_calls": has_tool_calls,
                 **attribute_kwargs,
             }
 
@@ -1323,6 +1347,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         span_attributes["llm.available_tools.names"] = [
                             t["name"] for t in converted_tools
                         ]
+                        span_attributes["llm.available_tools.descriptions"] = [
+                            t.get("description", "No description")
+                            for t in converted_tools
+                        ]
                         span_attributes["llm.available_tools.schemas"] = json.dumps(
                             converted_tools, default=str
                         )
@@ -1338,6 +1366,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                                             ),
                                             "agent.available_tools.names": [
                                                 t["name"] for t in converted_tools
+                                            ],
+                                            "agent.available_tools.descriptions": [
+                                                t.get("description", "No description")
+                                                for t in converted_tools
                                             ],
                                             "agent.available_tools.schemas": json.dumps(
                                                 converted_tools, default=str
@@ -1355,7 +1387,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     custom_metadata, default=str
                 )
 
-            # Create span
+            # Create span first with basic attributes
             if not self._ensure_client():
                 return None
             assert self._client is not None
@@ -1364,6 +1396,37 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 parent_span_id=parent_span_id,
                 attributes=span_attributes,
             )
+
+            # Now process images using the span_id from the created span
+            image_uuids, message_dicts = extract_and_process_images(
+                message_dicts, trace.trace_id, span.span_id
+            )
+
+            # Flatten for analysis (messages is List[List[BaseMessage]])
+            flat_messages = message_dicts[0] if message_dicts else []
+
+            # Analyze message content
+            has_system_prompt = any(m.get("type") == "system" for m in flat_messages)
+            has_tool_calls = any(m.get("tool_calls") for m in flat_messages)
+
+            # Update span with processed messages and image information
+            span.set_attributes(
+                {
+                    "llm.input.messages": json.dumps(message_dicts, default=str),
+                    "llm.input.message_count": len(flat_messages),
+                    "llm.input.has_system_prompt": has_system_prompt,
+                    "llm.input.has_tool_calls": has_tool_calls,
+                }
+            )
+
+            # Add image UUIDs if found
+            if image_uuids:
+                span.set_attributes(
+                    {
+                        "llm.input.image_uuids": image_uuids,
+                        "llm.input.image_count": len(image_uuids),
+                    }
+                )
 
             # Store span for later cleanup
             self._set_run(run_id, span)
@@ -1670,6 +1733,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 attributes["agent.available_tools.count"] = len(available_tools)
                 attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
+                ]
+                attributes["agent.available_tools.descriptions"] = [
+                    t.get("description", "No description") for t in available_tools
                 ]
                 attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str
@@ -2224,6 +2290,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_attributes["agent.available_tools.count"] = len(available_tools)
                 span_attributes["agent.available_tools.names"] = [
                     t["name"] for t in available_tools
+                ]
+                span_attributes["agent.available_tools.descriptions"] = [
+                    t.get("description", "No description") for t in available_tools
                 ]
                 span_attributes["agent.available_tools.schemas"] = json.dumps(
                     available_tools, default=str

@@ -368,6 +368,10 @@ def get_operation_name(
     if event_type == "llm_start":
         # Use model name instead of class name for better readability
         model_name = extract_model_name(serialized)
+        # If extract_model_name returns "unknown" for an empty dict, use "node" instead
+        # to match the pattern used by other event types
+        if model_name == "unknown" and not serialized:
+            model_name = "node"
         return f"llm.{model_name}"
     elif event_type == "chain_start":
         # Regular chain naming (LangGraph case handled above)

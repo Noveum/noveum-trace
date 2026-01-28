@@ -353,6 +353,64 @@ class HttpTransport:
             )
             # Exception swallowed - audio export fails silently with error log
 
+    def export_image(
+        self,
+        image_data: bytes,
+        trace_id: str,
+        span_id: str,
+        image_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Export image to the Noveum platform.
+
+        Args:
+            image_data: Image file bytes
+            trace_id: Associated trace ID
+            span_id: Associated span ID
+            image_uuid: Unique identifier for this image file
+            metadata: Additional metadata (format, size, etc.)
+
+        Raises:
+            TransportError: If transport is shutdown
+
+        Note:
+            Export failures (e.g., queue full, missing image_uuid) are logged but not raised.
+        """
+        if self._shutdown:
+            log_error_always(
+                logger,
+                f"Cannot export image {image_uuid} - transport has been shutdown",
+                image_uuid=image_uuid,
+            )
+            raise TransportError("Transport has been shutdown")
+
+        logger.info(f"📤 EXPORTING IMAGE: {image_uuid} for trace {trace_id}")
+
+        # Format image for export
+        image_item = {
+            "image_data": image_data,
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "image_uuid": image_uuid,
+            "metadata": metadata or {},
+            "timestamp": time.time(),
+        }
+
+        # Add to batch processor
+        try:
+            self.batch_processor.add_image(image_item)
+            logger.info(f"✅ Image {image_uuid} successfully queued for export")
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to queue image {image_uuid} for export",
+                exc_info=True,
+                image_uuid=image_uuid,
+                error=str(e),
+            )
+            # Exception swallowed - image export fails silently with error log
+
     def flush(self, timeout: Optional[float] = None) -> None:
         """
         Flush all pending traces.
@@ -687,10 +745,10 @@ class HttpTransport:
 
     def _send_batch(self, batch_item: dict[str, Any]) -> None:
         """
-        Send audio or traces based on type.
+        Send audio, images, or traces based on type.
 
         Args:
-            batch_item: Dict with 'type' ('audio' or 'traces') and 'data'
+            batch_item: Dict with 'type' ('audio', 'image', or 'traces') and 'data'
         """
         item_type = batch_item.get("type")
 
@@ -698,6 +756,11 @@ class HttpTransport:
             # Send single audio file
             audio_data = batch_item["data"]
             self._send_single_audio(audio_data)
+
+        elif item_type == "image":
+            # Send single image file
+            image_data = batch_item["data"]
+            self._send_single_image(image_data)
 
         elif item_type == "traces":
             # Send batch of traces (existing logic)
@@ -948,6 +1011,100 @@ class HttpTransport:
                 audio_uuid=audio_uuid,
             )
             raise TransportError(f"Audio upload failed: {e}") from e
+
+    def _send_single_image(self, image_item: dict[str, Any]) -> None:
+        """
+        Send a single image file to the Noveum platform.
+
+        Args:
+            image_item: Image data with metadata
+
+        Raises:
+            TransportError: If image_uuid is missing or upload fails
+        """
+        image_uuid = image_item.get("image_uuid")
+        if not image_uuid:
+            image_item_keys = list(image_item.keys())
+            log_error_always(
+                logger,
+                "Cannot send image - missing image_uuid, dropping image file",
+                image_item_keys=image_item_keys,
+            )
+            raise TransportError(
+                f"Cannot send image - missing image_uuid, dropping image file. "
+                f"Available keys: {image_item_keys}"
+            )
+
+        trace_id = image_item.get("trace_id")
+        span_id = image_item.get("span_id")
+
+        url = self._build_api_url("/v1/image")
+
+        logger.info(f"🚀 SENDING IMAGE: {image_uuid} to {url}")
+
+        try:
+            # Get image format from metadata
+            metadata = image_item.get("metadata", {})
+            image_format = metadata.get("format", "jpeg")
+
+            # Determine content type
+            content_type = f"image/{image_format}"
+
+            # Prepare multipart form data
+            files = {
+                "file": (
+                    f"{image_uuid}.{image_format}",
+                    image_item["image_data"],
+                    content_type,
+                )
+            }
+
+            data = {
+                "traceId": trace_id,  # API expects camelCase
+                "spanId": span_id,  # API expects camelCase
+                "image_uuid": image_uuid,
+                "timestamp": image_item.get("timestamp"),
+                **metadata,
+            }
+
+            # Send request
+            response = self.session.post(
+                url,
+                files=files,
+                data=data,
+                timeout=self.config.transport.timeout,
+            )
+
+            # Log response
+            logger.info(f"📡 IMAGE RESPONSE: Status {response.status_code}")
+
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ Successfully sent image {image_uuid}")
+            else:
+                log_error_always(
+                    logger,
+                    f"Failed to send image {image_uuid}: {response.status_code}",
+                    status=response.status_code,
+                    image_uuid=image_uuid,
+                )
+                response.raise_for_status()
+
+        except requests.exceptions.Timeout as e:
+            log_error_always(
+                logger,
+                f"Image upload timeout for {image_uuid}",
+                exc_info=True,
+                image_uuid=image_uuid,
+            )
+            raise TransportError(f"Image upload timeout: {e}") from e
+        except Exception as e:
+            log_error_always(
+                logger,
+                f"Failed to send image {image_uuid}: {e}",
+                exc_info=True,
+                image_uuid=image_uuid,
+            )
+            raise TransportError(f"Image upload failed: {e}") from e
 
     def _compress_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """

@@ -500,6 +500,39 @@ class NoveumClient:
             logger.error(f"Failed to export audio {audio_uuid}: {e}")
             # Don't raise - audio export failure shouldn't break tracing
 
+    def export_image(
+        self,
+        image_data: bytes,
+        trace_id: str,
+        span_id: str,
+        image_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Export image to the Noveum platform.
+
+        Args:
+            image_data: Image file bytes
+            trace_id: Associated trace ID
+            span_id: Associated span ID
+            image_uuid: Unique identifier for this image file
+            metadata: Additional metadata (format, size, etc.)
+        """
+        if self._shutdown:
+            raise NoveumTraceError("Client has been shutdown")
+
+        try:
+            self.transport.export_image(
+                image_data=image_data,
+                trace_id=trace_id,
+                span_id=span_id,
+                image_uuid=image_uuid,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.error(f"Failed to export image {image_uuid}: {e}")
+            # Don't raise - image export failure shouldn't break tracing
+
     def _create_noop_trace(self, name: str) -> Trace:
         """
         Create a no-op trace for when tracing is disabled or sampled out.
