@@ -18,6 +18,7 @@ from noveum_trace.utils.llm_utils import (
     get_model_info,
     get_supported_models,
     normalize_model_name,
+    parse_usage_from_response,
     validate_model_compatibility,
 )
 
@@ -314,6 +315,194 @@ class TestMetadataExtraction:
         assert metadata.get("llm.usage.input_tokens") == 7
         assert metadata.get("llm.usage.output_tokens") == 3
         assert metadata.get("llm.usage.total_tokens") == 10
+
+
+class TestUsageParsing:
+    """Test multi-provider usage parsing."""
+
+    def test_parse_usage_openai_format(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 100
+        assert usage.get("llm.output_tokens") == 50
+        assert usage.get("llm.total_tokens") == 150
+
+    def test_parse_usage_anthropic_format(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 30,
+                    "total_tokens": 150,
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 120
+        assert usage.get("llm.output_tokens") == 30
+        assert usage.get("llm.total_tokens") == 150
+
+    def test_parse_usage_vertex_generation_metadata(self):
+        response = SimpleNamespace(
+            generations=[
+                [
+                    SimpleNamespace(
+                        generation_info={
+                            "usage_metadata": {
+                                "prompt_token_count": 200,
+                                "candidates_token_count": 80,
+                                "total_token_count": 280,
+                            }
+                        }
+                    )
+                ]
+            ]
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 200
+        assert usage.get("llm.output_tokens") == 80
+        assert usage.get("llm.total_tokens") == 280
+
+    def test_parse_usage_generation_message_metadata(self):
+        response = SimpleNamespace(
+            generations=[
+                [
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            response_metadata={
+                                "usage_metadata": {
+                                    "prompt_token_count": 12,
+                                    "candidates_token_count": 4,
+                                    "total_token_count": 16,
+                                }
+                            }
+                        )
+                    )
+                ]
+            ]
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 12
+        assert usage.get("llm.output_tokens") == 4
+        assert usage.get("llm.total_tokens") == 16
+
+    def test_parse_usage_bedrock_format(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "inputTokenCount": 90,
+                    "outputTokenCount": 10,
+                    "totalTokenCount": 100,
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 90
+        assert usage.get("llm.output_tokens") == 10
+        assert usage.get("llm.total_tokens") == 100
+
+    def test_parse_usage_watsonx_format(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "input_token_count": 50,
+                    "generated_token_count": 25,
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 50
+        assert usage.get("llm.output_tokens") == 25
+        assert usage.get("llm.total_tokens") is None
+
+    def test_parse_usage_details_openai(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "prompt_tokens_details": {"cached_tokens": 20, "audio_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": 10},
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_cached_tokens") == 20
+        assert usage.get("llm.input_audio_tokens") == 0
+        assert usage.get("llm.output_reasoning_tokens") == 10
+
+    def test_parse_usage_details_vertex(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "prompt_token_count": 100,
+                    "candidates_token_count": 40,
+                    "prompt_tokens_details": [{"modality": "TEXT", "token_count": 100}],
+                    "candidates_tokens_details": [
+                        {"modality": "TEXT", "token_count": 40}
+                    ],
+                    "cache_tokens_details": [{"modality": "TEXT", "token_count": 10}],
+                }
+            }
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_modality_TEXT") == 100
+        assert usage.get("llm.output_modality_TEXT") == 40
+        assert usage.get("llm.cache_modality_TEXT") == 10
+
+    def test_parse_usage_precedence_llm_output(self):
+        response = SimpleNamespace(
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                }
+            },
+            generations=[
+                [
+                    SimpleNamespace(
+                        generation_info={
+                            "usage_metadata": {
+                                "prompt_token_count": 100,
+                                "candidates_token_count": 50,
+                                "total_token_count": 150,
+                            }
+                        }
+                    )
+                ]
+            ],
+        )
+
+        usage = parse_usage_from_response(response)
+
+        assert usage.get("llm.input_tokens") == 10
+        assert usage.get("llm.output_tokens") == 5
+        assert usage.get("llm.total_tokens") == 15
 
 
 class TestProxyServiceDetection:

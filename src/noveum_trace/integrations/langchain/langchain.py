@@ -42,7 +42,11 @@ from noveum_trace.integrations.langchain.message_utils import (
     message_to_dict,
     process_chain_inputs_outputs,
 )
-from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
+from noveum_trace.utils.llm_utils import (
+    estimate_cost,
+    estimate_token_count,
+    parse_usage_from_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1442,7 +1446,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             # Add response data
             generations = []
-            token_usage = {}
             end_time = datetime.now(timezone.utc)
             latency_ms = None
             if getattr(span, "start_time", None) is not None:
@@ -1457,28 +1460,29 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     :10
                 ]  # Limit number of generations
 
-            if hasattr(response, "llm_output") and response.llm_output:
-                token_usage = response.llm_output.get("token_usage", {})
-
             # Flatten usage attributes to match ContextManager format
-            usage_attrs = {}
-            if token_usage:
-                usage_attrs.update(
-                    {
-                        "llm.input_tokens": token_usage.get("prompt_tokens", 0),
-                        "llm.output_tokens": token_usage.get("completion_tokens", 0),
-                        "llm.total_tokens": token_usage.get("total_tokens", 0),
-                    }
-                )
+            usage_attrs = parse_usage_from_response(
+                response,
+                provider=span.attributes.get("llm.provider"),
+                model=span.attributes.get("llm.model"),
+            )
 
             provider = span.attributes.get("llm.provider")
             model = span.attributes.get("llm.model")
 
             if model and not usage_attrs.get("llm.input_tokens"):
                 prompts = span.attributes.get("llm.input.prompts")
+                if not prompts:
+                    prompts = span.attributes.get("llm.input.messages")
                 if prompts:
+                    parsed_prompts = prompts
+                    if isinstance(prompts, str):
+                        try:
+                            parsed_prompts = json.loads(prompts)
+                        except json.JSONDecodeError:
+                            parsed_prompts = prompts
                     usage_attrs["llm.input_tokens"] = estimate_token_count(
-                        prompts, model=model, provider=provider
+                        parsed_prompts, model=model, provider=provider
                     )
 
             if model and not usage_attrs.get("llm.output_tokens") and generations:

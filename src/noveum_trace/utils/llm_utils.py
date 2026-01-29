@@ -700,6 +700,221 @@ def estimate_cost(
     }
 
 
+def _get_value(obj: Any, name: str) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _to_dict(obj: Any) -> dict[str, Any]:
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return dict(obj)
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        return obj.model_dump()
+    if hasattr(obj, "dict") and callable(obj.dict):
+        return obj.dict()
+    if hasattr(obj, "__dict__"):
+        return dict(obj.__dict__)
+    return {}
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_usage_key_conversions(usage_model: dict[str, Any]) -> dict[str, Any]:
+    conversion_list = [
+        ("input_tokens", "input_tokens"),  # Anthropic
+        ("output_tokens", "output_tokens"),
+        ("total_tokens", "total_tokens"),
+        ("prompt_tokens", "input_tokens"),  # OpenAI/Bedrock
+        ("completion_tokens", "output_tokens"),
+        ("prompt_token_count", "input_tokens"),  # Vertex AI
+        ("candidates_token_count", "output_tokens"),
+        ("total_token_count", "total_tokens"),
+        ("inputTokenCount", "input_tokens"),  # Bedrock
+        ("outputTokenCount", "output_tokens"),
+        ("totalTokenCount", "total_tokens"),
+        ("input_token_count", "input_tokens"),  # Watsonx
+        ("generated_token_count", "output_tokens"),
+    ]
+    normalized = dict(usage_model)
+    for source_key, target_key in conversion_list:
+        if source_key in normalized and target_key not in normalized:
+            normalized[target_key] = normalized.get(source_key)
+    return normalized
+
+
+def _set_usage_attr(
+    usage_attrs: dict[str, Any], key: str, value: Any
+) -> dict[str, Any]:
+    if key in usage_attrs:
+        return usage_attrs
+    coerced = _coerce_int(value)
+    if coerced is not None:
+        usage_attrs[key] = coerced
+    return usage_attrs
+
+
+def _flatten_openai_token_details(usage_model: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    prompt_details = usage_model.get("prompt_tokens_details") or {}
+    if isinstance(prompt_details, dict):
+        for key, value in prompt_details.items():
+            details_key = f"llm.input_{key}"
+            details[details_key] = _coerce_int(value)
+    completion_details = usage_model.get("completion_tokens_details") or {}
+    if isinstance(completion_details, dict):
+        for key, value in completion_details.items():
+            details_key = f"llm.output_{key}"
+            details[details_key] = _coerce_int(value)
+    return {k: v for k, v in details.items() if v is not None}
+
+
+def _flatten_vertex_token_details(usage_model: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    prompt_details = usage_model.get("prompt_tokens_details") or []
+    for item in prompt_details if isinstance(prompt_details, list) else []:
+        if not isinstance(item, dict):
+            continue
+        modality = item.get("modality")
+        token_count = _coerce_int(item.get("token_count"))
+        if modality and token_count is not None:
+            details[f"llm.input_modality_{modality}"] = token_count
+    candidates_details = usage_model.get("candidates_tokens_details") or []
+    for item in candidates_details if isinstance(candidates_details, list) else []:
+        if not isinstance(item, dict):
+            continue
+        modality = item.get("modality")
+        token_count = _coerce_int(item.get("token_count"))
+        if modality and token_count is not None:
+            details[f"llm.output_modality_{modality}"] = token_count
+    cache_details = usage_model.get("cache_tokens_details") or []
+    for item in cache_details if isinstance(cache_details, list) else []:
+        if not isinstance(item, dict):
+            continue
+        modality = item.get("modality")
+        token_count = _coerce_int(item.get("token_count"))
+        if modality and token_count is not None:
+            details[f"llm.cache_modality_{modality}"] = token_count
+    return details
+
+
+def _extract_generation_usage_metadata(response: Any) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    generations = _get_value(response, "generations") or []
+    for generation_list in generations:
+        for gen in generation_list:
+            generation_info = _get_value(gen, "generation_info")
+            if not generation_info:
+                generation_info = {}
+            usage_metadata = _get_value(generation_info, "usage_metadata")
+            if usage_metadata:
+                sources.append(_to_dict(usage_metadata))
+            message = _get_value(gen, "message")
+            response_metadata = _get_value(message, "response_metadata")
+            if response_metadata:
+                metadata_dict = _to_dict(response_metadata)
+                usage_from_message = metadata_dict.get("usage_metadata")
+                if usage_from_message:
+                    sources.append(_to_dict(usage_from_message))
+    return sources
+
+
+def _extract_response_usage_sources(response: Any) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    llm_output = _get_value(response, "llm_output")
+    if llm_output:
+        token_usage = _get_value(llm_output, "token_usage")
+        if token_usage:
+            sources.append(_to_dict(token_usage))
+        output_usage = _get_value(llm_output, "usage")
+        if output_usage:
+            sources.append(_to_dict(output_usage))
+        output_usage_metadata = _get_value(llm_output, "usage_metadata")
+        if output_usage_metadata:
+            sources.append(_to_dict(output_usage_metadata))
+    sources.extend(_extract_generation_usage_metadata(response))
+    usage = _get_value(response, "usage")
+    if usage:
+        sources.append(_to_dict(usage))
+    usage_metadata = _get_value(response, "usage_metadata")
+    if usage_metadata:
+        sources.append(_to_dict(usage_metadata))
+    meta = _get_value(response, "meta")
+    if meta:
+        tokens_info = _get_value(meta, "tokens")
+        if tokens_info:
+            sources.append(_to_dict(tokens_info))
+    return sources
+
+
+def _extract_token_details(usage_model: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    if (
+        "prompt_tokens_details" in usage_model
+        or "completion_tokens_details" in usage_model
+    ):
+        details.update(_flatten_openai_token_details(usage_model))
+    if (
+        "prompt_tokens_details" in usage_model
+        or "candidates_tokens_details" in usage_model
+        or "cache_tokens_details" in usage_model
+    ):
+        details.update(_flatten_vertex_token_details(usage_model))
+    return details
+
+
+def parse_usage_from_response(
+    response: Any, *, provider: Optional[str] = None, model: Optional[str] = None
+) -> dict[str, Any]:
+    """
+    Parse token usage from a response object, normalized across providers.
+
+    Returns attributes like:
+    - llm.input_tokens
+    - llm.output_tokens
+    - llm.total_tokens
+    - llm.input_cached_tokens
+    - llm.output_reasoning_tokens
+    - llm.input_modality_TEXT
+    """
+    _ = provider, model
+    usage_attrs: dict[str, Any] = {}
+    sources = _extract_response_usage_sources(response)
+    for usage_model in sources:
+        if not isinstance(usage_model, dict) or not usage_model:
+            continue
+        normalized = _apply_usage_key_conversions(usage_model)
+        usage_attrs = _set_usage_attr(
+            usage_attrs, "llm.input_tokens", normalized.get("input_tokens")
+        )
+        usage_attrs = _set_usage_attr(
+            usage_attrs, "llm.output_tokens", normalized.get("output_tokens")
+        )
+        usage_attrs = _set_usage_attr(
+            usage_attrs, "llm.total_tokens", normalized.get("total_tokens")
+        )
+        details = _extract_token_details(usage_model)
+        for key, value in details.items():
+            if key not in usage_attrs and value is not None:
+                usage_attrs[key] = value
+    return usage_attrs
+
+
 def extract_llm_metadata(response: Any) -> dict[str, Any]:
     """
     Extract metadata from LLM response objects.
