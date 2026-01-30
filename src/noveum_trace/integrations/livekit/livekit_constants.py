@@ -28,6 +28,15 @@ AUDIO_DURATION_MS_DEFAULT_VALUE = 0.0
 SYSTEM_PROMPT_MAX_WAIT_SECONDS = 5.0
 SYSTEM_PROMPT_CHECK_INTERVAL_SECONDS = 0.1
 
+# Default values for LLM attributes
+LLM_RESPONSE_DEFAULT_VALUE = ""
+LLM_MODEL_DEFAULT_VALUE = "unknown"
+LLM_PROVIDER_DEFAULT_VALUE = "unknown"
+LLM_REQUEST_ID_DEFAULT_VALUE = None
+LLM_TEMPERATURE_DEFAULT_VALUE = None
+LLM_TOP_P_DEFAULT_VALUE = None
+LLM_MAX_TOKENS_DEFAULT_VALUE = None
+
 # Maximum buffer sizes to prevent memory growth and oversized attributes
 # Note: Larger values allow more context but increase memory usage and attribute sizes
 MAX_CONVERSATION_HISTORY = 1000  # Increased for larger conversation context

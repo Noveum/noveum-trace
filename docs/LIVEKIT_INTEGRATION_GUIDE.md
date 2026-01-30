@@ -488,7 +488,43 @@ traced_tts = LiveKitTTSWrapper(
 # Use traced_tts everywhere you would use tts
 ```
 
-### Step 6: Use in Your Agent
+### Step 6: Wrap Your LLM Provider
+
+**Before (without tracing):**
+
+```python
+llm = openai.LLM(
+    model="gpt-4o-mini",
+    temperature=0.7,
+)
+```
+
+**After (with tracing):**
+
+```python
+from livekit.plugins import openai
+from noveum_trace.integrations.livekit import LiveKitLLMWrapper
+
+# Create base LLM
+base_llm = openai.LLM(
+    model="gpt-4o-mini",
+    temperature=0.7,
+)
+
+# Wrap it
+traced_llm = LiveKitLLMWrapper(
+    llm=base_llm,
+    session_id=ctx.job.id,
+    job_context={
+        "job_id": ctx.job.id,
+        "room_name": ctx.room.name,
+    }
+)
+
+# Use traced_llm everywhere you would use llm
+```
+
+### Step 7: Use in Your Agent
 
 The wrappers are **drop-in replacements** for the original providers:
 
@@ -500,11 +536,13 @@ async def entrypoint(ctx: JobContext):
         # Wrap providers
         traced_stt = LiveKitSTTWrapper(...)
         traced_tts = LiveKitTTSWrapper(...)
+        traced_llm = LiveKitLLMWrapper(...)
         
         # Create agent session with traced providers
         session = AgentSession(
             stt=traced_stt,  # ✅ Use traced version
             tts=traced_tts,  # ✅ Use traced version
+            llm=traced_llm,  # ✅ Use traced version
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
         )
