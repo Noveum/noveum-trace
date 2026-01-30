@@ -533,6 +533,7 @@ The wrappers are **drop-in replacements** for the original providers:
 
 ```python
 from livekit.agents.voice import AgentSession
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 
 async def entrypoint(ctx: JobContext):
     with noveum_trace.start_trace(f"session_{ctx.job.id}"):
@@ -549,7 +550,7 @@ async def entrypoint(ctx: JobContext):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
         )
-        
+        setup_livekit_tracing(session)
         # Connect and start
         await ctx.connect()
         await session.start()
