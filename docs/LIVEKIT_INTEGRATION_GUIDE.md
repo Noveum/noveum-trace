@@ -181,11 +181,13 @@ These components are designed to work together - session tracing creates the tra
 - `llm.function_outputs`: Function outputs (when merged)
 
 **Full Conversation Audio** (`livekit.full_conversation`):
-- `stt.audio_uuid`: UUID for audio retrieval
-- `stt.audio_format`: "ogg"
-- `stt.audio_channels`: "stereo"
-- `stt.audio_channel_left`: "user"
-- `stt.audio_channel_right`: "agent"
+- `full_conversation.audio_uuid`: UUID for audio retrieval
+- `full_conversation.audio_format`: "ogg"
+- `full_conversation.audio_channels`: "stereo"
+- `full_conversation.audio_channel_left`: "user"
+- `full_conversation.audio_channel_right`: "agent"
+- `full_conversation.audio_source`: "livekit_recorder_io"
+- `full_conversation.audio_description`: "Full conversation - stereo recording (left=user, right=agent)"
 
 ---
 
@@ -341,12 +343,13 @@ The full conversation creates a span like:
 {
   "name": "livekit.full_conversation",
   "attributes": {
-    "stt.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
-    "stt.audio_format": "ogg",
-    "stt.audio_channels": "stereo",
-    "stt.audio_channel_left": "user",
-    "stt.audio_channel_right": "agent",
-    "stt.audio_source": "livekit_recorder_io"
+    "full_conversation.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
+    "full_conversation.audio_format": "ogg",
+    "full_conversation.audio_channels": "stereo",
+    "full_conversation.audio_channel_left": "user",
+    "full_conversation.audio_channel_right": "agent",
+    "full_conversation.audio_source": "livekit_recorder_io",
+    "full_conversation.audio_description": "Full conversation - stereo recording (left=user, right=agent)"
   }
 }
 ```
