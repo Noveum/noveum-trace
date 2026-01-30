@@ -181,11 +181,13 @@ These components are designed to work together - session tracing creates the tra
 - `llm.function_outputs`: Function outputs (when merged)
 
 **Full Conversation Audio** (`livekit.full_conversation`):
-- `stt.audio_uuid`: UUID for audio retrieval
-- `stt.audio_format`: "ogg"
-- `stt.audio_channels`: "stereo"
-- `stt.audio_channel_left`: "user"
-- `stt.audio_channel_right`: "agent"
+- `full_conversation.audio_uuid`: UUID for audio retrieval
+- `full_conversation.audio_format`: "ogg"
+- `full_conversation.audio_channels`: "stereo"
+- `full_conversation.audio_channel_left`: "user"
+- `full_conversation.audio_channel_right`: "agent"
+- `full_conversation.audio_source`: "livekit_recorder_io"
+- `full_conversation.audio_description`: "Full conversation - stereo recording (left=user, right=agent)"
 
 ---
 
@@ -341,12 +343,13 @@ The full conversation creates a span like:
 {
   "name": "livekit.full_conversation",
   "attributes": {
-    "stt.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
-    "stt.audio_format": "ogg",
-    "stt.audio_channels": "stereo",
-    "stt.audio_channel_left": "user",
-    "stt.audio_channel_right": "agent",
-    "stt.audio_source": "livekit_recorder_io"
+    "full_conversation.audio_uuid": "e37942f0-77b6-4380-a652-defd33e60b7e",
+    "full_conversation.audio_format": "ogg",
+    "full_conversation.audio_channels": "stereo",
+    "full_conversation.audio_channel_left": "user",
+    "full_conversation.audio_channel_right": "agent",
+    "full_conversation.audio_source": "livekit_recorder_io",
+    "full_conversation.audio_description": "Full conversation - stereo recording (left=user, right=agent)"
   }
 }
 ```
@@ -488,27 +491,66 @@ traced_tts = LiveKitTTSWrapper(
 # Use traced_tts everywhere you would use tts
 ```
 
-### Step 6: Use in Your Agent
+### Step 6: Wrap Your LLM Provider
+
+**Before (without tracing):**
+
+```python
+llm = openai.LLM(
+    model="gpt-4o-mini",
+    temperature=0.7,
+)
+```
+
+**After (with tracing):**
+
+```python
+from livekit.plugins import openai
+from noveum_trace.integrations.livekit import LiveKitLLMWrapper
+
+# Create base LLM
+base_llm = openai.LLM(
+    model="gpt-4o-mini",
+    temperature=0.7,
+)
+
+# Wrap it
+traced_llm = LiveKitLLMWrapper(
+    llm=base_llm,
+    session_id=ctx.job.id,
+    job_context={
+        "job_id": ctx.job.id,
+        "room_name": ctx.room.name,
+    }
+)
+
+# Use traced_llm everywhere you would use llm
+```
+
+### Step 7: Use in Your Agent
 
 The wrappers are **drop-in replacements** for the original providers:
 
 ```python
 from livekit.agents.voice import AgentSession
+from noveum_trace.integrations.livekit import setup_livekit_tracing
 
 async def entrypoint(ctx: JobContext):
     with noveum_trace.start_trace(f"session_{ctx.job.id}"):
         # Wrap providers
         traced_stt = LiveKitSTTWrapper(...)
         traced_tts = LiveKitTTSWrapper(...)
+        traced_llm = LiveKitLLMWrapper(...)
         
         # Create agent session with traced providers
         session = AgentSession(
             stt=traced_stt,  # ✅ Use traced version
             tts=traced_tts,  # ✅ Use traced version
+            llm=traced_llm,  # ✅ Use traced version
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
         )
-        
+        setup_livekit_tracing(session)
         # Connect and start
         await ctx.connect()
         await session.start()

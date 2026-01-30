@@ -19,10 +19,11 @@ event system. Optionally, you can also wrap STT/TTS providers for individual ope
 See docs/examples/livekit_integration_example.py for complete usage examples.
 """
 
+# Import STT/TTS/LLM wrappers
+from noveum_trace.integrations.livekit.livekit_llm import LiveKitLLMWrapper
+
 # Import session tracing (recommended for AgentSession)
 from noveum_trace.integrations.livekit.livekit_session import setup_livekit_tracing
-
-# Import STT/TTS wrappers
 from noveum_trace.integrations.livekit.livekit_stt import LiveKitSTTWrapper
 from noveum_trace.integrations.livekit.livekit_tts import LiveKitTTSWrapper
 
@@ -32,9 +33,10 @@ from noveum_trace.integrations.livekit.livekit_utils import extract_job_context
 __all__ = [
     # Session tracing (recommended)
     "setup_livekit_tracing",
-    # STT/TTS Wrappers
+    # STT/TTS/LLM Wrappers
     "LiveKitSTTWrapper",
     "LiveKitTTSWrapper",
+    "LiveKitLLMWrapper",
     # Utility functions
     "extract_job_context",
 ]

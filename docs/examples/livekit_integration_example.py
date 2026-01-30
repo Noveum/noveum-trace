@@ -7,13 +7,16 @@ This example demonstrates a realistic drive-thru ordering agent that:
 - Integrates with LiveKit for STT/TTS
 - Automatically traces all operations with noveum-trace
 
-Features (via setup_livekit_tracing):
+Features (via wrappers and setup_livekit_tracing):
 - Chat history tracked in generation spans
 - Function calls captured in session events (same span as LLM call)
 - Available tools extracted from agent
 - Full conversation audio uploaded at session end (stereo OGG)
 - Per-utterance STT/TTS audio captured via wrappers
-- LLM metrics (tokens, cost, latency) captured from LiveKit events
+- Comprehensive LLM data captured via LiveKitLLMWrapper:
+    - Full chat context, sampling parameters, response text, tool calls
+    - Token usage (including cached tokens), timing metrics, cost calculations
+- LLM metrics (tokens, cost, latency) also captured from LiveKit events
 
 Two modes:
 - Default: Runs with dummy inputs/outputs (text simulation)
@@ -69,6 +72,7 @@ from pydantic import Field
 
 import noveum_trace
 from noveum_trace.integrations.livekit import (
+    LiveKitLLMWrapper,
     LiveKitSTTWrapper,
     LiveKitTTSWrapper,
     setup_livekit_tracing,
@@ -427,6 +431,14 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     All tracing is automatic:
     - LiveKitSTTWrapper: Creates stt.stream spans with per-utterance audio + transcript
     - LiveKitTTSWrapper: Creates tts.stream spans with per-utterance audio + input text
+    - LiveKitLLMWrapper: Creates llm.chat spans with comprehensive LLM data:
+        - Full chat context (messages, system prompt)
+        - All sampling parameters (temperature, top_p, etc.)
+        - Complete response text and tool calls
+        - Token usage (including cached tokens)
+        - Timing metrics (TTFT, duration, tokens/sec)
+        - Cost calculations
+        - All metadata
     - setup_livekit_tracing: Handles session events including:
         - LLM generation events with chat history and available tools
         - Function calls merged into generation spans (not separate spans)
@@ -458,15 +470,21 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     order = Order()
     userdata = Userdata(order=order)
 
-    # Create LLM (setup_livekit_tracing handles LLM tracing via session events)
-    # It captures: available tools, chat history, function calls, LLM metrics
-    llm = openai_plugin.LLM(model="gpt-4o-mini", temperature=0.7)
+    # Create LLM provider and wrap with tracing
+    # The wrapper captures comprehensive per-call LLM data:
+    # - Full chat context, sampling parameters, response text, tool calls
+    # - Token usage, timing metrics, cost calculations
+    # This works alongside setup_livekit_tracing for maximum observability
+    base_llm = openai_plugin.LLM(model="gpt-4o-mini", temperature=0.7)
+    traced_llm = LiveKitLLMWrapper(
+        llm=base_llm, session_id=session_id, job_context=job_context
+    )
 
-    # Create agent session with wrapped STT/TTS providers
+    # Create agent session with wrapped STT/TTS/LLM providers
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=traced_stt,
-        llm=llm,
+        llm=traced_llm,  # ✅ Use traced LLM wrapper
         tts=traced_tts,
     )
 

@@ -969,13 +969,13 @@ class _LiveKitTracingManager:
 
     def _build_full_conversation_attributes(self, audio_uuid: str) -> dict[str, Any]:
         attributes: dict[str, Any] = {
-            "stt.audio_uuid": audio_uuid,
-            "stt.audio_format": "ogg",
-            "stt.audio_channels": "stereo",
-            "stt.audio_channel_left": "user",
-            "stt.audio_channel_right": "agent",
-            "stt.audio_source": "livekit_recorder_io",
-            "stt.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
+            "full_conversation.audio_uuid": audio_uuid,
+            "full_conversation.audio_format": "ogg",
+            "full_conversation.audio_channels": "stereo",
+            "full_conversation.audio_channel_left": "user",
+            "full_conversation.audio_channel_right": "agent",
+            "full_conversation.audio_source": "livekit_recorder_io",
+            "full_conversation.audio_description": "Full conversation - stereo recording (left=user, right=agent)",
         }
 
         if self._available_tools:
