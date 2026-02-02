@@ -287,8 +287,17 @@ def download_image_from_url(url: str) -> Optional[tuple[bytes, str]]:
             # img.format can be None, so handle that case
             img_format = format_map.get(img.format or "JPEG", "jpeg")
         except Exception:
-            # If PIL can't detect, try from Content-Type header
+            # If PIL can't detect, validate Content-Type header
             content_type = response.headers.get("content-type", "").lower()
+
+            # Validate that content-type starts with "image/"
+            if not content_type or not content_type.startswith("image/"):
+                raise ValueError(
+                    f"Invalid or missing image content-type. "
+                    f"Expected 'image/*', got: {content_type or 'None'}"
+                ) from None
+
+            # Extract image subtype and map to format
             if "png" in content_type:
                 img_format = "png"
             elif "jpeg" in content_type or "jpg" in content_type:
@@ -298,8 +307,13 @@ def download_image_from_url(url: str) -> Optional[tuple[bytes, str]]:
             elif "webp" in content_type:
                 img_format = "webp"
             else:
-                # Default to jpeg if we can't determine
-                img_format = "jpeg"
+                # If subtype is not recognized but starts with "image/", extract it
+                # content_type might be like "image/svg+xml" or other formats
+                subtype = content_type.split("/")[1].split(";")[0].strip()
+                raise ValueError(
+                    f"Unsupported image format: {subtype}. "
+                    f"Supported formats: png, jpeg, gif, webp"
+                ) from None
 
         return (image_bytes, img_format)
 

@@ -1059,12 +1059,21 @@ class HttpTransport:
                 )
             }
 
+            # Sanitize metadata to prevent overwriting reserved fields
+            reserved_keys = {"traceId", "spanId", "image_uuid"}
+            sanitized_metadata = {}
+            for key, value in metadata.items():
+                if key in reserved_keys:
+                    sanitized_metadata[f"metadata_{key}"] = value
+                else:
+                    sanitized_metadata[key] = value
+
             data = {
                 "traceId": trace_id,  # API expects camelCase
                 "spanId": span_id,  # API expects camelCase
                 "image_uuid": image_uuid,
                 "timestamp": image_item.get("timestamp"),
-                **metadata,
+                **sanitized_metadata,
             }
 
             # Send request

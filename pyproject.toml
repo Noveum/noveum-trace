@@ -80,6 +80,9 @@ dev = [
     "types-requests>=2.25.0",
     "types-PyYAML>=6.0.0",
     "types-Pillow>=9.0.0",
+    
+    # Runtime dependencies for type stubs
+    "Pillow>=9.0.0",
 
     # Framework integrations for testing
     "openai>=1.0.0",
