@@ -82,8 +82,7 @@ class TestLangChainIntegration:
 
                     assert trace == mock_trace
                     assert should_manage is True
-                    mock_client.start_trace.assert_called_once_with(
-                        "test_operation")
+                    mock_client.start_trace.assert_called_once_with("test_operation")
                     mock_set_current.assert_called_once_with(mock_trace)
 
             # Test using existing trace
@@ -116,8 +115,7 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             # Test various operation types
-            assert get_operation_name(
-                "llm_start", {"name": "gpt-4"}) == "llm.gpt-4"
+            assert get_operation_name("llm_start", {"name": "gpt-4"}) == "llm.gpt-4"
             assert (
                 get_operation_name("chain_start", {"name": "my_chain"})
                 == "chain.my_chain"
@@ -176,8 +174,7 @@ class TestLangChainIntegration:
                     )
 
                     # Should create trace for standalone LLM call
-                    mock_client.start_trace.assert_called_once_with(
-                        "llm.openai")
+                    mock_client.start_trace.assert_called_once_with("llm.openai")
                     mock_client.start_span.assert_called_once()
 
                     # Check span attributes
@@ -191,8 +188,7 @@ class TestLangChainIntegration:
                     # Check that input prompts were set via set_attributes
                     mock_span.set_attributes.assert_called()
                     set_attrs_call = mock_span.set_attributes.call_args[0][0]
-                    assert set_attrs_call["llm.input.prompts"] == [
-                        "Hello world"]
+                    assert set_attrs_call["llm.input.prompts"] == ["Hello world"]
                     assert set_attrs_call["llm.input.prompt_count"] == 1
 
                     assert len(handler.runs) == 1
@@ -209,8 +205,7 @@ class TestLangChainIntegration:
             mock_span = Mock()
             # Set up span with required attributes
             mock_span.start_time = datetime.now(timezone.utc)
-            mock_span.attributes = {
-                "llm.provider": "openai", "llm.model": "gpt-4"}
+            mock_span.attributes = {"llm.provider": "openai", "llm.model": "gpt-4"}
 
             mock_get_client.return_value = mock_client
 
@@ -303,8 +298,7 @@ class TestLangChainIntegration:
                     )
 
                     # Should create trace and span
-                    mock_client.start_trace.assert_called_once_with(
-                        "chain.llm_chain")
+                    mock_client.start_trace.assert_called_once_with("chain.llm_chain")
                     mock_client.start_span.assert_called_once()
 
                     # Chain end
@@ -316,8 +310,7 @@ class TestLangChainIntegration:
                     mock_span.set_attributes.assert_called()
                     mock_span.set_status.assert_called_once()
                     mock_client.finish_span.assert_called_once_with(mock_span)
-                    mock_client.finish_trace.assert_called_once_with(
-                        mock_trace)
+                    mock_client.finish_trace.assert_called_once_with(mock_trace)
 
     def test_no_client_graceful_handling(self):
         """Test that operations are gracefully handled when no client is available."""
@@ -354,8 +347,7 @@ class TestLangChainIntegration:
             assert extract_model_name(serialized) == "gpt-4-turbo"
 
             # Test with provider from id path
-            serialized = {
-                "id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
             assert extract_model_name(serialized) == "openai"
 
             # Test fallback to class name
@@ -371,8 +363,7 @@ class TestLangChainIntegration:
             assert extract_model_name(serialized) == "unknown"
 
             # Test with no name in serialized
-            serialized = {
-                "id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
             assert extract_model_name(serialized) == "openai"
 
     def test_extract_agent_type(self):
@@ -388,8 +379,7 @@ class TestLangChainIntegration:
             assert extract_agent_type(serialized) == "react"
 
             # Test with different agent type
-            serialized = {"id": ["langchain", "agents",
-                                 "zero_shot", "ZeroShotAgent"]}
+            serialized = {"id": ["langchain", "agents", "zero_shot", "ZeroShotAgent"]}
             assert extract_agent_type(serialized) == "zero_shot"
 
             # Test empty/None serialized
@@ -467,8 +457,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             handler.on_llm_start(
-                serialized={"name": "gpt-4",
-                            "kwargs": {"model": "gpt-4-turbo"}},
+                serialized={"name": "gpt-4", "kwargs": {"model": "gpt-4-turbo"}},
                 prompts=["Hello world", "How are you?"],
                 run_id=run_id,
             )
@@ -482,7 +471,9 @@ class TestLangChainIntegration:
             mock_span.set_attributes.assert_called()
             set_attrs_call = mock_span.set_attributes.call_args[0][0]
             assert set_attrs_call["llm.input.prompts"] == [
-                "Hello world", "How are you?"]
+                "Hello world",
+                "How are you?",
+            ]
             assert set_attrs_call["llm.input.prompt_count"] == 2
 
     def test_llm_end_with_new_attributes(self):
@@ -495,8 +486,7 @@ class TestLangChainIntegration:
             mock_span = Mock()
             # Set up span with required attributes
             mock_span.start_time = datetime.now(timezone.utc)
-            mock_span.attributes = {
-                "llm.provider": "openai", "llm.model": "gpt-4"}
+            mock_span.attributes = {"llm.provider": "openai", "llm.model": "gpt-4"}
 
             mock_get_client.return_value = mock_client
 
@@ -605,8 +595,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             handler.on_tool_start(
-                serialized={"name": "WebSearchTool",
-                            "kwargs": {"name": "search_web"}},
+                serialized={"name": "WebSearchTool", "kwargs": {"name": "search_web"}},
                 input_str="What is the capital of France?",
                 run_id=run_id,
             )
@@ -637,8 +626,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler.runs[run_id] = mock_span
 
-            handler.on_tool_end(
-                output="Paris is the capital of France.", run_id=run_id)
+            handler.on_tool_end(output="Paris is the capital of France.", run_id=run_id)
 
             # Check new output attributes structure
             call_args = mock_span.set_attributes.call_args
@@ -828,10 +816,8 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             # Test LLM operation name with model extraction
-            serialized = {"name": "ChatOpenAI",
-                          "kwargs": {"model": "gpt-4-turbo"}}
-            assert get_operation_name(
-                "llm_start", serialized) == "llm.gpt-4-turbo"
+            serialized = {"name": "ChatOpenAI", "kwargs": {"model": "gpt-4-turbo"}}
+            assert get_operation_name("llm_start", serialized) == "llm.gpt-4-turbo"
 
             # Test fallback to provider
             serialized = {
@@ -1058,8 +1044,7 @@ class TestLangChainIntegration:
             mock_span = Mock()
             # Set up span with required attributes
             mock_span.start_time = datetime.now(timezone.utc)
-            mock_span.attributes = {
-                "llm.provider": "openai", "llm.model": "gpt-4"}
+            mock_span.attributes = {"llm.provider": "openai", "llm.model": "gpt-4"}
 
             mock_get_client.return_value = mock_client
 
@@ -1147,8 +1132,7 @@ class TestLangChainIntegration:
             mock_span = Mock()
             # Set up span with required attributes
             mock_span.start_time = datetime.now(timezone.utc)
-            mock_span.attributes = {
-                "llm.provider": "openai", "llm.model": "gpt-4"}
+            mock_span.attributes = {"llm.provider": "openai", "llm.model": "gpt-4"}
 
             mock_get_client.return_value = mock_client
 
@@ -1330,8 +1314,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             # Mock client to raise exception
-            mock_client.start_span.side_effect = Exception(
-                "Span creation failed")
+            mock_client.start_span.side_effect = Exception("Span creation failed")
 
             # Mock agent action
             mock_action = Mock()
@@ -1444,8 +1427,7 @@ class TestLangChainIntegration:
             assert name == "chain.node"
 
             # Test with missing name
-            serialized = {
-                "id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
+            serialized = {"id": ["langchain", "chat_models", "openai", "ChatOpenAI"]}
             name = get_operation_name("llm_start", serialized)
             assert name == "llm.openai"
 
@@ -1470,8 +1452,7 @@ class TestLangChainIntegration:
             # Test with tools that have no name
             mock_tool = Mock()
             mock_tool.name = None
-            serialized = {"name": "test_agent",
-                          "kwargs": {"tools": [mock_tool]}}
+            serialized = {"name": "test_agent", "kwargs": {"tools": [mock_tool]}}
             capabilities = extract_agent_capabilities(serialized)
             assert "tool_usage" in capabilities
 
@@ -1727,8 +1708,7 @@ class TestLangChainIntegration:
             assert call_args[1]["name"] == "custom_tool_name"
 
             # Verify name was stored
-            assert handler._get_span_id_by_name(
-                "custom_tool_name") == "tool_span_id"
+            assert handler._get_span_id_by_name("custom_tool_name") == "tool_span_id"
 
     def test_parent_name_resolution(self):
         """Test parent span resolution by custom name."""
@@ -1758,8 +1738,7 @@ class TestLangChainIntegration:
             with patch(
                 "noveum_trace.integrations.langchain.langchain.logger"
             ) as mock_logger:
-                parent_id = handler._get_parent_span_id_from_name(
-                    "nonexistent_parent")
+                parent_id = handler._get_parent_span_id_from_name("nonexistent_parent")
 
                 assert parent_id is None
                 mock_logger.warning.assert_called_once()
@@ -1776,12 +1755,10 @@ class TestLangChainIntegration:
 
             NoveumTraceCallbackHandler()
 
-            metadata = {"noveum": {"name": "custom_name",
-                                   "parent_name": "parent_span"}}
+            metadata = {"noveum": {"name": "custom_name", "parent_name": "parent_span"}}
 
             result = extract_noveum_metadata(metadata)
-            assert result == {"name": "custom_name",
-                              "parent_name": "parent_span"}
+            assert result == {"name": "custom_name", "parent_name": "parent_span"}
 
     def test_extract_noveum_metadata_with_custom_fields(self):
         """Test noveum metadata extraction with custom fields."""
@@ -1884,8 +1861,7 @@ class TestLangChainIntegration:
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            metadata = {"noveum": {
-                "name": "test_name", "parent_name": "parent"}}
+            metadata = {"noveum": {"name": "test_name", "parent_name": "parent"}}
 
             with patch(
                 "noveum_trace.core.context.get_current_trace"
@@ -1970,8 +1946,7 @@ class TestLangChainIntegration:
 
                     # Verify name was stored
                     assert (
-                        handler._get_span_id_by_name(
-                            "stored_name") == "stored_span_id"
+                        handler._get_span_id_by_name("stored_name") == "stored_span_id"
                     )
                     assert "stored_name" in handler.names
 
@@ -1983,8 +1958,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=False)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
 
             # Set up parent span with custom name
             handler._set_name("parent_span", "parent_span_id")
@@ -2005,8 +1979,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             # Set up parent span
             mock_parent_span = Mock()
@@ -2028,8 +2001,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             # Set up parent span
             mock_parent_span = Mock()
@@ -2048,8 +2020,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             # Set up parent span with custom name
             handler._set_name("parent_span", "parent_span_id")
@@ -2065,8 +2036,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             # Mock current span in context
             mock_current_span = Mock()
@@ -2096,8 +2066,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             with patch(
                 "noveum_trace.core.context.get_current_span"
@@ -2130,8 +2099,7 @@ class TestLangChainIntegration:
             handler._set_name("manual_parent", "parent_via_name")
 
             # When both are available, parent_run_id should win
-            parent_id = handler._resolve_parent_span_id(
-                parent_run_id, "manual_parent")
+            parent_id = handler._resolve_parent_span_id(parent_run_id, "manual_parent")
             assert parent_id == "parent_via_run_id"
 
     def test_prioritize_manual_parents_enabled(self):
@@ -2156,8 +2124,7 @@ class TestLangChainIntegration:
             handler._set_name("manual_parent", "parent_via_name")
 
             # When both are available, parent_name should win
-            parent_id = handler._resolve_parent_span_id(
-                parent_run_id, "manual_parent")
+            parent_id = handler._resolve_parent_span_id(parent_run_id, "manual_parent")
             assert parent_id == "parent_via_name"
 
     def test_prioritize_manual_parents_fallback_to_run_id(self):
@@ -2441,8 +2408,7 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             # Test with invalid data types
-            result = extract_langgraph_metadata(
-                "invalid", "invalid", "invalid")
+            result = extract_langgraph_metadata("invalid", "invalid", "invalid")
 
             # Should return safe defaults
             assert result["is_langgraph"] is False
@@ -2457,8 +2423,7 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"node_name": "research_node"}
-            result = get_langgraph_operation_name(
-                langgraph_metadata, "unknown")
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.node.research_node"
 
@@ -2471,8 +2436,7 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"graph_name": "research_graph"}
-            result = get_langgraph_operation_name(
-                langgraph_metadata, "unknown")
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.research_graph"
 
@@ -2485,8 +2449,7 @@ class TestLangChainIntegration:
             NoveumTraceCallbackHandler()
 
             langgraph_metadata = {"step": 5}
-            result = get_langgraph_operation_name(
-                langgraph_metadata, "unknown")
+            result = get_langgraph_operation_name(langgraph_metadata, "unknown")
 
             assert result == "graph.node.step_5"
 
@@ -2583,8 +2546,7 @@ class TestLangChainIntegration:
                     handler.start_trace("test_trace")
 
                     # Verify trace was created and set in context
-                    mock_client.start_trace.assert_called_once_with(
-                        "test_trace")
+                    mock_client.start_trace.assert_called_once_with("test_trace")
                     mock_set_current.assert_called_once_with(mock_trace)
 
                     # Verify manual control flags
@@ -2613,8 +2575,7 @@ class TestLangChainIntegration:
                     handler.end_trace()
 
                     # Verify trace was finished and cleared from context
-                    mock_client.finish_trace.assert_called_once_with(
-                        mock_trace)
+                    mock_client.finish_trace.assert_called_once_with(mock_trace)
                     mock_set_current.assert_called_once_with(None)
 
                     # Verify manual control flags reset
@@ -2648,8 +2609,7 @@ class TestLangChainIntegration:
                     handler.start_trace("new_trace")
 
                     # Verify new trace was created and set
-                    mock_client.start_trace.assert_called_once_with(
-                        "new_trace")
+                    mock_client.start_trace.assert_called_once_with("new_trace")
                     mock_set_current.assert_called_once_with(new_trace)
 
                     # Verify manual control flags are set
@@ -2675,8 +2635,7 @@ class TestLangChainIntegration:
                     handler.end_trace()
 
                     # Should log an error instead of raising
-                    mock_logger.error.assert_called_once_with(
-                        "No active trace to end")
+                    mock_logger.error.assert_called_once_with("No active trace to end")
 
     def test_manual_trace_disables_auto_finish(self):
         """Test that manual trace control disables auto-finish."""
@@ -2773,8 +2732,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             with patch.object(handler, "_handle_routing_decision") as mock_handle:
-                payload = {"source_node": "research",
-                           "target_node": "analysis"}
+                payload = {"source_node": "research", "target_node": "analysis"}
 
                 handler.on_custom_event(
                     name="langgraph.routing_decision", data=payload, run_id=run_id
@@ -2802,8 +2760,7 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = mock_trace
 
-                payload = {"source_node": "research",
-                           "target_node": "analysis"}
+                payload = {"source_node": "research", "target_node": "analysis"}
 
                 handler._handle_routing_decision(payload, run_id)
 
@@ -2890,11 +2847,9 @@ class TestLangChainIntegration:
             assert result["routing.tool_scores"] == str(payload["tool_scores"])
             assert result["routing.score.analyzer"] == 0.9
             assert result["routing.score.classifier"] == 0.7
-            assert result["routing.alternatives"] == str(
-                payload["alternatives"])
+            assert result["routing.alternatives"] == str(payload["alternatives"])
             assert result["routing.alternatives_count"] == 2
-            assert result["routing.state_snapshot"] == str(
-                payload["state_snapshot"])
+            assert result["routing.state_snapshot"] == str(payload["state_snapshot"])
 
     def test_routing_span_with_parent(self):
         """Test routing span creation with parent span."""
@@ -2921,8 +2876,7 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = mock_trace
 
-                payload = {"source_node": "research",
-                           "target_node": "analysis"}
+                payload = {"source_node": "research", "target_node": "analysis"}
 
                 handler._handle_routing_decision(payload, run_id)
 
@@ -2950,8 +2904,7 @@ class TestLangChainIntegration:
             ) as mock_get_current:
                 mock_get_current.return_value = mock_trace
 
-                payload = {"source_node": "research",
-                           "target_node": "analysis"}
+                payload = {"source_node": "research", "target_node": "analysis"}
 
                 handler._handle_routing_decision(payload, run_id)
 
@@ -2966,8 +2919,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=False)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
 
             assert handler._use_langchain_assigned_parent is False
             assert handler._manual_trace_control is False
@@ -2981,8 +2933,7 @@ class TestLangChainIntegration:
             mock_client = Mock()
             mock_get_client.return_value = mock_client
 
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
 
             assert handler._use_langchain_assigned_parent is True
             assert handler._manual_trace_control is False
@@ -2997,14 +2948,12 @@ class TestLangChainIntegration:
             mock_get_client.return_value = mock_client
 
             # Test with use_langchain_assigned_parent=True
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=True)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=True)
             repr_str = repr(handler)
             assert "use_langchain_parent=True" in repr_str
 
             # Test with use_langchain_assigned_parent=False
-            handler = NoveumTraceCallbackHandler(
-                use_langchain_assigned_parent=False)
+            handler = NoveumTraceCallbackHandler(use_langchain_assigned_parent=False)
             repr_str = repr(handler)
             assert "use_langchain_parent=False" in repr_str
 
@@ -3046,8 +2995,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             handler.on_tool_start(
-                serialized={"name": "calculator",
-                            "kwargs": {"name": "calculate"}},
+                serialized={"name": "calculator", "kwargs": {"name": "calculate"}},
                 input_str="2+2",
                 run_id=run_id,
                 inputs={"expression": "2+2", "precision": 2},
@@ -3070,8 +3018,7 @@ class TestLangChainIntegration:
             mock_span = Mock()
             # Set up span with required attributes
             mock_span.start_time = datetime.now(timezone.utc)
-            mock_span.attributes = {
-                "llm.provider": "openai", "llm.model": "gpt-4"}
+            mock_span.attributes = {"llm.provider": "openai", "llm.model": "gpt-4"}
 
             mock_get_client.return_value = mock_client
 
@@ -3247,8 +3194,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             with patch(
@@ -3289,8 +3235,7 @@ class TestLangChainIntegration:
             handler._set_name("parent_agent", "parent_span_123")
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             with patch(
@@ -3327,8 +3272,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             with patch(
@@ -3465,8 +3409,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             # Should not raise an exception
@@ -3496,8 +3439,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             with patch(
@@ -3536,8 +3478,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
 
             mock_msg = Mock()
-            mock_msg.model_dump.return_value = {
-                "type": "human", "content": "test"}
+            mock_msg.model_dump.return_value = {"type": "human", "content": "test"}
             messages = [[mock_msg]]
 
             # Define tools in invocation_params
@@ -3600,8 +3541,7 @@ class TestLangChainIntegration:
             # Test with message that has dict() method (Pydantic v1 style)
             mock_msg_v1 = Mock(spec=[])  # No model_dump
             mock_msg_v1.dict = Mock(
-                return_value={"type": "human",
-                              "content": "Pydantic v1 message"}
+                return_value={"type": "human", "content": "Pydantic v1 message"}
             )
 
             # Test with message that has model_dump() method (Pydantic v2 style)
@@ -3627,8 +3567,7 @@ class TestLangChainIntegration:
                     # Verify messages were converted and set via set_attributes
                     mock_span.set_attributes.assert_called()
                     set_attrs_call = mock_span.set_attributes.call_args[0][0]
-                    messages_json = json.loads(
-                        set_attrs_call["llm.input.messages"])
+                    messages_json = json.loads(set_attrs_call["llm.input.messages"])
                     assert len(messages_json[0]) == 2
                     assert messages_json[0][0]["content"] == "Pydantic v1 message"
                     assert messages_json[0][1]["content"] == "Pydantic v2 message"
@@ -4002,6 +3941,5 @@ class TestLangChainIntegration:
             assert result == "chain.node"
 
             # Test with serialized missing name
-            result = handler._get_operation_name(
-                "tool_start", {"id": ["test"]})
+            result = handler._get_operation_name("tool_start", {"id": ["test"]})
             assert result == "tool.node"
