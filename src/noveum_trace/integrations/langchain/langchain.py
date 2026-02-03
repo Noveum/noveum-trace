@@ -157,6 +157,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         self._llm_tool_counts: dict[Union[UUID, str], dict[str, int]] = {}
         self._llm_tool_counts_lock = threading.Lock()
 
+        # Track active tools per trace (global count, not per-LLM)
+        # Maps root_run_id -> active_tool_count
+        self._trace_active_tool_counts: dict[Union[UUID, str], int] = {}
+        self._trace_active_tool_counts_lock = threading.Lock()
+
     def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
         with self._runs_lock:
@@ -270,6 +275,30 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         """Get the LLM run_id that generated this tool_call_id."""
         with self._tool_call_id_to_llm_lock:
             return self._tool_call_id_to_llm.get(tool_call_id)
+
+    def _increment_trace_tool_count(self, root_run_id: Union[UUID, str]) -> None:
+        """Increment active tool count for a trace."""
+        with self._trace_active_tool_counts_lock:
+            current = self._trace_active_tool_counts.get(root_run_id, 0)
+            self._trace_active_tool_counts[root_run_id] = current + 1
+            logger.debug(f"Trace {root_run_id} tool count: {current + 1}")
+
+    def _decrement_trace_tool_count(self, root_run_id: Union[UUID, str]) -> None:
+        """Decrement active tool count for a trace."""
+        with self._trace_active_tool_counts_lock:
+            current = self._trace_active_tool_counts.get(root_run_id, 0)
+            if current > 0:
+                self._trace_active_tool_counts[root_run_id] = current - 1
+                logger.debug(f"Trace {root_run_id} tool count: {current - 1}")
+            else:
+                logger.warning(
+                    f"Attempted to decrement tool count for trace {root_run_id} but it was already 0"
+                )
+
+    def _get_trace_tool_count(self, root_run_id: Union[UUID, str]) -> int:
+        """Get active tool count for a trace."""
+        with self._trace_active_tool_counts_lock:
+            return self._trace_active_tool_counts.get(root_run_id, 0)
 
     def _is_llm_span(self, run_id: Union[UUID, str]) -> bool:
         """Check if a run_id corresponds to an LLM span."""
@@ -736,6 +765,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     if self._llm_tool_counts.pop(llm_run_id, None) is not None:
                         llm_tool_counts_cleaned += 1
 
+            # Clean up trace tool counts
+            with self._trace_active_tool_counts_lock:
+                self._trace_active_tool_counts.pop(root_run_id, None)
+
             if removed_trace:
                 logger.debug(
                     f"Cleaned up tracking data for trace {getattr(removed_trace, 'trace_id', 'unknown')} "
@@ -1186,27 +1219,63 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         if self._manual_trace_control:
             return
 
-        if (
-            self._trace_managed_by_langchain and self._active_runs() == 0
-        ):  # No more active spans
-            # Find the root_run_id for cleanup before finishing
-            root_run_id = self._find_root_run_id_for_trace(
-                self._trace_managed_by_langchain
+        if not self._trace_managed_by_langchain:
+            return
+
+        root_run_id = self._find_root_run_id_for_trace(self._trace_managed_by_langchain)
+        if not root_run_id:
+            return
+
+        # Check trace-level tool count
+        active_tool_count = self._get_trace_tool_count(root_run_id)
+        if active_tool_count > 0:
+            # Tools still running
+            return
+
+        # Count remaining runs, excluding stuck LLMs
+        remaining_non_stuck_runs = 0
+        with self._runs_lock:
+            for run_id in list(self.runs.keys()):
+                # If not an LLM span, count it as non-stuck
+                if not self._is_llm_span(run_id):
+                    remaining_non_stuck_runs += 1
+                    continue
+
+                # Check if this LLM span is stuck waiting for tools
+                with self._llm_tool_counts_lock:
+                    if run_id not in self._llm_tool_counts:
+                        # No tool count tracking, not stuck
+                        remaining_non_stuck_runs += 1
+                        continue
+
+                    counts = self._llm_tool_counts[run_id]
+                    if counts["completed"] >= counts["expected"]:
+                        # All tools complete, not stuck
+                        remaining_non_stuck_runs += 1
+                        continue
+
+                    # This LLM is stuck
+                    logger.debug(
+                        f"LLM {run_id} is stuck: {counts['completed']}/{counts['expected']}"
+                    )
+
+        # If only stuck LLMs or no runs at all, finish the trace
+        if remaining_non_stuck_runs == 0:
+            logger.debug(
+                f"Finishing trace {root_run_id}: all tools complete, no non-stuck spans remaining"
             )
 
-            # Finish the trace
             if not self._ensure_client():
                 return
-            assert self._client is not None  # Type guard after _ensure_client
+            assert self._client is not None
             self._client.finish_trace(self._trace_managed_by_langchain)
             from noveum_trace.core.context import set_current_trace
 
             set_current_trace(None)
             self._trace_managed_by_langchain = None
 
-            # Clean up tracking dictionaries to prevent memory leaks
-            if root_run_id is not None:
-                self._cleanup_trace_tracking(root_run_id)
+            # Clean up tracking dictionaries
+            self._cleanup_trace_tracking(root_run_id)
 
     # LLM Events
     def on_llm_start(
@@ -2380,6 +2449,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     f"Identified fallback LLM {fallback_llm_run_id} for tool {run_id}"
                 )
 
+            # Increment trace-level tool count
+            root_run_id = self._find_root_run_id(run_id, parent_run_id)
+            self._increment_trace_tool_count(root_run_id)
+
             # Store pending tool call data (will be completed in on_tool_end/on_tool_error)
             self._set_pending_tool_call(run_id, tool_call_data)
 
@@ -2404,6 +2477,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
+            # Decrement trace-level tool count
+            root_run_id = self._find_root_run_id(run_id, parent_run_id)
+            self._decrement_trace_tool_count(root_run_id)
+
             # Extract tool_call_id from output (ToolMessage)
             tool_call_id = None
             if hasattr(output, "tool_call_id"):
@@ -2466,6 +2543,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return None
 
         try:
+            # Decrement trace-level tool count
+            root_run_id = self._find_root_run_id(run_id, parent_run_id)
+            self._decrement_trace_tool_count(root_run_id)
+
             # Complete the tool call data with error information
             tool_call_data["status"] = "error"
             tool_call_data["error"] = {
@@ -2480,7 +2561,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 llm_span = self._get_run(fallback_llm_run_id)
                 if llm_span:
                     self._append_tool_call_to_span(
-                        llm_span, tool_call_data, fallback_llm_run_id
+                        llm_span,
+                        tool_call_data,
+                        None,  # Don't increment LLM count for error fallback
                     )
                     logger.debug(
                         f"Attached error tool to fallback LLM {fallback_llm_run_id}"
