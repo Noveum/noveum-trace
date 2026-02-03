@@ -11,19 +11,21 @@ This demonstrates:
 2. LangChain AgentExecutor - tool execution with traditional LangChain agents
 """
 
-from langgraph.prebuilt import create_react_agent
+import os
+import sys
+
+from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from noveum_trace import NoveumTraceCallbackHandler
+from langgraph.prebuilt import create_react_agent
+
 import noveum_trace
-import os
-import sys
-from dotenv import load_dotenv
+from noveum_trace import NoveumTraceCallbackHandler
 
 # Enable DEBUG logging for Noveum Trace
-os.environ['NOVEUM_DEBUG'] = '1'
+os.environ["NOVEUM_DEBUG"] = "1"
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +42,7 @@ def get_temperature(city: str) -> str:
         "new york": "45°F",
         "san francisco": "62°F",
         "london": "55°F",
-        "tokyo": "68°F"
+        "tokyo": "68°F",
     }
     city_lower = city.lower()
     return f"The temperature in {city} is {temps.get(city_lower, '72°F')}"
@@ -65,7 +67,7 @@ def get_capital(country: str) -> str:
         "uk": "London",
         "japan": "Tokyo",
         "france": "Paris",
-        "germany": "Berlin"
+        "germany": "Berlin",
     }
     country_lower = country.lower()
     return capitals.get(country_lower, f"Capital of {country} not found")
@@ -97,8 +99,7 @@ def test_langgraph_agent():
 
     # Invoke agent with callback
     result = agent.invoke(
-        {"messages": [("user", query)]},
-        config={"callbacks": [callback]}
+        {"messages": [("user", query)]}, config={"callbacks": [callback]}
     )
 
     print("\n" + "-" * 80)
@@ -127,11 +128,16 @@ def test_langchain_agent_executor():
     tools = [get_temperature, calculate, get_capital]
 
     # Create prompt
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful assistant that can check temperatures, do calculations, and provide country information."),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a helpful assistant that can check temperatures, do calculations, and provide country information.",
+            ),
+            ("human", "{input}"),
+            ("placeholder", "{agent_scratchpad}"),
+        ]
+    )
 
     # Create agent
     agent = create_tool_calling_agent(llm, tools, prompt)
@@ -144,10 +150,7 @@ def test_langchain_agent_executor():
     print("Invoking LangChain AgentExecutor...")
 
     # Invoke agent with callback
-    result = agent_executor.invoke(
-        {"input": query},
-        config={"callbacks": [callback]}
-    )
+    result = agent_executor.invoke({"input": query}, config={"callbacks": [callback]})
 
     print("\n" + "-" * 80)
     print("AgentExecutor Response:")
