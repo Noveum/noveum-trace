@@ -147,6 +147,16 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         )  # noqa: UP037, F821
         self._pending_tool_calls_lock = threading.Lock()
 
+        # Track which LLM generated each tool call by ID
+        # Maps tool_call_id (str) -> llm_run_id (UUID)
+        self._tool_call_id_to_llm: dict[str, Union[UUID, str]] = {}
+        self._tool_call_id_to_llm_lock = threading.Lock()
+
+        # Track expected and completed tool counts per LLM
+        # Maps llm_run_id -> {"expected": int, "completed": int}
+        self._llm_tool_counts: dict[Union[UUID, str], dict[str, int]] = {}
+        self._llm_tool_counts_lock = threading.Lock()
+
     def _set_run(self, run_id: "Union[UUID, str]", span: Any) -> None:
         """Thread-safe method to set a run span."""
         with self._runs_lock:
@@ -244,61 +254,34 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._pending_tool_calls_lock:
             return self._pending_tool_calls.pop(run_id, None)
 
-    def _get_parent_span_for_tool(self, parent_run_id: Optional[UUID]) -> Optional[Any]:
-        """
-        Find the appropriate parent span for a tool call.
+    def _set_tool_call_id_to_llm(
+        self, tool_call_id: str, llm_run_id: "Union[UUID, str]"
+    ) -> None:
+        """Map a tool_call_id to the LLM run_id that generated it."""
+        with self._tool_call_id_to_llm_lock:
+            self._tool_call_id_to_llm[tool_call_id] = llm_run_id
+            logger.debug(
+                f"Mapped tool_call_id '{tool_call_id}' to LLM run_id '{llm_run_id}'")
 
-        Priority: Chain span > LLM span
-
-        Args:
-            parent_run_id: The parent run_id from LangChain
-
-        Returns:
-            The parent span (chain preferred, or LLM as fallback), or None
-        """
-        if not parent_run_id:
-            return None
-
-        # Walk up the parent chain to find chain or LLM span
-        current_run_id: Optional[Union[UUID, str]] = parent_run_id
-        visited: set[Union[UUID, str]] = set()
-
-        chain_span = None
-        llm_span = None
-
-        while current_run_id and current_run_id not in visited:
-            visited.add(current_run_id)
-            span = self._get_run(current_run_id)
-
-            if span:
-                # Check if this is a chain span
-                span_attrs = getattr(span, "attributes", {})
-                if isinstance(span_attrs, dict) and "chain.name" in span_attrs:
-                    chain_span = span
-                    break  # Found chain span, use it
-                # Check if this is an LLM span
-                elif isinstance(span_attrs, dict) and (
-                    "llm.model" in span_attrs or "llm.provider" in span_attrs
-                ):
-                    llm_span = span  # Store but keep looking for chain
-
-            # Move up to parent
-            current_run_id = self._get_parent(current_run_id)
-
-        # Return chain if found, otherwise LLM, otherwise None
-        return chain_span if chain_span else llm_span
+    def _get_llm_from_tool_call_id(
+        self, tool_call_id: str
+    ) -> "Optional[Union[UUID, str]]":
+        """Get the LLM run_id that generated this tool_call_id."""
+        with self._tool_call_id_to_llm_lock:
+            return self._tool_call_id_to_llm.get(tool_call_id)
 
     def _append_tool_call_to_span(
-        self, span: Any, tool_call_data: dict[str, Any]
+        self, span: Any, tool_call_data: dict[str, Any], llm_run_id: Optional[Union[UUID, str]] = None
     ) -> None:
         """
-        Append a tool call to the span's tool_calls list.
+        Append a tool call to the LLM span's executed tool_calls list.
 
         Creates the list if it doesn't exist, then appends the tool call.
 
         Args:
-            span: The span to append to
+            span: The LLM span to append to
             tool_call_data: The tool call data dict to append
+            llm_run_id: Optional LLM run ID to track tool completion and finish span
         """
         if not span:
             return
@@ -310,7 +293,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 span_attrs = {}
 
             # Get existing tool_calls list or create new one
-            tool_calls_value = span_attrs.get("chain.tool_calls", [])
+            tool_calls_value = span_attrs.get("llm.executed_tool_calls", [])
             if isinstance(tool_calls_value, str):
                 # If stored as JSON string, parse it
                 try:
@@ -328,10 +311,52 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             tool_calls.append(tool_call_data)
 
             # Update span attribute with updated list (store as native list, not JSON string)
-            span.set_attributes({"chain.tool_calls": tool_calls})
+            span.set_attributes({"llm.executed_tool_calls": tool_calls})
+
+            # Check if all tools are complete and finish span if needed
+            if llm_run_id:
+                self._check_and_finish_llm_span(llm_run_id)
 
         except Exception as e:
             logger.error("Error appending tool call to span: %s", e)
+
+    def _check_and_finish_llm_span(self, llm_run_id: Union[UUID, str]) -> None:
+        """
+        Check if all tools for an LLM have completed and finish the span if so.
+
+        Args:
+            llm_run_id: The LLM run ID to check
+        """
+        with self._llm_tool_counts_lock:
+            if llm_run_id not in self._llm_tool_counts:
+                return
+
+            counts = self._llm_tool_counts[llm_run_id]
+            counts["completed"] += 1
+
+            logger.debug(
+                f"Tool completion: {counts['completed']}/{counts['expected']} for LLM {llm_run_id}")
+
+            # Check if all tools are complete
+            if counts["completed"] >= counts["expected"]:
+                # All tools complete, finish the LLM span
+                llm_span = self._get_run(llm_run_id)
+                if llm_span:
+                    # Get stored end_time
+                    end_time = getattr(llm_span, "_end_time", None)
+
+                    # Log the executed tool calls before finishing
+                    executed_tools = llm_span.attributes.get(
+                        "llm.executed_tool_calls", [])
+                    logger.debug(
+                        f"Finishing LLM span {llm_run_id} with {len(executed_tools)} executed tool calls")
+
+                    assert self._client is not None
+                    self._client.finish_span(llm_span, end_time=end_time)
+
+                    # Remove from tracking
+                    self._pop_run(llm_run_id)
+                    del self._llm_tool_counts[llm_run_id]
 
     def _is_descendant_of(
         self, run_id: "Union[UUID, str]", potential_ancestor: "Union[UUID, str]"
@@ -653,11 +678,29 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         self._pending_tool_calls.pop(run_id, None)
                         pending_tools_cleaned += 1
 
+            # Clean up tool_call_id -> llm mappings for this trace
+            # Need to identify which tool_call_ids belong to this trace
+            # They were generated by LLMs in this trace (whose run_ids are in to_remove)
+            tool_call_id_cleaned = 0
+            with self._tool_call_id_to_llm_lock:
+                for tool_call_id, llm_run_id in list(self._tool_call_id_to_llm.items()):
+                    if llm_run_id in to_remove:
+                        self._tool_call_id_to_llm.pop(tool_call_id, None)
+                        tool_call_id_cleaned += 1
+
+            # Clean up LLM tool count tracking for this trace
+            llm_tool_counts_cleaned = 0
+            with self._llm_tool_counts_lock:
+                for llm_run_id in to_remove:
+                    if self._llm_tool_counts.pop(llm_run_id, None) is not None:
+                        llm_tool_counts_cleaned += 1
+
             if removed_trace:
                 logger.debug(
                     f"Cleaned up tracking data for trace {getattr(removed_trace, 'trace_id', 'unknown')} "
                     f"(root_run_id: {root_run_id}, cleaned {len(to_remove)} parent_map entries, "
-                    f"{tools_cleaned} tool entries, {pending_tools_cleaned} pending tool calls)"
+                    f"{tools_cleaned} tool entries, {pending_tools_cleaned} pending tool calls, "
+                    f"{tool_call_id_cleaned} tool_call_id mappings)"
                 )
 
         except Exception as e:
@@ -920,6 +963,11 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             tool_run_id = f"{run_id}_tool_{uuid.uuid4()}"
 
+            # Try to extract tool_call_id from action
+            tool_call_id = None
+            if hasattr(action, "tool_call_id"):
+                tool_call_id = action.tool_call_id
+
             tool_call_data: dict[str, Any] = {
                 "name": tool_name,
                 "operation": tool_name,
@@ -932,6 +980,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 },
             }
 
+            # Add tool_call_id if found
+            if tool_call_id:
+                tool_call_data["tool_call_id"] = tool_call_id
+
             # Store pending tool call data (will be completed in _complete_tool_spans_from_finish)
             self._set_pending_tool_call(tool_run_id, tool_call_data)
 
@@ -941,7 +993,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
     def _complete_tool_spans_from_finish(
         self, finish: "AgentFinish", agent_run_id: UUID
     ) -> None:
-        """Complete any pending tool calls when agent finishes and append to agent span."""
+        """Complete any pending tool calls when agent finishes and append to LLM span."""
         try:
             # Look for pending tool calls that belong to this specific agent
             tool_calls_to_complete = []
@@ -950,12 +1002,6 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     # Only complete tool calls that belong to this agent (prefixed with agent_run_id)
                     if str(run_id).startswith(f"{agent_run_id}_tool_"):
                         tool_calls_to_complete.append((run_id, tool_call_data))
-
-            # Get the agent span (parent)
-            agent_span = self._get_run(agent_run_id)
-            if not agent_span:
-                logger.debug(f"No agent span found for {agent_run_id}")
-                return
 
             # Extract result from the finish log
             result = "Tool execution completed"
@@ -970,7 +1016,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         result = line.replace("Final Answer:", "").strip()
                         break
 
-            # Complete and append each tool call to the agent span
+            # Complete and append each tool call using tool_call_id lookup
             for run_id, tool_call_data in tool_calls_to_complete:
                 # Remove from pending dict
                 self._pop_pending_tool_call(run_id)
@@ -981,8 +1027,22 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 tool_call_data["end_time"] = datetime.now(
                     timezone.utc).isoformat()
 
-                # Append to agent span's tool_calls list
-                self._append_tool_call_to_span(agent_span, tool_call_data)
+                # Look up LLM using tool_call_id
+                tool_call_id = tool_call_data.get("tool_call_id")
+                if tool_call_id:
+                    llm_run_id = self._get_llm_from_tool_call_id(tool_call_id)
+                    if llm_run_id:
+                        llm_span = self._get_run(llm_run_id)
+                        if llm_span:
+                            self._append_tool_call_to_span(
+                                llm_span, tool_call_data, llm_run_id)
+                        else:
+                            logger.debug(f"LLM span {llm_run_id} not found")
+                    else:
+                        logger.debug(
+                            f"No LLM found for tool_call_id {tool_call_id}")
+                else:
+                    logger.debug(f"No tool_call_id in agent tool data")
 
         except Exception as e:
             logger.error("Error completing tool calls from finish: %s", e)
@@ -1577,8 +1637,10 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._first_token_lock:
             self._first_token_received.discard(run_id)
 
-        # Get and remove span from runs dict
-        span = self._pop_run(run_id)
+        # Get span from runs dict
+        # Note: We DON'T remove it yet, as tools may need to append results later
+        # It will be cleaned up during trace finalization or when tools complete
+        span = self._get_run(run_id)
         if span is None:
             return
 
@@ -1599,6 +1661,80 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 ][
                     :10
                 ]  # Limit number of generations
+
+            # Extract tool calls from ChatGeneration messages
+            tool_calls = []
+            if hasattr(response, "generations") and response.generations:
+                for generation_list in response.generations:
+                    for gen in generation_list:
+                        # Skip if not a ChatGeneration with a message
+                        if not hasattr(gen, "message"):
+                            continue
+
+                        message = gen.message
+
+                        # Extract tool_calls from AIMessage (modern format)
+                        if hasattr(message, "tool_calls") and message.tool_calls:
+                            for tc in message.tool_calls:
+                                try:
+                                    # Handle both dict and object tool calls
+                                    if isinstance(tc, dict):
+                                        tool_call_id = tc.get("id")
+                                        tool_calls.append(
+                                            {
+                                                "name": tc.get("name"),
+                                                "args": tc.get("args"),
+                                                "id": tool_call_id,
+                                            }
+                                        )
+                                    else:
+                                        tool_call_id = getattr(tc, "id", None)
+                                        tool_calls.append(
+                                            {
+                                                "name": getattr(tc, "name", None),
+                                                "args": getattr(tc, "args", None),
+                                                "id": tool_call_id,
+                                            }
+                                        )
+
+                                    # Store the mapping for later lookup
+                                    if tool_call_id:
+                                        self._set_tool_call_id_to_llm(
+                                            tool_call_id, run_id)
+
+                                except Exception as e:
+                                    logger.debug(
+                                        f"Error extracting tool call: {e}")
+
+                        # Extract function_call from additional_kwargs (legacy format)
+                        if hasattr(message, "additional_kwargs"):
+                            additional_kwargs = message.additional_kwargs
+                            if isinstance(additional_kwargs, dict):
+                                function_call = additional_kwargs.get(
+                                    "function_call")
+                                if function_call:
+                                    try:
+                                        # Parse arguments from JSON string to dict
+                                        args_str = function_call.get(
+                                            "arguments", "{}")
+                                        args_dict = json.loads(
+                                            args_str) if args_str else {}
+
+                                        tool_calls.append(
+                                            {
+                                                "name": function_call.get("name"),
+                                                "args": args_dict,
+                                                "id": None,  # Legacy format has no ID
+                                            }
+                                        )
+                                    except json.JSONDecodeError as e:
+                                        logger.debug(
+                                            f"Failed to parse function_call arguments: {e}"
+                                        )
+                                    except Exception as e:
+                                        logger.debug(
+                                            f"Error extracting function_call: {e}"
+                                        )
 
             # Flatten usage attributes to match ContextManager format
             usage_attrs = parse_usage_from_response(
@@ -1654,28 +1790,56 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                     "llm.cost.currency": cost_info.get("currency", "USD"),
                 }
 
-            span.set_attributes(
-                {
-                    # Output attributes
-                    "llm.output.response": generations,
-                    "llm.output.response_count": len(generations),
-                    "llm.output.finish_reason": (
-                        response.llm_output.get("finish_reason")
-                        if hasattr(response, "llm_output") and response.llm_output
-                        else None
-                    ),
-                    # Flattened usage attributes
-                    **usage_attrs,
-                    **cost_attrs,
-                    **(
-                        {"llm.latency_ms": latency_ms} if latency_ms is not None else {}
-                    ),
-                }
-            )
+            # Build output attributes
+            output_attrs = {
+                # Output attributes
+                "llm.output.response": generations,
+                "llm.output.response_count": len(generations),
+                "llm.output.finish_reason": (
+                    response.llm_output.get("finish_reason")
+                    if hasattr(response, "llm_output") and response.llm_output
+                    else None
+                ),
+                # Flattened usage attributes
+                **usage_attrs,
+                **cost_attrs,
+                **(
+                    {"llm.latency_ms": latency_ms} if latency_ms is not None else {}
+                ),
+            }
+
+            # Add tool call attributes if present
+            if tool_calls:
+                output_attrs["llm.output.tool_calls"] = json.dumps(
+                    tool_calls, default=str
+                )
+                output_attrs["llm.output.tool_calls.count"] = len(tool_calls)
+                output_attrs["llm.output.tool_calls.names"] = [
+                    tc["name"] for tc in tool_calls if tc.get("name")
+                ]
+
+            span.set_attributes(output_attrs)
 
             span.set_status(SpanStatus.OK)
-            assert self._client is not None  # Type guard after _ensure_client
-            self._client.finish_span(span, end_time=end_time)
+
+            # Don't finish the span yet if it has tool calls - tools will append results later
+            # The span will be finished when tools complete or during cleanup
+            if not tool_calls:
+                assert self._client is not None  # Type guard after _ensure_client
+                self._client.finish_span(span, end_time=end_time)
+                # Remove from runs since it's finished
+                self._pop_run(run_id)
+            else:
+                # Keep span in self.runs for tools to append results
+                # Store end_time for later use
+                span._end_time = end_time
+
+                # Track expected tool count
+                with self._llm_tool_counts_lock:
+                    self._llm_tool_counts[run_id] = {
+                        "expected": len(tool_calls),
+                        "completed": 0
+                    }
 
             # Check if we should finish the trace
             self._finish_trace_if_needed()
@@ -2144,6 +2308,9 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                         called_tool_info = tool
                         break
 
+            # Note: tool_call_id is NOT available in on_tool_start callback
+            # It will be extracted from the ToolMessage output in on_tool_end
+
             # Build tool call data dict
             tool_call_data: dict[str, Any] = {
                 "name": tool_name,
@@ -2152,6 +2319,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 "start_time": datetime.now(timezone.utc).isoformat(),
                 "input": tool_input_data,
             }
+            # tool_call_id will be added later in on_tool_end when it's available
 
             # Add tool tracking information
             if available_tools:
@@ -2199,7 +2367,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """Handle tool end event - append completed tool call to parent span."""
+        """Handle tool end event - append completed tool call to LLM span via tool_call_id lookup."""
         if not self._ensure_client():
             return
 
@@ -2209,21 +2377,34 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             return
 
         try:
+            # Extract tool_call_id from output (ToolMessage)
+            tool_call_id = None
+            if hasattr(output, 'tool_call_id'):
+                tool_call_id = output.tool_call_id
+                logger.debug(
+                    f"Extracted tool_call_id from output: {tool_call_id}")
+
             # Complete the tool call data with output
-            tool_call_data["output"] = output
+            tool_call_data["output"] = str(
+                output) if not isinstance(output, str) else output
             tool_call_data["status"] = "ok"
             tool_call_data["end_time"] = datetime.now(timezone.utc).isoformat()
 
-            # Find parent span (chain > llm priority)
-            parent_span = self._get_parent_span_for_tool(parent_run_id)
-            if parent_span:
-                # Append tool call to parent span's tool_calls list
-                self._append_tool_call_to_span(parent_span, tool_call_data)
-            else:
-                logger.debug(
-                    f"No parent span found for tool call {run_id}, "
-                    f"parent_run_id={parent_run_id}"
-                )
+            # Store tool_call_id in tool_call_data
+            if tool_call_id:
+                tool_call_data["tool_call_id"] = tool_call_id
+
+            # Find LLM span using tool_call_id
+            if not tool_call_id:
+                # Fallback: check if it was stored during on_tool_start
+                tool_call_id = tool_call_data.get("tool_call_id")
+            if tool_call_id:
+                llm_run_id = self._get_llm_from_tool_call_id(tool_call_id)
+                if llm_run_id:
+                    llm_span = self._get_run(llm_run_id)
+                    if llm_span:
+                        self._append_tool_call_to_span(
+                            llm_span, tool_call_data, llm_run_id)
 
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
@@ -2236,7 +2417,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
-        """Handle tool error event - append failed tool call to parent span."""
+        """Handle tool error event - append failed tool call to LLM span via tool_call_id lookup."""
         if not self._ensure_client():
             return None
 
@@ -2254,16 +2435,24 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             }
             tool_call_data["end_time"] = datetime.now(timezone.utc).isoformat()
 
-            # Find parent span (chain > llm priority)
-            parent_span = self._get_parent_span_for_tool(parent_run_id)
-            if parent_span:
-                # Append tool call to parent span's tool_calls list
-                self._append_tool_call_to_span(parent_span, tool_call_data)
+            # Find LLM span using tool_call_id
+            tool_call_id = tool_call_data.get("tool_call_id")
+            if tool_call_id:
+                llm_run_id = self._get_llm_from_tool_call_id(tool_call_id)
+                if llm_run_id:
+                    llm_span = self._get_run(llm_run_id)
+                    if llm_span:
+                        self._append_tool_call_to_span(
+                            llm_span, tool_call_data, llm_run_id)
+                    else:
+                        logger.debug(
+                            f"LLM span {llm_run_id} not found for tool error {tool_call_id}")
+                else:
+                    logger.debug(
+                        f"No LLM found for tool_call_id {tool_call_id}")
             else:
                 logger.debug(
-                    f"No parent span found for tool error {run_id}, "
-                    f"parent_run_id={parent_run_id}"
-                )
+                    f"No tool_call_id in tool data for error run_id {run_id}")
 
         except Exception as e:
             logger.error("Error handling tool error event: %s", e)
