@@ -271,6 +271,41 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         with self._tool_call_id_to_llm_lock:
             return self._tool_call_id_to_llm.get(tool_call_id)
 
+    def _is_llm_span(self, run_id: Union[UUID, str]) -> bool:
+        """Check if a run_id corresponds to an LLM span."""
+        span = self._get_run(run_id)
+        if not span:
+            return False
+        span_attrs = getattr(span, "attributes", {})
+        return "llm.model" in span_attrs
+
+    def _find_fallback_llm(
+        self, parent_run_id: Optional[UUID]
+    ) -> Optional[Union[UUID, str]]:
+        """Find fallback LLM for tool attachment.
+
+        Logic:
+        1. If parent_run_id is an LLM span, use it
+        2. Otherwise, find the last LLM sibling (same parent_run_id)
+        """
+        if not parent_run_id:
+            return None
+
+        # Check if parent is an LLM
+        if self._is_llm_span(parent_run_id):
+            return parent_run_id
+
+        # Find last LLM sibling with same parent
+        with self._runs_lock:
+            for run_id in reversed(list(self.runs.keys())):
+                span = self.runs[run_id]
+                span_attrs = getattr(span, "attributes", {})
+                span_parent = span_attrs.get("langchain.parent_run_id")
+                if span_parent == str(parent_run_id) and "llm.model" in span_attrs:
+                    return run_id
+
+        return None
+
     def _append_tool_call_to_span(
         self,
         span: Any,
@@ -2206,7 +2241,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
         try:
             # Extract Noveum-specific metadata
             noveum_config = extract_noveum_metadata(metadata)
-            noveum_config.get("name")
+            custom_name = noveum_config.get("name")
             custom_metadata = noveum_config.get("metadata", {})
 
             tool_name = serialized.get("name", "unknown") if serialized else "unknown"
@@ -2329,9 +2364,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             if function_def_info:
                 tool_call_data["function_definition"] = function_def_info
 
+            # Add custom noveum name if provided
+            if custom_name:
+                tool_call_data["custom_name"] = custom_name
+
             # Add custom noveum metadata
             if custom_metadata:
                 tool_call_data["noveum_metadata"] = custom_metadata
+
+            # Identify fallback LLM for potential error attachment
+            fallback_llm_run_id = self._find_fallback_llm(parent_run_id)
+            if fallback_llm_run_id:
+                tool_call_data["fallback_llm_run_id"] = fallback_llm_run_id
+                logger.debug(
+                    f"Identified fallback LLM {fallback_llm_run_id} for tool {run_id}"
+                )
 
             # Store pending tool call data (will be completed in on_tool_end/on_tool_error)
             self._set_pending_tool_call(run_id, tool_call_data)
@@ -2376,15 +2423,26 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
 
             # Find LLM span using tool_call_id
             if not tool_call_id:
-                # Fallback: check if it was stored during on_tool_start
                 tool_call_id = tool_call_data.get("tool_call_id")
+
             if tool_call_id:
                 llm_run_id = self._get_llm_from_tool_call_id(tool_call_id)
                 if llm_run_id:
+                    # Attach to correct LLM
                     llm_span = self._get_run(llm_run_id)
                     if llm_span:
                         self._append_tool_call_to_span(
                             llm_span, tool_call_data, llm_run_id
+                        )
+                        logger.debug(f"Attached tool to correct LLM {llm_run_id}")
+            else:
+                # No tool_call_id available, attach to fallback if available
+                fallback_llm_run_id = tool_call_data.get("fallback_llm_run_id")
+                if fallback_llm_run_id:
+                    llm_span = self._get_run(fallback_llm_run_id)
+                    if llm_span:
+                        self._append_tool_call_to_span(
+                            llm_span, tool_call_data, fallback_llm_run_id
                         )
 
         except Exception as e:
@@ -2416,24 +2474,21 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             }
             tool_call_data["end_time"] = datetime.now(timezone.utc).isoformat()
 
-            # Find LLM span using tool_call_id
-            tool_call_id = tool_call_data.get("tool_call_id")
-            if tool_call_id:
-                llm_run_id = self._get_llm_from_tool_call_id(tool_call_id)
-                if llm_run_id:
-                    llm_span = self._get_run(llm_run_id)
-                    if llm_span:
-                        self._append_tool_call_to_span(
-                            llm_span, tool_call_data, llm_run_id
-                        )
-                    else:
-                        logger.debug(
-                            f"LLM span {llm_run_id} not found for tool error {tool_call_id}"
-                        )
+            # Attach to fallback LLM (identified during on_tool_start)
+            fallback_llm_run_id = tool_call_data.get("fallback_llm_run_id")
+            if fallback_llm_run_id:
+                llm_span = self._get_run(fallback_llm_run_id)
+                if llm_span:
+                    self._append_tool_call_to_span(
+                        llm_span, tool_call_data, fallback_llm_run_id
+                    )
+                    logger.debug(
+                        f"Attached error tool to fallback LLM {fallback_llm_run_id}"
+                    )
                 else:
-                    logger.debug(f"No LLM found for tool_call_id {tool_call_id}")
+                    logger.debug(f"Fallback LLM span {fallback_llm_run_id} not found")
             else:
-                logger.debug(f"No tool_call_id in tool data for error run_id {run_id}")
+                logger.debug(f"No fallback LLM identified for tool error {run_id}")
 
         except Exception as e:
             logger.error("Error handling tool error event: %s", e)

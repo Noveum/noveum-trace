@@ -12,7 +12,6 @@ This demonstrates:
 """
 
 import os
-import sys
 
 from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, create_tool_calling_agent
@@ -24,17 +23,12 @@ from langgraph.prebuilt import create_react_agent
 import noveum_trace
 from noveum_trace import NoveumTraceCallbackHandler
 
-# Enable DEBUG logging for Noveum Trace
-os.environ["NOVEUM_DEBUG"] = "1"
-
 # Load environment variables
 load_dotenv()
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-
-
 # Define some test tools
+
+
 @tool
 def get_temperature(city: str) -> str:
     """Get the current temperature for a city."""

@@ -160,7 +160,7 @@ class TestCodeTracingInSpans:
         )
 
     def test_on_tool_start_includes_code_attributes(self, handler):
-        """Test that on_tool_start includes code attributes."""
+        """Test that on_tool_start includes code attributes in pending tool call data."""
         run_id = uuid4()
         serialized = {
             "name": "test_tool",
@@ -172,12 +172,18 @@ class TestCodeTracingInSpans:
 
         user_code()
 
-        handler._client.start_span.assert_called_once()
-        call_args = handler._client.start_span.call_args
-        attributes = call_args.kwargs.get("attributes", {})
+        # Tool spans are no longer created in on_tool_start
+        # Instead, tool call data is stored in _pending_tool_calls
+        handler._client.start_span.assert_not_called()
 
+        # Check that tool call data was stored with code attributes
+        pending_tool_call = handler._pop_pending_tool_call(run_id)
+        assert pending_tool_call is not None
+
+        # Check that code location info is included in the tool call data
+        code_location = pending_tool_call.get("code_location", {})
         assert (
-            "code.file" in attributes
-            or "code.line" in attributes
-            or "code.function" in attributes
+            "code.file" in code_location
+            or "code.line" in code_location
+            or "code.function" in code_location
         )
