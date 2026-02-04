@@ -481,8 +481,7 @@ def extract_agent_capabilities(serialized: dict[str, Any]) -> str:
                     tool_types.add("api_calls")
                 else:
                     tool_types.add(
-                        tool.get("name", "other") if tool.get(
-                            "name") else "other"
+                        tool.get("name", "other") if tool.get("name") else "other"
                     )
 
         if tool_types:
@@ -997,8 +996,7 @@ def extract_tool_calls_from_response(
                         try:
                             # Parse arguments from JSON string to dict
                             args_str = function_call.get("arguments", "{}")
-                            args_dict = json.loads(
-                                args_str) if args_str else {}
+                            args_dict = json.loads(args_str) if args_str else {}
 
                             tool_calls.append(
                                 {
@@ -1012,7 +1010,6 @@ def extract_tool_calls_from_response(
                                 f"Failed to parse function_call arguments: {e}"
                             )
                         except Exception as e:
-                            logger.debug(
-                                f"Error extracting function_call: {e}")
+                            logger.debug(f"Error extracting function_call: {e}")
 
     return tool_calls
