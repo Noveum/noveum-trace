@@ -2459,9 +2459,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 if fallback_llm_run_id:
                     llm_span = self._get_run(fallback_llm_run_id)
                     if llm_span:
-                        self._append_tool_call_to_span(
-                            llm_span, tool_call_data, fallback_llm_run_id
-                        )
+                        self._append_tool_call_to_span(llm_span, tool_call_data, None)
 
         except Exception as e:
             logger.error("Error handling tool end event: %s", e)
