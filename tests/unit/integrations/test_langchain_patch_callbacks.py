@@ -125,13 +125,13 @@ class TestCallbackMethodUpdates:
         assert call_args[2] == parent_run_id
 
     def test_on_tool_start_with_new_signature(self, handler, mock_trace_context):
-        """Test on_tool_start uses new _get_or_create_trace_context signature."""
+        """Test on_tool_start stores tool call data instead of creating spans."""
         run_id = uuid4()
         parent_run_id = uuid4()
         serialized = {"name": "test_tool"}
         input_str = "test input"
 
-        # Mock the trace context method
+        # Mock the trace context method (should NOT be called for tools anymore)
         with (
             patch.object(
                 handler, "_get_or_create_trace_context", return_value=mock_trace_context
@@ -143,10 +143,6 @@ class TestCallbackMethodUpdates:
             ),
         ):
 
-            # Mock span creation
-            mock_span = Mock()
-            handler._client.start_span.return_value = mock_span
-
             # Call method
             handler.on_tool_start(
                 serialized=serialized,
@@ -155,12 +151,15 @@ class TestCallbackMethodUpdates:
                 parent_run_id=parent_run_id,
             )
 
-        # Should have called _get_or_create_trace_context with new signature
-        mock_context.assert_called_once()
-        call_args = mock_context.call_args[0]
-        assert len(call_args) == 3
-        assert call_args[1] == run_id
-        assert call_args[2] == parent_run_id
+        # on_tool_start no longer creates spans or calls _get_or_create_trace_context
+        # Instead, it stores tool call data in _pending_tool_calls
+        mock_context.assert_not_called()
+        handler._client.start_span.assert_not_called()
+
+        # Verify tool call data was stored
+        pending_tool_call = handler._pop_pending_tool_call(run_id)
+        assert pending_tool_call is not None
+        assert pending_tool_call.get("name") == "test_tool"
 
     def test_on_agent_start_with_new_signature(self, handler, mock_trace_context):
         """Test on_agent_start uses new _get_or_create_trace_context signature."""
@@ -433,10 +432,6 @@ class TestSafeInputsConversion:
                 ),
             ):
 
-                # Mock span creation
-                mock_span = Mock()
-                handler._client.start_span.return_value = mock_span
-
                 # Call method - should not raise exception
                 handler.on_tool_start(
                     serialized=serialized,
@@ -445,11 +440,21 @@ class TestSafeInputsConversion:
                     run_id=run_id,
                 )
 
-                # Verify span was created and stored
-                assert handler._get_run(run_id) == mock_span
+                # Verify tool call data was stored (not a span)
+                # Tools no longer create spans in on_tool_start
+                assert handler._get_run(run_id) is None
 
-                # Clean up for next iteration
-                handler._pop_run(run_id)
+                # Check that tool call data was stored with correct input handling
+                pending_tool_call = handler._pop_pending_tool_call(run_id)
+                assert pending_tool_call is not None
+                tool_input_data = pending_tool_call.get("input", {})
+
+                # Verify input was stored correctly based on type
+                if inputs is not None:
+                    if isinstance(inputs, (dict, list, tuple)):
+                        assert "inputs" in tool_input_data
+                    else:
+                        assert "input" in tool_input_data
 
 
 @pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain not available")

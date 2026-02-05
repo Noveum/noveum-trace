@@ -209,11 +209,14 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler._set_run(run_id, mock_span)
             handler._trace_managed_by_langchain = mock_trace
+            handler.root_traces[run_id] = mock_trace
 
             # Mock LLM response
             mock_response = Mock()
             mock_generation = Mock()
             mock_generation.text = "Paris is the capital of France"
+            mock_generation.generation_info = None
+            mock_generation.message = None
             mock_response.generations = [[mock_generation]]
             mock_response.llm_output = {
                 "token_usage": {"total_tokens": 15},
@@ -248,6 +251,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler.runs[run_id] = mock_span
             handler._trace_managed_by_langchain = mock_trace
+            handler.root_traces[run_id] = mock_trace
 
             error = Exception("API key invalid")
 
@@ -487,6 +491,8 @@ class TestLangChainIntegration:
             mock_response = Mock()
             mock_generation = Mock()
             mock_generation.text = "Paris is the capital of France"
+            mock_generation.generation_info = None
+            mock_generation.message = None
             mock_response.generations = [[mock_generation]]
             mock_response.llm_output = {
                 "token_usage": {
@@ -569,15 +575,12 @@ class TestLangChainIntegration:
             assert "chain.output.text" in all_attributes
             assert "chain.output.confidence" in all_attributes
 
-    def test_tool_start_with_new_attributes(self):
-        """Test tool start event with enhanced naming and attributes."""
+    def test_tool_start_stores_pending_data(self):
+        """Test tool start event stores pending tool call data."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_span = Mock()
-
-            mock_client.start_span.return_value = mock_span
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
@@ -589,38 +592,33 @@ class TestLangChainIntegration:
                 run_id=run_id,
             )
 
-            # Check enhanced span name and attributes
-            call_args = mock_client.start_span.call_args
-            span_name = call_args[1]["name"]
-            assert span_name == "tool:WebSearchTool:search_web"
+            # Tool start should NOT create a span anymore
+            # It stores pending tool call data to be attached to LLM span later
+            assert mock_client.start_span.call_count == 0
 
-            attributes = call_args[1]["attributes"]
-            assert attributes["tool.name"] == "WebSearchTool"
-            assert attributes["tool.operation"] == "search_web"
-            assert (
-                attributes["tool.input.input_str"] == "What is the capital of France?"
-            )
+            # Verify pending tool data was stored
+            assert run_id in handler._pending_tool_calls
 
-    def test_tool_end_with_new_attributes(self):
-        """Test tool end event with new output attribute structure."""
+    def test_tool_end_completes_pending_data(self):
+        """Test tool end event completes pending tool call data."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_span = Mock()
-
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
-            handler.runs[run_id] = mock_span
+
+            # Set up pending tool call data
+            handler._set_pending_tool_call(
+                run_id, {"name": "test_tool", "input": {"query": "test"}}
+            )
 
             handler.on_tool_end(output="Paris is the capital of France.", run_id=run_id)
 
-            # Check new output attributes structure
-            call_args = mock_span.set_attributes.call_args
-            attributes = call_args[0][0]
-            assert attributes["tool.output.output"] == "Paris is the capital of France."
+            # Tool end should remove pending data
+            assert run_id not in handler._pending_tool_calls
 
     def test_agent_start_functionality(self):
         """Test agent start event functionality."""
@@ -709,6 +707,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler.runs[run_id] = mock_span
             handler._trace_managed_by_langchain = mock_trace
+            handler.root_traces[run_id] = mock_trace  # Add to root_traces
 
             # Set proper name for the mock span to avoid being treated as a tool span
             mock_span.name = "agent:test_agent"
@@ -843,6 +842,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler.runs[run_id] = mock_span
             handler._trace_managed_by_langchain = mock_trace
+            handler.root_traces[run_id] = mock_trace  # Add to root_traces
 
             error = Exception("Chain execution failed")
 
@@ -861,29 +861,27 @@ class TestLangChainIntegration:
             assert result is None
 
     def test_tool_error_handling(self):
-        """Test tool error event handling."""
+        """Test tool error event handling - completes pending tool data with error."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_span = Mock()
-
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
-            handler.runs[run_id] = mock_span
+
+            # Set up pending tool call data (tools no longer have spans)
+            handler._set_pending_tool_call(
+                run_id, {"name": "failing_tool", "input": {"query": "test"}}
+            )
 
             error = Exception("Tool execution failed")
 
             result = handler.on_tool_error(error=error, run_id=run_id)
 
-            # Should record exception and set error status
-            mock_span.record_exception.assert_called_once_with(error)
-            mock_span.set_status.assert_called_once()
-            mock_client.finish_span.assert_called_once_with(mock_span)
-
-            assert len(handler.runs) == 0
+            # Should remove pending tool data
+            assert run_id not in handler._pending_tool_calls
             assert result is None
 
     def test_retriever_error_handling(self):
@@ -901,6 +899,7 @@ class TestLangChainIntegration:
             run_id = uuid4()
             handler.runs[run_id] = mock_span
             handler._trace_managed_by_langchain = mock_trace
+            handler.root_traces[run_id] = mock_trace  # Add to root_traces
 
             error = Exception("Retrieval failed")
 
@@ -980,15 +979,15 @@ class TestLangChainIntegration:
                 run_id=run_id,
             )
 
-            # Tool within agent (should not create new trace)
+            # Tool within agent (should not create new trace or span)
             handler.on_tool_start(
                 serialized={"name": "calculator"}, input_str="2+2", run_id=run_id
             )
 
             # Should only have one trace created (for agent)
             assert mock_client.start_trace.call_count == 1
-            # Should have two spans (agent + tool)
-            assert mock_client.start_span.call_count == 2
+            # Should have only one span (agent) - tools no longer create spans
+            assert mock_client.start_span.call_count == 1
 
     def test_nested_retriever_in_chain(self):
         """Test retriever call within a chain (should not create new trace)."""
@@ -1317,8 +1316,8 @@ class TestLangChainIntegration:
             # Verify error was logged but no exception was raised
             assert True
 
-    def test_complete_tool_spans_error_handling(self):
-        """Test error handling in tool span completion."""
+    def test_complete_tool_spans_with_observation(self):
+        """Test tool call data completion with observation in log."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1328,25 +1327,24 @@ class TestLangChainIntegration:
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            # Add a tool span to runs
-            mock_span = Mock()
+            # Set up pending tool call data (not a span anymore)
             tool_run_id = f"{run_id}_tool_test"
-            handler._set_run(tool_run_id, mock_span)
+            handler._set_pending_tool_call(
+                tool_run_id, {"name": "calculator", "input": {"expression": "2+2"}}
+            )
 
             # Mock finish with log containing observation
             mock_finish = Mock()
             mock_finish.log = "Some log\nObservation: The answer is 4\nMore log"
 
-            # Should complete tool spans successfully
+            # Should complete tool call data successfully
             handler._complete_tool_spans_from_finish(mock_finish, run_id)
 
-            # Verify span was processed
-            mock_span.set_attributes.assert_called()
-            mock_span.set_status.assert_called()
-            mock_client.finish_span.assert_called()
+            # Verify pending data was removed
+            assert tool_run_id not in handler._pending_tool_calls
 
     def test_complete_tool_spans_with_final_answer(self):
-        """Test tool span completion with final answer in log."""
+        """Test tool call data completion with final answer in log."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1356,24 +1354,24 @@ class TestLangChainIntegration:
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            # Add a tool span to runs
-            mock_span = Mock()
+            # Set up pending tool call data (not a span anymore)
             tool_run_id = f"{run_id}_tool_test"
-            handler._set_run(tool_run_id, mock_span)
+            handler._set_pending_tool_call(
+                tool_run_id, {"name": "calculator", "input": {"expression": "2+2"}}
+            )
 
             # Mock finish with log containing final answer
             mock_finish = Mock()
             mock_finish.log = "Some log\nFinal Answer: The result is 42\nMore log"
 
-            # Should complete tool spans successfully
+            # Should complete tool call data successfully
             handler._complete_tool_spans_from_finish(mock_finish, run_id)
 
-            # Verify span was processed with final answer
-            call_args = mock_span.set_attributes.call_args[0][0]
-            assert call_args["tool.output.output"] == "The result is 42"
+            # Verify pending data was removed
+            assert tool_run_id not in handler._pending_tool_calls
 
     def test_complete_tool_spans_no_log(self):
-        """Test tool span completion with no log."""
+        """Test tool call data completion with no log."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
@@ -1383,21 +1381,21 @@ class TestLangChainIntegration:
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            # Add a tool span to runs
-            mock_span = Mock()
+            # Set up pending tool call data (not a span anymore)
             tool_run_id = f"{run_id}_tool_test"
-            handler._set_run(tool_run_id, mock_span)
+            handler._set_pending_tool_call(
+                tool_run_id, {"name": "calculator", "input": {"expression": "2+2"}}
+            )
 
             # Mock finish with no log
             mock_finish = Mock()
             mock_finish.log = None
 
-            # Should complete tool spans successfully
+            # Should complete tool call data successfully
             handler._complete_tool_spans_from_finish(mock_finish, run_id)
 
-            # Verify span was processed with default result
-            call_args = mock_span.set_attributes.call_args[0][0]
-            assert call_args["tool.output.output"] == "Tool execution completed"
+            # Verify pending data was removed
+            assert tool_run_id not in handler._pending_tool_calls
 
     def test_operation_name_generation_edge_cases(self):
         """Test operation name generation with edge cases."""
@@ -1670,16 +1668,12 @@ class TestLangChainIntegration:
                         == "chain_span_id"
                     )
 
-    def test_custom_name_in_tool_span(self):
-        """Test tool span with custom name from metadata."""
+    def test_tool_start_with_custom_metadata_stores_data(self):
+        """Test tool start stores custom metadata in pending data."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_span = Mock()
-            mock_span.span_id = "tool_span_id"
-
-            mock_client.start_span.return_value = mock_span
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
@@ -1692,12 +1686,11 @@ class TestLangChainIntegration:
                 metadata={"noveum": {"name": "custom_tool_name"}},
             )
 
-            # Verify custom name was used
-            call_args = mock_client.start_span.call_args
-            assert call_args[1]["name"] == "custom_tool_name"
+            # Tool start should store pending data, not create a span
+            assert mock_client.start_span.call_count == 0
 
-            # Verify name was stored
-            assert handler._get_span_id_by_name("custom_tool_name") == "tool_span_id"
+            # Verify pending tool data was stored
+            assert run_id in handler._pending_tool_calls
 
     def test_parent_name_resolution(self):
         """Test parent span resolution by custom name."""
@@ -1874,13 +1867,8 @@ class TestLangChainIntegration:
                         metadata=metadata,
                     )
 
-                    # Test tool handler
-                    handler.on_tool_start(
-                        serialized={"name": "tool"},
-                        input_str="test",
-                        run_id=run_id,
-                        metadata=metadata,
-                    )
+                    # Note: on_tool_start does NOT create a span - it stores pending tool data
+                    # So we skip it in this test
 
                     # Test agent handler
                     handler.on_agent_start(
@@ -1898,8 +1886,8 @@ class TestLangChainIntegration:
                         metadata=metadata,
                     )
 
-                    # Verify all handlers used custom name
-                    assert mock_client.start_span.call_count == 5
+                    # Verify all handlers used custom name (4 handlers create spans, tool_start doesn't)
+                    assert mock_client.start_span.call_count == 4
                     for call in mock_client.start_span.call_args_list:
                         assert call[1]["name"] == "test_name"
 
@@ -2969,15 +2957,12 @@ class TestLangChainIntegration:
             attributes = call_args[0][0]
             assert attributes["chain.output.outputs"] == "Simple string output"
 
-    def test_tool_start_with_inputs_dict(self):
-        """Test tool start with structured inputs dictionary."""
+    def test_tool_start_with_inputs_dict_stores_data(self):
+        """Test tool start stores structured inputs in pending data."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_span = Mock()
-
-            mock_client.start_span.return_value = mock_span
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
@@ -2990,12 +2975,11 @@ class TestLangChainIntegration:
                 inputs={"expression": "2+2", "precision": 2},
             )
 
-            # Verify structured inputs were captured
-            call_args = mock_client.start_span.call_args
-            attributes = call_args[1]["attributes"]
-            assert attributes["tool.input.expression"] == "2+2"
-            assert attributes["tool.input.precision"] == "2"
-            assert attributes["tool.input.argument_count"] == "2"
+            # Tool start should store pending data, not create a span
+            assert mock_client.start_span.call_count == 0
+
+            # Verify pending tool data was stored
+            assert run_id in handler._pending_tool_calls
 
     def test_llm_end_without_token_usage(self):
         """Test LLM end without token usage data."""
@@ -3019,6 +3003,8 @@ class TestLangChainIntegration:
             mock_response = Mock()
             mock_generation = Mock()
             mock_generation.text = "Test response"
+            mock_generation.generation_info = None
+            mock_generation.message = None
             mock_response.generations = [[mock_generation]]
             mock_response.llm_output = {}  # No token_usage
 
@@ -3068,16 +3054,14 @@ class TestLangChainIntegration:
             assert len(attributes["retrieval.sample_results"]) == 10
             assert attributes["retrieval.results_truncated"] is True
 
-    def test_agent_action_creates_tool_span(self):
-        """Test that agent action creates tool span."""
+    def test_agent_action_sets_attributes_on_agent_span(self):
+        """Test that agent action sets attributes on the agent span."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
             mock_span = Mock()
-            mock_tool_span = Mock()
 
-            mock_client.start_span.return_value = mock_tool_span
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
@@ -3092,12 +3076,16 @@ class TestLangChainIntegration:
 
             handler.on_agent_action(action=mock_action, run_id=run_id)
 
-            # Verify tool span was created
-            mock_client.start_span.assert_called_once()
-            call_args = mock_client.start_span.call_args
-            assert "tool:calculator:calculator" in call_args[1]["name"]
-            assert call_args[1]["attributes"]["tool.name"] == "calculator"
-            assert call_args[1]["attributes"]["tool.operation"] == "calculator"
+            # Verify attributes were set on the agent span (not a new span created)
+            mock_span.set_attributes.assert_called_once()
+            call_args = mock_span.set_attributes.call_args
+            attributes = call_args[0][0]
+            assert attributes["agent.output.action.tool"] == "calculator"
+            assert attributes["agent.output.action.tool_input"] == "2+2"
+            assert attributes["agent.output.action.log"] == "I need to calculate 2+2"
+
+            # Verify event was added
+            mock_span.add_event.assert_called_once()
 
     # =========================================================================
     # on_chat_model_start Tests
@@ -3735,50 +3723,34 @@ class TestLangChainIntegration:
                     assert custom_metadata["workflow_id"] == "wf_123"
                     assert custom_metadata["step_number"] == 1
 
-    def test_tool_start_with_custom_metadata(self):
-        """Test that on_tool_start records custom metadata as noveum.additional_attributes."""
-        import json
+    def test_tool_start_stores_custom_metadata_in_pending_data(self):
+        """Test that on_tool_start stores custom metadata in pending tool call data."""
         from uuid import uuid4
 
         with patch("noveum_trace.get_client") as mock_get_client:
             mock_client = Mock()
-            mock_trace = Mock()
-            mock_span = Mock()
-
-            mock_client.start_trace.return_value = mock_trace
-            mock_client.start_span.return_value = mock_span
             mock_get_client.return_value = mock_client
 
             handler = NoveumTraceCallbackHandler()
             run_id = uuid4()
 
-            with patch(
-                "noveum_trace.core.context.get_current_trace"
-            ) as mock_get_current:
-                with patch("noveum_trace.core.context.set_current_trace"):
-                    mock_get_current.return_value = None
+            handler.on_tool_start(
+                serialized={"name": "calculator"},
+                input_str="2 + 2",
+                run_id=run_id,
+                metadata={
+                    "noveum": {
+                        "tool_category": "math",
+                        "priority": "high",
+                    }
+                },
+            )
 
-                    handler.on_tool_start(
-                        serialized={"name": "calculator"},
-                        input_str="2 + 2",
-                        run_id=run_id,
-                        metadata={
-                            "noveum": {
-                                "tool_category": "math",
-                                "priority": "high",
-                            }
-                        },
-                    )
+            # Tool start should store pending data, not create a span
+            assert mock_client.start_span.call_count == 0
 
-                    call_args = mock_client.start_span.call_args
-                    attributes = call_args[1]["attributes"]
-
-                    assert "noveum.additional_attributes" in attributes
-                    custom_metadata = json.loads(
-                        attributes["noveum.additional_attributes"]
-                    )
-                    assert custom_metadata["tool_category"] == "math"
-                    assert custom_metadata["priority"] == "high"
+            # Verify pending tool data was stored
+            assert run_id in handler._pending_tool_calls
 
     def test_agent_start_with_custom_metadata(self):
         """Test that on_agent_start records custom metadata as noveum.additional_attributes."""

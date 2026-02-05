@@ -6,11 +6,12 @@ to extract metadata, build attributes, and generate operation names.
 """
 
 import inspect
+import json
 import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -919,3 +920,96 @@ def _convert_tools_to_dict_list(tools: Any) -> list[dict[str, Any]]:
         return []
 
     return result
+
+
+def extract_tool_calls_from_response(
+    response: Any,
+    tool_call_id_callback: Optional[Callable[[str, str], None]] = None,
+    run_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    Extract tool calls from LangChain LLM response.
+
+    Supports both modern format (AIMessage.tool_calls) and legacy format
+    (additional_kwargs.function_call).
+
+    Args:
+        response: LangChain LLM response object
+        tool_call_id_callback: Optional callback function to store tool call ID mappings.
+                               Called with (tool_call_id, run_id) for each tool call with an ID.
+        run_id: Run ID to pass to the callback
+
+    Returns:
+        List of tool call dicts with keys: name, args, id
+        Format: [{"name": str, "args": dict, "id": str|None}, ...]
+    """
+    tool_calls: list[dict[str, Any]] = []
+
+    if not hasattr(response, "generations") or not response.generations:
+        return tool_calls
+
+    for generation_list in response.generations:
+        for gen in generation_list:
+            # Skip if not a ChatGeneration with a message
+            if not hasattr(gen, "message"):
+                continue
+
+            message = gen.message
+
+            # Extract tool_calls from AIMessage (modern format)
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        # Handle both dict and object tool calls
+                        if isinstance(tc, dict):
+                            tool_call_id = tc.get("id")
+                            tool_calls.append(
+                                {
+                                    "name": tc.get("name"),
+                                    "args": tc.get("args"),
+                                    "id": tool_call_id,
+                                }
+                            )
+                        else:
+                            tool_call_id = getattr(tc, "id", None)
+                            tool_calls.append(
+                                {
+                                    "name": getattr(tc, "name", None),
+                                    "args": getattr(tc, "args", None),
+                                    "id": tool_call_id,
+                                }
+                            )
+
+                        # Store the mapping for later lookup via callback
+                        if tool_call_id and tool_call_id_callback and run_id:
+                            tool_call_id_callback(tool_call_id, run_id)
+
+                    except Exception as e:
+                        logger.debug(f"Error extracting tool call: {e}")
+
+            # Extract function_call from additional_kwargs (legacy format)
+            if hasattr(message, "additional_kwargs"):
+                additional_kwargs = message.additional_kwargs
+                if isinstance(additional_kwargs, dict):
+                    function_call = additional_kwargs.get("function_call")
+                    if function_call:
+                        try:
+                            # Parse arguments from JSON string to dict
+                            args_str = function_call.get("arguments", "{}")
+                            args_dict = json.loads(args_str) if args_str else {}
+
+                            tool_calls.append(
+                                {
+                                    "name": function_call.get("name"),
+                                    "args": args_dict,
+                                    "id": None,  # Legacy format has no ID
+                                }
+                            )
+                        except json.JSONDecodeError as e:
+                            logger.debug(
+                                f"Failed to parse function_call arguments: {e}"
+                            )
+                        except Exception as e:
+                            logger.debug(f"Error extracting function_call: {e}")
+
+    return tool_calls
