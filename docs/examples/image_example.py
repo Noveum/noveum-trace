@@ -5,7 +5,7 @@ This example demonstrates:
 1. A LangGraph agent that generates captions for images
 2. A LangChain chain that generates captions for images
 3. Integration with Noveum Trace for both examples
-4. Using vision models (Claude with vision) for image understanding
+4. Using vision models (GPT-4o with vision) for image understanding
 5. Automatic image upload and UUID-based referencing (replaces base64 in traces)
 
 Image Handling:
@@ -20,12 +20,12 @@ Image Handling:
 
 Prerequisites:
     pip install noveum-trace[langchain]
-    pip install langchain langchain-anthropic langgraph pillow python-dotenv
+    pip install langchain langchain-openai langgraph pillow python-dotenv
 
 Environment Variables (loaded from .env file):
     Create a .env file in the project root with:
         NOVEUM_API_KEY=your_noveum_api_key
-        ANTHROPIC_API_KEY=your_anthropic_api_key
+        OPENAI_API_KEY=your_openai_api_key
         NOVEUM_PROJECT=image-captioning  # optional, defaults to "image-captioning"
         NOVEUM_ENVIRONMENT=dev           # optional, defaults to "dev"
 """
@@ -36,9 +36,9 @@ from pathlib import Path
 from typing import TypedDict
 
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from PIL import Image
 
@@ -104,8 +104,8 @@ def example_chain_caption_generator(image_path: str) -> str:
     base64_image = load_image_as_base64(image_path)
     print(f"✓ Loaded image from: {image_path}")
 
-    vision_llm = ChatAnthropic(
-        model="claude-sonnet-4-5-20250929",
+    vision_llm = ChatOpenAI(
+        model="gpt-4o",
         temperature=0.7,
         callbacks=[callback_handler],
     )
@@ -142,7 +142,6 @@ class CaptionState(TypedDict):
     """State for the caption generation agent."""
 
     image_path: str
-    image_base64: str
     final_caption: str
 
 
@@ -150,9 +149,14 @@ def generate_caption_node(state: CaptionState) -> CaptionState:
     """Node that generates a caption from the image using a vision model."""
     print("\n📸 Generating caption from image...")
 
+    # Read and encode the image from the path
+    image_path = state["image_path"]
+    base64_image = load_image_as_base64(image_path)
+    print(f"✓ Loaded image from: {image_path}")
+
     # No need to pass callbacks here - LangGraph propagates them from config
-    vision_llm = ChatAnthropic(
-        model="claude-sonnet-4-5-20250929",
+    vision_llm = ChatOpenAI(
+        model="gpt-4o",
         temperature=0.7,
     )
 
@@ -165,7 +169,7 @@ def generate_caption_node(state: CaptionState) -> CaptionState:
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": state["image_base64"]},
+                    "image_url": {"url": base64_image},
                 },
             ]
         )
@@ -207,8 +211,7 @@ def example_agent_caption_generator(image_path: str) -> str:
     print("=" * 80)
 
     setup_noveum_trace()
-    base64_image = load_image_as_base64(image_path)
-    print(f"✓ Loaded image from: {image_path}")
+    print(f"✓ Image path: {image_path}")
 
     workflow = create_caption_agent()
     app = workflow.compile()
@@ -216,7 +219,6 @@ def example_agent_caption_generator(image_path: str) -> str:
 
     initial_state: CaptionState = {
         "image_path": image_path,
-        "image_base64": base64_image,
         "final_caption": "",
     }
 
@@ -262,7 +264,7 @@ def example_agent_caption_generator(image_path: str) -> str:
 def main():
     """Run both examples."""
     noveum_key = os.getenv("NOVEUM_API_KEY")
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
 
     if not noveum_key:
         print("❌ Error: NOVEUM_API_KEY not found in environment variables.")
@@ -270,10 +272,10 @@ def main():
         print("   NOVEUM_API_KEY=your_noveum_api_key")
         return
 
-    if not anthropic_key:
-        print("❌ Error: ANTHROPIC_API_KEY not found in environment variables.")
+    if not openai_key:
+        print("❌ Error: OPENAI_API_KEY not found in environment variables.")
         print("   Please create a .env file in the project root with:")
-        print("   ANTHROPIC_API_KEY=your_anthropic_api_key")
+        print("   OPENAI_API_KEY=your_openai_api_key")
         return
 
     # Hardcoded path to the sample image in docs/examples/sample_image/
@@ -311,7 +313,7 @@ def main():
     print("\nCheck your Noveum Trace dashboard to see:")
     print("  • Chain-level spans for the LangChain example")
     print("  • Graph-level spans for the LangGraph agent")
-    print("  • Vision model calls (Claude with vision)")
+    print("  • Vision model calls (GPT-4o with vision)")
     print("  • Node-level spans in the agent workflow")
 
     noveum_trace.flush()
