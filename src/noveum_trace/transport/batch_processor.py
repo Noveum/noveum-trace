@@ -178,6 +178,52 @@ class BatchProcessor:
             log_error_always(logger, f"Queue is full, dropping audio {audio_uuid}")
             raise TransportError("Audio queue is full") from e
 
+    def add_image(self, image_data: dict[str, Any]) -> None:
+        """
+        Add image to the batch queue.
+
+        Args:
+            image_data: Image data with metadata
+
+        Raises:
+            TransportError: If processor is shutdown, queue is full, or image_uuid is missing
+        """
+        # Validate image_uuid is present
+        image_uuid = image_data.get("image_uuid")
+        if not image_uuid:
+            image_data_keys = list(image_data.keys())
+            log_error_always(
+                logger,
+                "Cannot add image - missing image_uuid, dropping image file",
+                image_data_keys=image_data_keys,
+            )
+            raise TransportError(
+                f"Cannot add image - missing image_uuid, dropping image file. "
+                f"Available keys: {image_data_keys}"
+            )
+
+        if self._shutdown:
+            log_error_always(
+                logger,
+                "Cannot add image - batch processor has been shutdown",
+                image_uuid=image_uuid,
+            )
+            raise TransportError("Batch processor has been shutdown")
+
+        # Mark as image type
+        image_data["_item_type"] = "image"
+
+        # Log image addition
+        trace_id = image_data.get("trace_id", "unknown")
+        logger.info(f"📥 ADDING IMAGE TO QUEUE: {image_uuid} for trace {trace_id}")
+
+        try:
+            self._queue.put(image_data, block=False)
+            logger.info(f"✅ Successfully queued image {image_uuid}")
+        except queue.Full as e:
+            log_error_always(logger, f"Queue is full, dropping image {image_uuid}")
+            raise TransportError("Image queue is full") from e
+
     def flush(self, timeout: Optional[float] = None) -> None:
         """
         Flush all pending traces.
@@ -294,10 +340,11 @@ class BatchProcessor:
                     item_data = self._queue.get(timeout=0.5)
                     item_type = item_data.get("_item_type", "trace")
                     # Get appropriate ID based on item type
-                    # Note: audio_uuid validation happens in add_audio(), so it should always exist for audio items
+                    # Note: audio_uuid and image_uuid validation happens in add_audio() and add_image()
                     item_id = (
                         item_data.get("trace_id")
                         or item_data.get("audio_uuid")
+                        or item_data.get("image_uuid")
                         or "missing-id"
                     )
 
@@ -381,8 +428,8 @@ class BatchProcessor:
 
     def _send_current_batch(self) -> None:
         """
-        Send the current batch, splitting audio and traces.
-        Audio is sent first, then traces.
+        Send the current batch, splitting audio, images, and traces.
+        Audio and images are sent first (individually), then traces.
         """
         if not self._batch:
             try:
@@ -394,9 +441,12 @@ class BatchProcessor:
         batch_to_process = self._batch.copy()
         self._batch.clear()
 
-        # Split into audio and traces
+        # Split into audio, images, and traces
         audio_items = [
             item for item in batch_to_process if item.get("_item_type") == "audio"
+        ]
+        image_items = [
+            item for item in batch_to_process if item.get("_item_type") == "image"
         ]
         trace_items = [
             item for item in batch_to_process if item.get("_item_type") == "trace"
@@ -404,7 +454,7 @@ class BatchProcessor:
 
         try:
             logger.info(
-                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(trace_items)} traces"
+                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(image_items)} images, {len(trace_items)} traces"
             )
         except (ValueError, OSError, RuntimeError, Exception):
             pass
@@ -439,6 +489,38 @@ class BatchProcessor:
                         exc_info=True,
                         error=str(e),
                         audio_uuid=audio_uuid,
+                    )
+
+        # Send ALL images (individually)
+        if image_items:
+            try:
+                logger.info(f"🖼️  Sending {len(image_items)} image files...")
+            except (ValueError, OSError, RuntimeError, Exception):
+                pass
+
+            for image_item in image_items:
+                # Remove internal marker before sending
+                image_item.pop("_item_type", None)
+
+                # Validate image_uuid exists (should always exist due to add_image validation)
+                image_uuid = image_item.get("image_uuid")
+                if not image_uuid:
+                    log_error_always(
+                        logger,
+                        "Skipping image in batch - missing image_uuid",
+                        image_item_keys=list(image_item.keys()),
+                    )
+                    continue
+
+                try:
+                    self.send_callback({"type": "image", "data": image_item})
+                except Exception as e:
+                    log_error_always(
+                        logger,
+                        f"Failed to send image {image_uuid}",
+                        exc_info=True,
+                        error=str(e),
+                        image_uuid=image_uuid,
                     )
 
         # Then send traces (batched)

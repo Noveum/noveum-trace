@@ -51,7 +51,10 @@ dependencies = [
 # Framework integrations
 openai = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.3.0"]
-langchain = ["langchain-core>=0.1.0"]
+langchain = [
+    "langchain-core>=0.1.0",
+    "Pillow>=9.0.0",  # For image processing and format detection
+]
 livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 
 # Development dependencies
@@ -76,6 +79,10 @@ dev = [
     # Type stubs
     "types-requests>=2.25.0",
     "types-PyYAML>=6.0.0",
+    "types-Pillow>=9.0.0",
+    
+    # Runtime dependencies for type stubs
+    "Pillow>=9.0.0",
 
     # Framework integrations for testing
     "openai>=1.0.0",

@@ -184,8 +184,12 @@ class TestLangChainIntegration:
                     # Uses provider name from ID path (second-to-last element)
                     assert attributes["llm.model"] == "openai"
                     assert attributes["llm.provider"] == "openai"
-                    assert attributes["llm.input.prompts"] == ["Hello world"]
-                    assert attributes["llm.input.prompt_count"] == 1
+
+                    # Check that input prompts were set via set_attributes
+                    mock_span.set_attributes.assert_called()
+                    set_attrs_call = mock_span.set_attributes.call_args[0][0]
+                    assert set_attrs_call["llm.input.prompts"] == ["Hello world"]
+                    assert set_attrs_call["llm.input.prompt_count"] == 1
 
                     assert len(handler.runs) == 1
                     assert handler._trace_managed_by_langchain == mock_trace
@@ -466,8 +470,15 @@ class TestLangChainIntegration:
             call_args = mock_client.start_span.call_args
             attributes = call_args[1]["attributes"]
             assert attributes["llm.operation"] == "completion"
-            assert attributes["llm.input.prompts"] == ["Hello world", "How are you?"]
-            assert attributes["llm.input.prompt_count"] == 2
+
+            # Check that input prompts were set via set_attributes
+            mock_span.set_attributes.assert_called()
+            set_attrs_call = mock_span.set_attributes.call_args[0][0]
+            assert set_attrs_call["llm.input.prompts"] == [
+                "Hello world",
+                "How are you?",
+            ]
+            assert set_attrs_call["llm.input.prompt_count"] == 2
 
     def test_llm_end_with_new_attributes(self):
         """Test LLM end event with new flattened usage attributes."""
@@ -1077,9 +1088,9 @@ class TestLangChainIntegration:
             )
 
             # Check that prompts were limited to 5
-            call_args = mock_client.start_span.call_args
-            attributes = call_args[1]["attributes"]
-            assert len(attributes["llm.input.prompts"]) <= 5
+            mock_span.set_attributes.assert_called()
+            set_attrs_call = mock_span.set_attributes.call_args[0][0]
+            assert len(set_attrs_call["llm.input.prompts"]) <= 5
 
     def test_large_chain_input_truncation(self):
         """Test that large chain inputs are stored without truncation."""
@@ -3143,12 +3154,16 @@ class TestLangChainIntegration:
                     call_args = mock_client.start_span.call_args
                     attributes = call_args[1]["attributes"]
 
-                    # Verify chat-specific attributes
+                    # Verify chat-specific attributes in initial attributes
                     assert attributes["llm.operation"] == "chat"
                     assert attributes["llm.input.type"] == "chat"
-                    assert attributes["llm.input.message_count"] == 2
-                    assert "llm.input.messages" in attributes
                     assert attributes["langchain.run_id"] == str(run_id)
+
+                    # Verify message attributes were set via set_attributes
+                    mock_span.set_attributes.assert_called()
+                    set_attrs_call = mock_span.set_attributes.call_args[0][0]
+                    assert set_attrs_call["llm.input.message_count"] == 2
+                    assert "llm.input.messages" in set_attrs_call
 
     def test_chat_model_start_with_custom_name(self):
         """Test that custom name from noveum metadata is used as span name."""
@@ -3321,9 +3336,10 @@ class TestLangChainIntegration:
                         run_id=run_id,
                     )
 
-                    call_args = mock_client.start_span.call_args
-                    attributes = call_args[1]["attributes"]
-                    assert attributes["llm.input.has_system_prompt"] is True
+                    # Check that has_system_prompt was set via set_attributes
+                    mock_span.set_attributes.assert_called()
+                    set_attrs_call = mock_span.set_attributes.call_args[0][0]
+                    assert set_attrs_call["llm.input.has_system_prompt"] is True
 
     def test_chat_model_start_detects_tool_calls(self):
         """Test that has_tool_calls is True when messages contain tool calls."""
@@ -3365,9 +3381,10 @@ class TestLangChainIntegration:
                         run_id=run_id,
                     )
 
-                    call_args = mock_client.start_span.call_args
-                    attributes = call_args[1]["attributes"]
-                    assert attributes["llm.input.has_tool_calls"] is True
+                    # Check that has_tool_calls was set via set_attributes
+                    mock_span.set_attributes.assert_called()
+                    set_attrs_call = mock_span.set_attributes.call_args[0][0]
+                    assert set_attrs_call["llm.input.has_tool_calls"] is True
 
     def test_chat_model_start_no_client_graceful(self):
         """Test that on_chat_model_start handles missing client gracefully."""
@@ -3535,11 +3552,10 @@ class TestLangChainIntegration:
                         run_id=run_id,
                     )
 
-                    call_args = mock_client.start_span.call_args
-                    attributes = call_args[1]["attributes"]
-
-                    # Verify messages were converted
-                    messages_json = json.loads(attributes["llm.input.messages"])
+                    # Verify messages were converted and set via set_attributes
+                    mock_span.set_attributes.assert_called()
+                    set_attrs_call = mock_span.set_attributes.call_args[0][0]
+                    messages_json = json.loads(set_attrs_call["llm.input.messages"])
                     assert len(messages_json[0]) == 2
                     assert messages_json[0][0]["content"] == "Pydantic v1 message"
                     assert messages_json[0][1]["content"] == "Pydantic v2 message"
