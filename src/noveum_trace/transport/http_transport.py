@@ -596,7 +596,7 @@ class HttpTransport:
         if isinstance(obj, UUID):
             return str(obj)
         if isinstance(obj, Enum):
-            return obj.value
+            return self.trace_to_dict(obj.value, depth + 1, max_depth)
         if isinstance(obj, bytes):
             # For bytes, return base64 if small, otherwise truncated repr
             if len(obj) <= 1000:
