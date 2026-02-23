@@ -7,7 +7,7 @@ including request formatting, authentication, and error handling.
 
 import base64
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 # Import for type hints
@@ -616,11 +616,17 @@ class HttpTransport:
                     str_key = str(key) if not isinstance(key, str) else key
                     result[str_key] = self.trace_to_dict(value, depth + 1, max_depth)
                 except Exception as e:
+                    # Safely convert key to string for logging and result
+                    try:
+                        safe_key = str(key) if not isinstance(key, str) else key
+                    except Exception:
+                        safe_key = f"<Unstringable key: {type(key).__name__}>"
+
                     logger.warning(
-                        f"Failed to serialize dict key '{key}': {e}",
-                        extra={"key": str(key), "value_type": type(value).__name__},
+                        f"Failed to serialize dict key '{safe_key}': {e}",
+                        extra={"key": safe_key, "value_type": type(value).__name__},
                     )
-                    result[str(key)] = f"<Non-serializable: {type(value).__name__}>"
+                    result[safe_key] = f"<Non-serializable: {type(value).__name__}>"
             return result
 
         # Handle lists and tuples with per-item error handling
@@ -701,8 +707,6 @@ class HttpTransport:
         # Handle case where trace_to_dict returns a string due to serialization errors
         if isinstance(trace_data, str):
             # Create a minimal trace structure with the error message and all required fields
-            from datetime import datetime, timezone
-
             current_time = datetime.now(timezone.utc)
             trace_data = {
                 "trace_id": trace.trace_id,
