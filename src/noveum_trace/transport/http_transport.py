@@ -9,11 +9,11 @@ import base64
 import time
 from datetime import datetime
 from enum import Enum
-from uuid import UUID
 
 # Import for type hints
 from typing import TYPE_CHECKING, Any, NoReturn, Optional
 from urllib.parse import urljoin
+from uuid import UUID
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -575,7 +575,9 @@ class HttpTransport:
         """
         # Prevent infinite recursion
         if depth > max_depth:
-            logger.warning(f"Max recursion depth ({max_depth}) reached in trace_to_dict")
+            logger.warning(
+                f"Max recursion depth ({max_depth}) reached in trace_to_dict"
+            )
             return f"<Max depth exceeded: {type(obj).__name__}>"
 
         # Safeguard: Detect Mock objects to prevent infinite recursion
@@ -623,17 +625,17 @@ class HttpTransport:
 
         # Handle lists and tuples with per-item error handling
         if isinstance(obj, (list, tuple)):
-            result = []
+            result_list: list[Any] = []
             for i, item in enumerate(obj):
                 try:
-                    result.append(self.trace_to_dict(item, depth + 1, max_depth))
+                    result_list.append(self.trace_to_dict(item, depth + 1, max_depth))
                 except Exception as e:
                     logger.warning(
                         f"Failed to serialize list item at index {i}: {e}",
                         extra={"index": i, "item_type": type(item).__name__},
                     )
-                    result.append(f"<Non-serializable: {type(item).__name__}>")
-            return result
+                    result_list.append(f"<Non-serializable: {type(item).__name__}>")
+            return result_list
 
         # Handle objects with to_dict method
         if hasattr(obj, "to_dict") and callable(obj.to_dict):
@@ -658,7 +660,10 @@ class HttpTransport:
                         except Exception as e:
                             logger.warning(
                                 f"Failed to serialize attribute '{key}' of {type(obj).__name__}: {e}",
-                                extra={"object_type": type(obj).__name__, "attr_name": key},
+                                extra={
+                                    "object_type": type(obj).__name__,
+                                    "attr_name": key,
+                                },
                             )
                             attrs[key] = f"<Non-serializable: {type(value).__name__}>"
                 return attrs
