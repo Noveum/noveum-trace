@@ -622,7 +622,7 @@ class TestHttpTransportTraceToDict:
             obj = ObjectWithBadToDict()
 
             result = transport.trace_to_dict(obj)
-            assert result == "Non-serializable object, issue with tracing SDK"
+            assert result == "<Non-serializable: ObjectWithBadToDict>"
 
     def test_trace_to_dict_object_with_dict_attrs(self):
         """Test handling of objects with __dict__ attributes."""
@@ -687,7 +687,7 @@ class TestHttpTransportTraceToDict:
             obj = NoDictClass()
 
             result = transport.trace_to_dict(obj)
-            assert result == "Non-serializable object, issue with tracing SDK"
+            assert result == "<Non-serializable: NoDictClass>"
 
     def test_trace_to_dict_nested_complex_objects(self):
         """Test handling of deeply nested complex objects."""
