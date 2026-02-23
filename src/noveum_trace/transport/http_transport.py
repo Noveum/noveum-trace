@@ -5,7 +5,11 @@ This module handles HTTP communication with the Noveum platform,
 including request formatting, authentication, and error handling.
 """
 
+import base64
 import time
+from datetime import datetime
+from enum import Enum
+from uuid import UUID
 
 # Import for type hints
 from typing import TYPE_CHECKING, Any, NoReturn, Optional
@@ -554,48 +558,126 @@ class HttpTransport:
 
         return session
 
-    def trace_to_dict(self, obj: Any) -> Any:
+    def trace_to_dict(self, obj: Any, depth: int = 0, max_depth: int = 20) -> Any:
         """
         Recursively convert objects to JSON-serializable dictionaries.
 
+        This method provides graceful handling of non-serializable objects,
+        preserving as much data as possible even when some attributes fail.
+
         Args:
             obj: Object to convert
+            depth: Current recursion depth (for preventing infinite loops)
+            max_depth: Maximum recursion depth allowed
 
         Returns:
             JSON-serializable representation of the object
         """
+        # Prevent infinite recursion
+        if depth > max_depth:
+            logger.warning(f"Max recursion depth ({max_depth}) reached in trace_to_dict")
+            return f"<Max depth exceeded: {type(obj).__name__}>"
+
         # Safeguard: Detect Mock objects to prevent infinite recursion
         if _MOCK_TYPES and isinstance(obj, _MOCK_TYPES):
             return "<Mock object>"
+
+        # Handle None and primitives
         if obj is None:
             return None
-        elif isinstance(obj, (str, int, float, bool)):
+        if isinstance(obj, (str, int, float, bool)):
             return obj
-        elif isinstance(obj, dict):
-            return {key: self.trace_to_dict(value) for key, value in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self.trace_to_dict(item) for item in obj]
-        elif hasattr(obj, "to_dict") and callable(obj.to_dict):
+
+        # Handle common types explicitly
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, bytes):
+            # For bytes, return base64 if small, otherwise truncated repr
+            if len(obj) <= 1000:
+                try:
+                    return base64.b64encode(obj).decode("utf-8")
+                except Exception:
+                    return f"<bytes: {len(obj)} bytes>"
+            else:
+                return f"<bytes: {len(obj)} bytes>"
+
+        # Handle dictionaries with per-key error handling
+        if isinstance(obj, dict):
+            result = {}
+            for key, value in obj.items():
+                try:
+                    # Ensure key is string
+                    str_key = str(key) if not isinstance(key, str) else key
+                    result[str_key] = self.trace_to_dict(value, depth + 1, max_depth)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to serialize dict key '{key}': {e}",
+                        extra={"key": str(key), "value_type": type(value).__name__},
+                    )
+                    result[str(key)] = f"<Non-serializable: {type(value).__name__}>"
+            return result
+
+        # Handle lists and tuples with per-item error handling
+        if isinstance(obj, (list, tuple)):
+            result = []
+            for i, item in enumerate(obj):
+                try:
+                    result.append(self.trace_to_dict(item, depth + 1, max_depth))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to serialize list item at index {i}: {e}",
+                        extra={"index": i, "item_type": type(item).__name__},
+                    )
+                    result.append(f"<Non-serializable: {type(item).__name__}>")
+            return result
+
+        # Handle objects with to_dict method
+        if hasattr(obj, "to_dict") and callable(obj.to_dict):
             try:
-                return self.trace_to_dict(obj.to_dict())
-            except Exception:
-                return "Non-serializable object, issue with tracing SDK"
-        elif hasattr(obj, "__dict__"):
+                return self.trace_to_dict(obj.to_dict(), depth + 1, max_depth)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to call to_dict() on {type(obj).__name__}: {e}",
+                    extra={"object_type": type(obj).__name__},
+                )
+                return f"<Non-serializable: {type(obj).__name__}>"
+
+        # Handle objects with __dict__ attribute
+        if hasattr(obj, "__dict__"):
             try:
-                # Extract attributes from object
+                # Extract attributes from object with per-attribute error handling
                 attrs = {}
                 for key, value in obj.__dict__.items():
                     if not key.startswith("_"):  # Skip private attributes
-                        attrs[key] = self.trace_to_dict(value)
+                        try:
+                            attrs[key] = self.trace_to_dict(value, depth + 1, max_depth)
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to serialize attribute '{key}' of {type(obj).__name__}: {e}",
+                                extra={"object_type": type(obj).__name__, "attr_name": key},
+                            )
+                            attrs[key] = f"<Non-serializable: {type(value).__name__}>"
                 return attrs
-            except Exception:
-                return "Non-serializable object, issue with tracing SDK"
-        else:
-            try:
-                # Try to convert to string representation
-                return str(obj)
-            except Exception:
-                return "Non-serializable object, issue with tracing SDK"
+            except Exception as e:
+                logger.warning(
+                    f"Failed to access __dict__ of {type(obj).__name__}: {e}",
+                    extra={"object_type": type(obj).__name__},
+                )
+                return f"<Non-serializable: {type(obj).__name__}>"
+
+        # Final fallback: try string representation
+        try:
+            return str(obj)
+        except Exception as e:
+            logger.warning(
+                f"Failed to convert {type(obj).__name__} to string: {e}",
+                extra={"object_type": type(obj).__name__},
+            )
+            return f"<Non-serializable: {type(obj).__name__}>"
 
     def _format_trace_for_export(self, trace: Trace) -> dict[str, Any]:
         """
