@@ -247,7 +247,7 @@ class BatchProcessor:
             else:
                 logger.debug("🔄 FLUSH: No current batch to send")
 
-        # Wait for queue to empty
+        # Wait for all queued items to be fully processed
         start_time = time.time()
         initial_queue_size = self._queue.qsize()
 
@@ -256,17 +256,30 @@ class BatchProcessor:
                 f"🔄 FLUSH: Waiting for {initial_queue_size} queued traces to process..."
             )
 
-        while not self._queue.empty():
+        # Check both queue empty AND unfinished_tasks to ensure everything is done
+        # This prevents race conditions where items are dequeued but not yet processed
+        while True:
+            queue_empty = self._queue.empty()
+            unfinished = self._queue.unfinished_tasks
+
+            # Both conditions must be true for complete flush
+            if queue_empty and unfinished == 0:
+                break
+
+            # Timeout check
             if timeout and (time.time() - start_time) > timeout:
-                remaining_traces = self._queue.qsize()
+                remaining_queue = self._queue.qsize()
+                remaining_tasks = self._queue.unfinished_tasks
                 log_error_always(
                     logger,
-                    f"Flush timeout reached, {remaining_traces} traces may be lost",
+                    f"Flush timeout reached, {remaining_tasks} traces may be lost",
                     timeout=timeout,
-                    remaining_traces=remaining_traces,
+                    remaining_in_queue=remaining_queue,
+                    unfinished_tasks=remaining_tasks,
                     elapsed_time=time.time() - start_time,
                 )
                 break
+
             time.sleep(0.1)
 
         elapsed_time = time.time() - start_time
