@@ -53,6 +53,9 @@ class BatchProcessor:
         )
         self._batch: list[dict[str, Any]] = []
         self._batch_lock = threading.Lock()
+        # True while `_send_current_batch()` is actively sending a batch via `send_callback`.
+        # Guarded by `_batch_lock` and used by `flush()` to avoid returning early.
+        self._sending_batch = False
         self._shutdown = False
 
         # Start background thread
@@ -247,7 +250,7 @@ class BatchProcessor:
             else:
                 logger.debug("🔄 FLUSH: No current batch to send")
 
-        # Wait for queue to empty
+        # Wait for all queued items to be fully processed
         start_time = time.time()
         initial_queue_size = self._queue.qsize()
 
@@ -256,17 +259,54 @@ class BatchProcessor:
                 f"🔄 FLUSH: Waiting for {initial_queue_size} queued traces to process..."
             )
 
-        while not self._queue.empty():
-            if timeout and (time.time() - start_time) > timeout:
-                remaining_traces = self._queue.qsize()
+        # Check both queue empty AND unfinished_tasks to ensure everything is done
+        # This prevents race conditions where items are dequeued but not yet processed
+        while True:
+            queue_empty = self._queue.empty()
+            unfinished = self._queue.unfinished_tasks
+            batch_empty = True
+            sending_batch = False
+
+            # If the queue is drained but we still have items sitting in the in-memory batch,
+            # force-send them now instead of waiting for the background timeout/size trigger.
+            with self._batch_lock:
+                batch_empty = not self._batch
+                sending_batch = self._sending_batch
+
+                if (
+                    queue_empty
+                    and unfinished == 0
+                    and (not batch_empty)
+                    and (not sending_batch)
+                ):
+                    try:
+                        logger.info(
+                            f"🔄 FLUSH: Sending final in-memory batch of {len(self._batch)} traces"
+                        )
+                    except (ValueError, OSError, RuntimeError, Exception):
+                        pass
+                    self._send_current_batch()
+                    batch_empty = not self._batch
+                    sending_batch = self._sending_batch
+
+            # Both conditions must be true for complete flush
+            if queue_empty and unfinished == 0 and batch_empty and (not sending_batch):
+                break
+
+            # Timeout check (explicit None check so timeout=0 is handled correctly)
+            if timeout is not None and (time.time() - start_time) > timeout:
+                remaining_queue = self._queue.qsize()
+                remaining_tasks = self._queue.unfinished_tasks
                 log_error_always(
                     logger,
-                    f"Flush timeout reached, {remaining_traces} traces may be lost",
+                    f"Flush timeout reached, {remaining_tasks} traces may be lost",
                     timeout=timeout,
-                    remaining_traces=remaining_traces,
+                    remaining_in_queue=remaining_queue,
+                    unfinished_tasks=remaining_tasks,
                     elapsed_time=time.time() - start_time,
                 )
                 break
+
             time.sleep(0.1)
 
         elapsed_time = time.time() - start_time
@@ -438,124 +478,128 @@ class BatchProcessor:
                 pass
             return
 
-        batch_to_process = self._batch.copy()
-        self._batch.clear()
-
-        # Split into audio, images, and traces
-        audio_items = [
-            item for item in batch_to_process if item.get("_item_type") == "audio"
-        ]
-        image_items = [
-            item for item in batch_to_process if item.get("_item_type") == "image"
-        ]
-        trace_items = [
-            item for item in batch_to_process if item.get("_item_type") == "trace"
-        ]
-
+        self._sending_batch = True
         try:
-            logger.info(
-                f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(image_items)} images, {len(trace_items)} traces"
-            )
-        except (ValueError, OSError, RuntimeError, Exception):
-            pass
+            batch_to_process = self._batch.copy()
+            self._batch.clear()
 
-        # Send ALL audio first (individually)
-        if audio_items:
+            # Split into audio, images, and traces
+            audio_items = [
+                item for item in batch_to_process if item.get("_item_type") == "audio"
+            ]
+            image_items = [
+                item for item in batch_to_process if item.get("_item_type") == "image"
+            ]
+            trace_items = [
+                item for item in batch_to_process if item.get("_item_type") == "trace"
+            ]
+
             try:
-                logger.info(f"🎵 Sending {len(audio_items)} audio files first...")
+                logger.info(
+                    f"📤 PROCESSING BATCH: {len(audio_items)} audio, {len(image_items)} images, {len(trace_items)} traces"
+                )
             except (ValueError, OSError, RuntimeError, Exception):
                 pass
 
-            for audio_item in audio_items:
-                # Remove internal marker before sending
-                audio_item.pop("_item_type", None)
-
-                # Validate audio_uuid exists (should always exist due to add_audio validation)
-                audio_uuid = audio_item.get("audio_uuid")
-                if not audio_uuid:
-                    log_error_always(
-                        logger,
-                        "Skipping audio in batch - missing audio_uuid",
-                        audio_item_keys=list(audio_item.keys()),
-                    )
-                    continue
-
+            # Send ALL audio first (individually)
+            if audio_items:
                 try:
-                    self.send_callback({"type": "audio", "data": audio_item})
-                except Exception as e:
-                    log_error_always(
-                        logger,
-                        f"Failed to send audio {audio_uuid}",
-                        exc_info=True,
-                        error=str(e),
-                        audio_uuid=audio_uuid,
-                    )
-
-        # Send ALL images (individually)
-        if image_items:
-            try:
-                logger.info(f"🖼️  Sending {len(image_items)} image files...")
-            except (ValueError, OSError, RuntimeError, Exception):
-                pass
-
-            for image_item in image_items:
-                # Remove internal marker before sending
-                image_item.pop("_item_type", None)
-
-                # Validate image_uuid exists (should always exist due to add_image validation)
-                image_uuid = image_item.get("image_uuid")
-                if not image_uuid:
-                    log_error_always(
-                        logger,
-                        "Skipping image in batch - missing image_uuid",
-                        image_item_keys=list(image_item.keys()),
-                    )
-                    continue
-
-                try:
-                    self.send_callback({"type": "image", "data": image_item})
-                except Exception as e:
-                    log_error_always(
-                        logger,
-                        f"Failed to send image {image_uuid}",
-                        exc_info=True,
-                        error=str(e),
-                        image_uuid=image_uuid,
-                    )
-
-        # Then send traces (batched)
-        if trace_items:
-            try:
-                logger.info(f"📦 Sending {len(trace_items)} traces...")
-            except (ValueError, OSError, RuntimeError, Exception):
-                pass
-
-            # Remove internal marker from traces
-            for item in trace_items:
-                item.pop("_item_type", None)
-
-            if log_debug_enabled():
-                # Log trace IDs in the batch
-                for i, trace in enumerate(trace_items):
-                    trace_id = trace.get("trace_id", "unknown")
-                    trace_name = trace.get("name", "unnamed")
-                    logger.debug(f"    [{i+1}] {trace_name} (ID: {trace_id})")
-
-            try:
-                self.send_callback({"type": "traces", "data": trace_items})
-                try:
-                    logger.info(
-                        f"✅ Successfully sent batch of {len(trace_items)} traces via callback"
-                    )
+                    logger.info(f"🎵 Sending {len(audio_items)} audio files first...")
                 except (ValueError, OSError, RuntimeError, Exception):
                     pass
-            except Exception as e:
-                log_error_always(
-                    logger,
-                    f"Failed to send batch of {len(trace_items)} traces",
-                    exc_info=True,
-                    batch_size=len(trace_items),
-                    error=str(e),
-                )
-                # In a production implementation, we might want to retry or
-                # implement a dead letter queue here
+
+                for audio_item in audio_items:
+                    # Remove internal marker before sending
+                    audio_item.pop("_item_type", None)
+
+                    # Validate audio_uuid exists (should always exist due to add_audio validation)
+                    audio_uuid = audio_item.get("audio_uuid")
+                    if not audio_uuid:
+                        log_error_always(
+                            logger,
+                            "Skipping audio in batch - missing audio_uuid",
+                            audio_item_keys=list(audio_item.keys()),
+                        )
+                        continue
+
+                    try:
+                        self.send_callback({"type": "audio", "data": audio_item})
+                    except Exception as e:
+                        log_error_always(
+                            logger,
+                            f"Failed to send audio {audio_uuid}",
+                            exc_info=True,
+                            error=str(e),
+                            audio_uuid=audio_uuid,
+                        )
+
+            # Send ALL images (individually)
+            if image_items:
+                try:
+                    logger.info(f"🖼️  Sending {len(image_items)} image files...")
+                except (ValueError, OSError, RuntimeError, Exception):
+                    pass
+
+                for image_item in image_items:
+                    # Remove internal marker before sending
+                    image_item.pop("_item_type", None)
+
+                    # Validate image_uuid exists (should always exist due to add_image validation)
+                    image_uuid = image_item.get("image_uuid")
+                    if not image_uuid:
+                        log_error_always(
+                            logger,
+                            "Skipping image in batch - missing image_uuid",
+                            image_item_keys=list(image_item.keys()),
+                        )
+                        continue
+
+                    try:
+                        self.send_callback({"type": "image", "data": image_item})
+                    except Exception as e:
+                        log_error_always(
+                            logger,
+                            f"Failed to send image {image_uuid}",
+                            exc_info=True,
+                            error=str(e),
+                            image_uuid=image_uuid,
+                        )
+
+            # Then send traces (batched)
+            if trace_items:
+                try:
+                    logger.info(f"📦 Sending {len(trace_items)} traces...")
+                except (ValueError, OSError, RuntimeError, Exception):
+                    pass
+
+                # Remove internal marker from traces
+                for item in trace_items:
+                    item.pop("_item_type", None)
+
+                if log_debug_enabled():
+                    # Log trace IDs in the batch
+                    for i, trace in enumerate(trace_items):
+                        trace_id = trace.get("trace_id", "unknown")
+                        trace_name = trace.get("name", "unnamed")
+                        logger.debug(f"    [{i+1}] {trace_name} (ID: {trace_id})")
+
+                try:
+                    self.send_callback({"type": "traces", "data": trace_items})
+                    try:
+                        logger.info(
+                            f"✅ Successfully sent batch of {len(trace_items)} traces via callback"
+                        )
+                    except (ValueError, OSError, RuntimeError, Exception):
+                        pass
+                except Exception as e:
+                    log_error_always(
+                        logger,
+                        f"Failed to send batch of {len(trace_items)} traces",
+                        exc_info=True,
+                        batch_size=len(trace_items),
+                        error=str(e),
+                    )
+                    # In a production implementation, we might want to retry or
+                    # implement a dead letter queue here
+        finally:
+            self._sending_batch = False
