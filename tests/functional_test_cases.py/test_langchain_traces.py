@@ -78,7 +78,7 @@ def _simulate_llm_interaction(
     handler.on_llm_start(
         serialized,
         prompts,
-        run_id,
+        run_id=run_id,
         invocation_params={"model": model_name, "temperature": temperature},
         temperature=temperature,
         batch_size=1,
@@ -96,7 +96,7 @@ def _simulate_llm_interaction(
         },
     )
 
-    handler.on_llm_end(response, run_id)
+    handler.on_llm_end(response, run_id=run_id)
 
 
 @pytest.mark.disable_transport_mocking

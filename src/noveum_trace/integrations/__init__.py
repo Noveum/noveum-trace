@@ -56,3 +56,14 @@ except ImportError as e:
         "LiveKit job context extraction features will not be available.",
         exc_info=e,
     )
+
+# Pipecat integration
+try:
+    from noveum_trace.integrations.pipecat import (
+        NoveumTraceObserver,
+        setup_pipecat_tracing,
+    )
+
+    __all__.extend(["NoveumTraceObserver", "setup_pipecat_tracing"])
+except ImportError:
+    pass
