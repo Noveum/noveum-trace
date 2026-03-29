@@ -3,15 +3,16 @@ Typing helpers for Pipecat observer mixins.
 
 ``_PipecatObserverState`` holds instance attribute annotations (initialised in
 ``NoveumTraceObserver.__init__``). ``_PipecatObserverMethods`` is a ``Protocol``
-for helper methods implemented on ``NoveumTraceObserver``. Mixins inherit both so
-mypy types ``self`` correctly without ``type: ignore``.
+documenting helper methods on ``NoveumTraceObserver`` (for typing call sites).
+Mixins inherit only ``_PipecatObserverState`` via ``_PipecatObserverMixinBase`` so
+cooperative ``super().__init__`` reaches Pipecat ``BaseObject`` (see mixin base).
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 
 class _PipecatObserverState:
@@ -98,5 +99,28 @@ class _PipecatObserverMethods(Protocol):
     async def _finish_conversation(self, cancelled: bool = False) -> None: ...
 
 
-class _PipecatObserverMixinBase(_PipecatObserverState, _PipecatObserverMethods):
-    """Combine attribute declarations and structural method requirements."""
+# Do not inherit _PipecatObserverMethods (Protocol) at runtime: it inserts
+# typing.Protocol / Generic before BaseObserver in NoveumTraceObserver's MRO, so
+# super().__init__ never reaches Pipecat BaseObject (no _name). For mypy, mirror
+# the protocol methods only under TYPE_CHECKING so they are not on the live class.
+class _PipecatObserverMixinBase(_PipecatObserverState):
+    """Runtime: state attrs only. Type-check: same methods as ``_PipecatObserverMethods``."""
+
+    if TYPE_CHECKING:
+
+        def _create_child_span(
+            self,
+            name: str,
+            parent_span: Any = None,
+            attributes: Optional[dict[str, Any]] = None,
+        ) -> Any:
+            ...
+
+        def _get_client(self) -> Any:
+            ...
+
+        async def _start_new_turn(self, turn_number: Optional[int] = None) -> None:
+            ...
+
+        async def _finish_conversation(self, cancelled: bool = False) -> None:
+            ...

@@ -16,6 +16,17 @@ def pipecat_frames():
     return ff
 
 
+def test_noveum_trace_observer_initializes_pipecat_base_object() -> None:
+    """TaskObserver stringifies observers via BaseObject.name; _name must exist (MRO/super)."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver()
+    assert getattr(obs, "_name", None) is not None
+    assert str(obs) == obs.name
+
+
 def test_noveum_trace_observer_turn_handlers_emitter_first() -> None:
     """Pipecat calls event handlers as handler(emitter, *args)."""
     pytest.importorskip("pipecat.observers.base_observer")
