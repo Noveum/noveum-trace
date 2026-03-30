@@ -188,6 +188,26 @@ async def test_finish_conversation_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finish_conversation_resets_llm_text_buffer() -> None:
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(capture_text=True)
+    obs._llm_text_buffer = ["hello"]
+
+    trace = MagicMock()
+    trace.attributes = {}
+    trace.finish = MagicMock()
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    assert obs._llm_text_buffer == []
+
+
+@pytest.mark.asyncio
 async def test_create_child_span_returns_none_without_trace() -> None:
     pytest.importorskip("pipecat.observers.base_observer")
 
@@ -293,7 +313,7 @@ async def test_on_conversation_audio_concatenates_chunks() -> None:
     obs = NoveumTraceObserver()
     await obs._on_conversation_audio(MagicMock(), b"a", 16000, 2)
     await obs._on_conversation_audio(MagicMock(), b"b", 16000, 2)
-    assert obs._conversation_audio_data == b"ab"
+    assert obs._conversation_audio_chunks == [b"a", b"b"]
     assert obs._conversation_audio_sample_rate == 16000
     assert obs._conversation_audio_num_channels == 2
 
@@ -312,6 +332,69 @@ async def test_ensure_audio_buffer_recording_calls_start() -> None:
     obs._audio_buffer_processor = proc
     await obs._ensure_audio_buffer_recording()
     proc.start_recording.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_audio_buffer_recording_skips_when_record_audio_false() -> None:
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    proc = MagicMock()
+    proc._recording = False
+    proc.start_recording = AsyncMock()
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._audio_buffer_processor = proc
+    await obs._ensure_audio_buffer_recording()
+
+    proc.start_recording.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_push_frame_does_not_ensure_audio_buffer_when_record_audio_false() -> (
+    None
+):
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+
+    class InputAudioRawFrame:
+        pass
+
+    proc_ab = MagicMock()
+    proc_ab._recording = False
+    obs._audio_buffer_processor = proc_ab
+
+    obs._ensure_audio_buffer_recording = AsyncMock()
+    data = MagicMock()
+    data.frame = InputAudioRawFrame()
+
+    await obs.on_push_frame(data)
+    assert obs._ensure_audio_buffer_recording.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_on_push_frame_does_not_ensure_audio_buffer_when_abp_already_recording() -> (
+    None
+):
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=True)
+
+    class InputAudioRawFrame:
+        pass
+
+    proc_ab = MagicMock()
+    proc_ab._recording = True
+    obs._audio_buffer_processor = proc_ab
+
+    obs._ensure_audio_buffer_recording = AsyncMock()
+    data = MagicMock()
+    data.frame = InputAudioRawFrame()
+
+    await obs.on_push_frame(data)
+    assert obs._ensure_audio_buffer_recording.await_count == 0
 
 
 @pytest.mark.asyncio

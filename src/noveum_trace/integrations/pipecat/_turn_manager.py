@@ -82,7 +82,7 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         if self._using_external_turn_tracking:
             return
 
-        self._cancel_turn_end_timer()
+        await self._cancel_turn_end_timer()
 
         if self._is_bot_speaking:
             await self._handle_interruption_internal(interrupted_by_user=True)
@@ -110,7 +110,7 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         """``UserStartedSpeakingFrame``: open a turn if none is active (standalone)."""
         if self._using_external_turn_tracking:
             return
-        self._cancel_turn_end_timer()
+        await self._cancel_turn_end_timer()
         if self._current_turn_span is None:
             await self._start_new_turn()
 
@@ -158,7 +158,7 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         if self._using_external_turn_tracking:
             return
 
-        self._cancel_turn_end_timer()
+        await self._cancel_turn_end_timer()
         if self._current_turn_span is not None:
             self._turn_end_task = asyncio.create_task(self._deferred_turn_end())
 
@@ -542,11 +542,16 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
     # Standalone turn-end timer                                              #
     # ---------------------------------------------------------------------- #
 
-    def _cancel_turn_end_timer(self) -> None:
+    async def _cancel_turn_end_timer(self) -> None:
         """Cancel a pending deferred turn-end ``asyncio.Task`` if one is running."""
-        if self._turn_end_task and not self._turn_end_task.done():
-            self._turn_end_task.cancel()
+        task = self._turn_end_task
         self._turn_end_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _deferred_turn_end(self) -> None:
         """Sleep for the configured timeout, then close the turn if still open."""

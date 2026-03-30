@@ -239,10 +239,12 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 attributes["llm.tool_choice"] = pending["tool_choice"]
             self._pending_llm_context = {}
 
-        self._active_llm_span = self._create_child_span(
-            SPAN_LLM,
-            parent_span=self._current_turn_span,
-            attributes=attributes,
+        self._active_llm_span = (
+            self._create_child_span(  # pylint: disable=assignment-from-no-return
+                SPAN_LLM,
+                parent_span=self._current_turn_span,
+                attributes=attributes,
+            )
         )
 
     async def _handle_llm_text(self, data: Any) -> None:
@@ -293,6 +295,7 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             self._function_call_results.clear()
 
             self._pre_span_function_call_ids.clear()
+            self._llm_text_buffer.clear()
             return
         self._active_llm_span = None
         # Keep a backref so MetricsFrame data (token counts, processing time) arriving

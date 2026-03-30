@@ -1,6 +1,6 @@
 # Pipecat Integration Guide
 
-Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversation is recorded as a structured trace with per-turn spans for STT, LLM, TTS, function calls, latency, and token usage.
+Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversation is recorded as a structured trace with per-turn spans for STT, LLM, TTS; tool/function-call details are attached to the LLM span as attributes, along with latency and token usage.
 
 ---
 
@@ -131,13 +131,25 @@ Trace: pipecat.conversation
 
 ### Optional spans
 
-**Function calls** — when the LLM calls a tool, a `pipecat.function_call` child span is created under `pipecat.llm`:
+**Function calls** — when the LLM calls a tool, tool/function call data is stored as flattened attribute lists on the existing `pipecat.llm` span (no `pipecat.function_call` child span):
 
 ```
-Span: pipecat.function_call
-├── function.name: get_weather
-├── function.arguments: {"city": "Paris"}
-└── function.result: "{\"temp_c\": 12}"
+Span: pipecat.llm
+├── llm.function_calls: [
+│   {
+│     "tool_call_id": "abc123",
+│     "name": "get_weather",
+│     "arguments": {"city": "Paris"}
+│   }
+│ ]
+└── llm.function_call_results: [
+    {
+      "tool_call_id": "abc123",
+      "name": "get_weather",
+      "arguments": {"city": "Paris"},
+      "result": "{\"temp_c\": 12}"
+    }
+  ]
 ```
 
 **LLM reasoning** — for extended-thinking models (e.g. Anthropic extended thinking), reasoning is emitted as attributes on the existing `pipecat.llm` span (no child span):
@@ -161,7 +173,8 @@ trace_obs = NoveumTraceObserver(
     # Capture LLM input/output text and TTS text in spans (default: True)
     capture_text=True,
 
-    # Create child spans for each tool/function call (default: True)
+    # Record tool/function calls on the existing `pipecat.llm` span as
+    # `llm.function_calls` / `llm.function_call_results` lists (default: True)
     capture_function_calls=True,
 
     # Buffer and upload STT/TTS audio as WAV files per span (default: True)

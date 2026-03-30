@@ -160,7 +160,6 @@ class NoveumTraceObserver(
         self._active_llm_span: Any = None
         self._active_tts_span: Any = None
         # tool_call_id → call dict
-        # tool_call_id → call dict
         self._pending_function_calls: dict[str, dict[str, Any]] = {}
         # completed/cancelled results
         self._function_call_results: list[dict[str, Any]] = []
@@ -204,7 +203,10 @@ class NoveumTraceObserver(
         # Full-conversation audio (populated via AudioBufferProcessor wired in attach_to_task)
         # Holds raw PCM bytes from on_audio_data until EndFrame flushes them.
         self._audio_buffer_processor: Any = None
-        self._conversation_audio_data: Optional[bytes] = None
+        self._abp_is_recording: bool = (
+            False  # track internally, don't probe private _recording
+        )
+        self._conversation_audio_chunks: list[bytes] = []
         self._conversation_audio_sample_rate: Optional[int] = None
         self._conversation_audio_num_channels: Optional[int] = None
 
@@ -361,7 +363,7 @@ class NoveumTraceObserver(
         # against writing audio from stale processors.
         prev_proc = self._audio_buffer_processor
         self._audio_buffer_processor = found_proc
-        self._conversation_audio_data = None
+        self._conversation_audio_chunks = []
         self._conversation_audio_sample_rate = None
         self._conversation_audio_num_channels = None
 
@@ -373,6 +375,7 @@ class NoveumTraceObserver(
             # on_push_frame runs after process_frame, so start here before run().
             try:
                 await self._audio_buffer_processor.start_recording()
+                self._abp_is_recording = True
             except Exception as e:
                 logger.warning(
                     "Failed to start AudioBufferProcessor recording: %s",
@@ -398,16 +401,33 @@ class NoveumTraceObserver(
         """
         Ensure AudioBufferProcessor is recording.
 
+        If ``record_audio=False`` we must never call ``start_recording`` even if
+        callers manually attach an ``AudioBufferProcessor`` for testing/experiments.
+
         ``attach_to_task`` awaits ``start_recording()`` before ``runner.run``.  After
-        ``stop_recording()`` (EndFrame), ``_recording`` is False — call
+        ``stop_recording()`` (EndFrame), ``_abp_is_recording`` is False — call
         ``await start_recording()`` again.
         Skips if already recording to avoid ``start_recording()`` wiping buffers.
         """
+        if not self._record_audio:
+            return
         proc = self._audio_buffer_processor
-        if proc is None or getattr(proc, "_recording", False):
+        if proc is None:
+            return
+
+        # Prefer Pipecat's private `_recording` state when present: it is the
+        # most reliable source of truth for whether `start_recording()` should
+        # be called.
+        if hasattr(proc, "_recording") and getattr(proc, "_recording", False):
+            self._abp_is_recording = True
+            return
+
+        # Fall back to our internal tracking if Pipecat doesn't expose `_recording`.
+        if not hasattr(proc, "_recording") and self._abp_is_recording:
             return
         try:
             await proc.start_recording()
+            self._abp_is_recording = True
             logger.debug("AudioBufferProcessor recording restarted after session stop")
         except Exception as e:
             logger.warning(
@@ -431,13 +451,10 @@ class NoveumTraceObserver(
             and processor is not self._audio_buffer_processor
         ):
             return
-        if self._conversation_audio_data:
-            self._conversation_audio_data += audio
-        else:
-            self._conversation_audio_data = audio
+        self._conversation_audio_chunks.append(audio)
         self._conversation_audio_sample_rate = sample_rate
         self._conversation_audio_num_channels = num_channels
-        total = len(self._conversation_audio_data or b"")
+        total = sum(len(chunk) for chunk in self._conversation_audio_chunks)
         logger.debug(
             "Conversation audio chunk: %d bytes (total %d), %d Hz, %d ch",
             len(audio),
@@ -635,9 +652,10 @@ class NoveumTraceObserver(
             # stopped and a new session begins without re-attach.
             proc_ab = self._audio_buffer_processor
             if (
-                proc_ab is not None
-                and not getattr(proc_ab, "_recording", False)
+                self._record_audio
+                and proc_ab is not None
                 and frame is not None
+                and not getattr(proc_ab, "_recording", False)
             ):
                 fn = type(frame).__name__
                 if fn in ("InputAudioRawFrame", "OutputAudioRawFrame"):
@@ -761,7 +779,7 @@ class NoveumTraceObserver(
         if self._trace is None:
             return
 
-        self._cancel_turn_end_timer()
+        await self._cancel_turn_end_timer()
 
         # Discard any partial thought accumulated so far
         self._llm_thought_buffer.clear()
@@ -860,13 +878,15 @@ class NoveumTraceObserver(
             "turn_count": 0,
         }
         self._transcription_buffer = []
+        self._llm_text_buffer.clear()
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()
         self._pending_llm_context.clear()
         # Reset stored ABP so a new PipelineTask can attach the correct processor.
         self._audio_buffer_processor = None
-        self._conversation_audio_data = None
+        self._abp_is_recording = False
+        self._conversation_audio_chunks = []
         self._conversation_audio_sample_rate = None
         self._conversation_audio_num_channels = None
 
@@ -882,6 +902,12 @@ class NoveumTraceObserver(
         if abp is None:
             return
         tasks_set = getattr(abp, "_event_tasks", None)
+        if tasks_set is None:
+            logger.debug(
+                "AudioBufferProcessor._event_tasks not found — cannot drain pending handlers. "
+                "Conversation audio may be truncated if Pipecat changed its internal API."
+            )
+            return
         if not tasks_set:
             return
         pending = [t for (_name, t) in tasks_set]
@@ -896,13 +922,13 @@ class NoveumTraceObserver(
         Mirrors ``livekit_session._upload_full_conversation_audio`` so that the
         Noveum dashboard can treat both integrations identically.
         """
-        if not (self._record_audio and self._conversation_audio_data):
+        if not (self._record_audio and self._conversation_audio_chunks):
             return
         if self._trace is None:
             return
 
-        pcm = self._conversation_audio_data
-        self._conversation_audio_data = None  # release reference early
+        pcm = b"".join(self._conversation_audio_chunks)
+        self._conversation_audio_chunks = []  # release references early
 
         sr = self._conversation_audio_sample_rate or 16000
         ch = self._conversation_audio_num_channels or 2

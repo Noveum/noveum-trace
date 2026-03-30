@@ -77,6 +77,19 @@ async def test_llm_text_accumulates_and_end_writes_output(ff) -> None:
 
 
 @pytest.mark.asyncio
+async def test_llm_response_end_clears_text_buffer_without_active_span(ff) -> None:
+    obs = _obs()
+    obs._active_llm_span = None
+
+    await obs._handle_llm_text(MagicMock(frame=ff.LLMTextFrame(text="leak?")))
+    assert obs._llm_text_buffer
+
+    await obs._handle_llm_response_end(MagicMock())
+
+    assert obs._llm_text_buffer == []
+
+
+@pytest.mark.asyncio
 async def test_llm_thought_pipeline(ff) -> None:
     obs = _obs()
     llm_span = MagicMock()

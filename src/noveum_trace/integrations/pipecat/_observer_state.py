@@ -54,7 +54,8 @@ class _PipecatObserverState:
     _tts_source_processor: Any
 
     _audio_buffer_processor: Any
-    _conversation_audio_data: Optional[bytes]
+    _abp_is_recording: bool
+    _conversation_audio_chunks: list[bytes]
     _conversation_audio_sample_rate: Optional[int]
     _conversation_audio_num_channels: Optional[int]
 
