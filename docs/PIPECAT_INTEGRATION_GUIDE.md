@@ -140,12 +140,12 @@ Span: pipecat.function_call
 └── function.result: "{\"temp_c\": 12}"
 ```
 
-**LLM reasoning** — for extended-thinking models (e.g. Anthropic extended thinking), a `pipecat.llm.thought` span is nested under `pipecat.llm`:
+**LLM reasoning** — for extended-thinking models (e.g. Anthropic extended thinking), reasoning is emitted as attributes on the existing `pipecat.llm` span (no child span):
 
 ```
-Span: pipecat.llm.thought
-├── thought.llm: "anthropic"
-└── thought.text: "Let me look up current weather..."
+Span: pipecat.llm
+├── llm.thoughts: ["Let me look up current weather..."]
+└── llm.thought_signatures: ["anthropic"]
 ```
 
 ---
@@ -182,8 +182,8 @@ trace_obs = NoveumTraceObserver(
 
 **Turn spans missing or not splitting correctly**
 
-- `await attach_to_task(task)` is required for accurate turn tracking. Make sure it is called before `runner.run`.
-- Ensure `PipelineTask` has turn tracking enabled (it is on by default in recent Pipecat versions).
+- `await trace_obs.attach_to_task(task)` is required for accurate turn tracking. Make sure it is called before `runner.run(task)`.
+- Ensure your `PipelineTask` has turn tracking enabled (so `task.turn_tracking_observer` is present for `trace_obs.attach_to_task(task)` to wire external turn boundaries; it is on by default in recent Pipecat versions).
 
 **LLM token counts not appearing**
 

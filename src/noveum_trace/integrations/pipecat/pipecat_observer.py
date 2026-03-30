@@ -821,6 +821,18 @@ class NoveumTraceObserver(
 
         logger.debug("Pipecat conversation trace finished")
 
+        # Reset conversation-scoped caches for observer reuse
+        self._metrics_accumulator = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost": 0.0,
+            "turn_count": 0,
+        }
+        self._transcription_buffer = []
+        self._current_turn_number = 0
+        self._processed_frame_ids.clear()
+        self._frame_id_history.clear()
+
     async def _await_audio_buffer_pending_handlers(self) -> None:
         """
         Pipecat's ``FrameProcessor._call_event_handler`` schedules async handlers
