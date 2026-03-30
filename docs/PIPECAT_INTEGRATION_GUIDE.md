@@ -17,7 +17,7 @@ Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversat
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - A working Pipecat pipeline (`pipecat-ai`)
 - A Noveum API key (get one at [noveum.ai](https://noveum.ai))
 
@@ -128,39 +128,6 @@ Trace: pipecat.conversation
     conversation.total_output_tokens: 310
     conversation.total_cost: 0.0021
 ```
-
-### Optional spans
-
-**Function calls** — when the LLM calls a tool, tool/function call data is stored as flattened attribute lists on the existing `pipecat.llm` span (no `pipecat.function_call` child span):
-
-```
-Span: pipecat.llm
-├── llm.function_calls: [
-│   {
-│     "tool_call_id": "abc123",
-│     "name": "get_weather",
-│     "arguments": {"city": "Paris"}
-│   }
-│ ]
-└── llm.function_call_results: [
-    {
-      "tool_call_id": "abc123",
-      "name": "get_weather",
-      "arguments": {"city": "Paris"},
-      "result": "{\"temp_c\": 12}"
-    }
-  ]
-```
-
-**LLM reasoning** — for extended-thinking models (e.g. Anthropic extended thinking), reasoning is emitted as attributes on the existing `pipecat.llm` span (no child span):
-
-```
-Span: pipecat.llm
-├── llm.thoughts: ["Let me look up current weather..."]
-└── llm.thought_signatures: ["anthropic"]
-```
-
----
 
 ## Configuration Options
 
