@@ -319,6 +319,76 @@ async def test_on_conversation_audio_concatenates_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_full_conversation_audio_creates_error_span_when_no_chunks() -> (
+    None
+):
+    """Even when no audio chunks were captured, we should emit the span."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=True)
+    span = MagicMock()
+    span.span_id = "sid"
+    span.trace_id = "tid"
+    span.attributes = {}
+
+    trace = MagicMock()
+    trace.create_span.return_value = span
+
+    obs._trace = trace
+    obs._conversation_audio_chunks = []
+    obs._audio_buffer_processor = None
+
+    await obs._upload_full_conversation_audio()
+
+    trace.create_span.assert_called_once()
+    args, kwargs = trace.create_span.call_args
+    assert kwargs["name"] == "pipecat.full_conversation"
+    assert kwargs["attributes"]["full_conversation.missing_reason"] == (
+        "audio_buffer_processor_not_attached"
+    )
+    assert span.attributes["pipecat_span_status"] == "error"
+    trace.finish_span.assert_called_once_with("sid")
+
+
+@pytest.mark.asyncio
+async def test_upload_full_conversation_audio_uploads_when_chunks_present() -> None:
+    """When audio chunks exist, we should upload and finish the span."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=True)
+    span = MagicMock()
+    span.span_id = "sid"
+    span.trace_id = "tid"
+    span.attributes = {}
+
+    trace = MagicMock()
+    trace.create_span.return_value = span
+    obs._trace = trace
+
+    # Enough PCM for a non-zero duration_ms.
+    obs._conversation_audio_chunks = [b"\x00\x00" * 5000]
+    obs._conversation_audio_sample_rate = 16000
+    obs._conversation_audio_num_channels = 2
+
+    client = MagicMock()
+    client.export_audio = MagicMock()
+
+    obs._get_client = MagicMock(return_value=client)  # type: ignore[method-assign]
+
+    await obs._upload_full_conversation_audio()
+
+    trace.create_span.assert_called_once()
+    client.export_audio.assert_called_once()
+    trace.finish_span.assert_called_once_with("sid")
+    assert span.attributes["pipecat_span_status"] == "ok"
+    assert obs._conversation_audio_chunks == []
+
+
+@pytest.mark.asyncio
 async def test_ensure_audio_buffer_recording_calls_start() -> None:
     pytest.importorskip("pipecat.observers.base_observer")
 

@@ -340,7 +340,10 @@ class NoveumTraceObserver(
         # RTVI layouts: Task → RTVIProcessor → inner Pipeline; ABP is inside the inner one.
         found_proc: Any = None
         for proc in self._iter_nested_processors(pipeline):
-            if type(proc).__name__ == "AudioBufferProcessor":
+            # Pipecat may wrap/subclass AudioBufferProcessor; accept subclasses too.
+            if any(
+                base.__name__ == "AudioBufferProcessor" for base in type(proc).__mro__
+            ):
                 found_proc = proc
                 break
 
@@ -922,9 +925,43 @@ class NoveumTraceObserver(
         Mirrors ``livekit_session._upload_full_conversation_audio`` so that the
         Noveum dashboard can treat both integrations identically.
         """
-        if not (self._record_audio and self._conversation_audio_chunks):
+        if not self._record_audio:
             return
         if self._trace is None:
+            return
+
+        # Always create the span so the dashboard has a stable place to look,
+        # even if we couldn't capture audio (e.g. ABP missing or recording stopped early).
+        missing_reason: Optional[str] = None
+        if not self._conversation_audio_chunks:
+            missing_reason = (
+                "no_conversation_audio_chunks_captured"
+                if self._audio_buffer_processor is not None
+                else "audio_buffer_processor_not_attached"
+            )
+
+        if missing_reason is not None:
+            missing_attributes: dict[str, Any] = {
+                "full_conversation.audio_source": "AudioBufferProcessor",
+                "full_conversation.missing_reason": missing_reason,
+                "pipecat_span_status_message": missing_reason,
+            }
+            try:
+                span = self._trace.create_span(
+                    name="pipecat.full_conversation",
+                    attributes=missing_attributes,
+                )
+                if span is None:
+                    logger.warning("Could not create pipecat.full_conversation span")
+                    return
+                span.attributes["pipecat_span_status"] = "error"
+                self._trace.finish_span(span.span_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to create pipecat.full_conversation missing span: %s",
+                    e,
+                    exc_info=True,
+                )
             return
 
         pcm = b"".join(self._conversation_audio_chunks)
