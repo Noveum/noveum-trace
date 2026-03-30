@@ -301,7 +301,7 @@ class NoveumTraceObserver(
             self.attach_latency_observer(lto)
 
         # Auto-detect AudioBufferProcessor for full-conversation recording
-        if self._audio_buffer_processor is None:
+        if self._record_audio:
             await self._attach_audio_buffer_from_pipeline(task)
 
     def _iter_nested_processors(self, node: Any) -> Iterator[Any]:
@@ -336,39 +336,63 @@ class NoveumTraceObserver(
             return
 
         # RTVI layouts: Task → RTVIProcessor → inner Pipeline; ABP is inside the inner one.
+        found_proc: Any = None
         for proc in self._iter_nested_processors(pipeline):
             if type(proc).__name__ == "AudioBufferProcessor":
-                try:
-                    proc.add_event_handler("on_audio_data", self._on_conversation_audio)
-                    self._audio_buffer_processor = proc
-                    # ABP drops InputAudio/OutputAudio until start_recording(); observer
-                    # on_push_frame runs after process_frame, so start here before run().
-                    try:
-                        await proc.start_recording()
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to start AudioBufferProcessor recording: %s",
-                            e,
-                            exc_info=True,
-                        )
-                    logger.info(
-                        "Noveum trace: full-conversation audio attached (nested pipeline OK)"
-                    )
-                    logger.debug(
-                        "Attached to AudioBufferProcessor; start_recording() completed"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to attach to AudioBufferProcessor: %s", e, exc_info=True
-                    )
-                return
+                found_proc = proc
+                break
 
-        if self._record_audio:
-            logger.warning(
-                "No AudioBufferProcessor found in pipeline — full-conversation audio "
-                "will not be recorded. Add AudioBufferProcessor(num_channels=2) to "
-                "your pipeline and await attach_to_task() before runner.run()."
+        if found_proc is None:
+            if self._record_audio:
+                logger.warning(
+                    "No AudioBufferProcessor found in pipeline — full-conversation audio "
+                    "will not be recorded. Add AudioBufferProcessor(num_channels=2) to "
+                    "your pipeline and await attach_to_task() before runner.run()."
+                )
+            return
+
+        # If the same ABP is still active for this observer, don't re-register the handler.
+        if found_proc is self._audio_buffer_processor:
+            await self._ensure_audio_buffer_recording()
+            return
+
+        # Swap ABP when a new PipelineTask (or changed pipeline) is attached.
+        # Note: Pipecat may not support handler removal; _on_conversation_audio guards
+        # against writing audio from stale processors.
+        prev_proc = self._audio_buffer_processor
+        self._audio_buffer_processor = found_proc
+        self._conversation_audio_data = None
+        self._conversation_audio_sample_rate = None
+        self._conversation_audio_num_channels = None
+
+        try:
+            self._audio_buffer_processor.add_event_handler(
+                "on_audio_data", self._on_conversation_audio
             )
+            # ABP drops InputAudio/OutputAudio until start_recording(); observer
+            # on_push_frame runs after process_frame, so start here before run().
+            try:
+                await self._audio_buffer_processor.start_recording()
+            except Exception as e:
+                logger.warning(
+                    "Failed to start AudioBufferProcessor recording: %s",
+                    e,
+                    exc_info=True,
+                )
+            logger.info(
+                "Noveum trace: full-conversation audio attached (nested pipeline OK)"
+            )
+            logger.debug(
+                "Attached to AudioBufferProcessor; start_recording() completed"
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to attach to AudioBufferProcessor: %s", e, exc_info=True
+            )
+            # If the new ABP couldn't be wired, prefer keeping the previous one.
+            self._audio_buffer_processor = prev_proc
+            return
+        return
 
     async def _ensure_audio_buffer_recording(self) -> None:
         """
@@ -400,6 +424,13 @@ class NoveumTraceObserver(
         them into a WAV and uploads them as the conversation-level recording.
         Chunks are concatenated when ``buffer_size > 0`` triggers multiple flushes.
         """
+        # Ignore audio from stale processors after the observer swaps ABP between tasks.
+        # Allow direct calls/tests when we haven't attached an ABP yet.
+        if (
+            self._audio_buffer_processor is not None
+            and processor is not self._audio_buffer_processor
+        ):
+            return
         if self._conversation_audio_data:
             self._conversation_audio_data += audio
         else:
@@ -832,6 +863,12 @@ class NoveumTraceObserver(
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()
+        self._pending_llm_context.clear()
+        # Reset stored ABP so a new PipelineTask can attach the correct processor.
+        self._audio_buffer_processor = None
+        self._conversation_audio_data = None
+        self._conversation_audio_sample_rate = None
+        self._conversation_audio_num_channels = None
 
     async def _await_audio_buffer_pending_handlers(self) -> None:
         """
