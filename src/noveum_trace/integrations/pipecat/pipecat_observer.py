@@ -10,7 +10,7 @@ Usage::
 
     obs = NoveumTraceObserver()
     task = PipelineTask(pipeline, observers=[obs])
-    obs.attach_to_task(task)   # wire TurnTrackingObserver / UserBotLatencyObserver
+    await obs.attach_to_task(task)   # wire TurnTrackingObserver / UserBotLatencyObserver
 
 ``attach_to_task`` wires ``TurnTrackingObserver`` / ``UserBotLatencyObserver``
 from the task so turn spans match Pipecat's turn boundaries.
@@ -275,7 +275,7 @@ class NoveumTraceObserver(
     # External observer wiring (public API)                                  #
     # ---------------------------------------------------------------------- #
 
-    def attach_to_task(self, task: Any) -> None:
+    async def attach_to_task(self, task: Any) -> None:
         """
         Subscribe to ``PipelineTask``-managed observers when present.
 
@@ -284,7 +284,9 @@ class NoveumTraceObserver(
         tracking). Also auto-detects an ``AudioBufferProcessor`` in the pipeline
         to enable full-conversation stereo audio recording.
 
-        Call after constructing ``PipelineTask`` and this observer.
+        Call from async code after constructing ``PipelineTask`` and this observer,
+        before ``runner.run(task)``, so conversation audio recording can start
+        before the pipeline processes PCM.
 
         Safe to call multiple times; repeated calls with the same observers are
         no-ops.
@@ -300,7 +302,7 @@ class NoveumTraceObserver(
 
         # Auto-detect AudioBufferProcessor for full-conversation recording
         if self._audio_buffer_processor is None:
-            self._attach_audio_buffer_from_pipeline(task)
+            await self._attach_audio_buffer_from_pipeline(task)
 
     def _iter_nested_processors(self, node: Any) -> Iterator[Any]:
         """Depth-first walk of Pipecat compound processors (Pipeline inside Pipeline)."""
@@ -313,7 +315,7 @@ class NoveumTraceObserver(
             yield proc
             yield from self._iter_nested_processors(proc)
 
-    def _attach_audio_buffer_from_pipeline(self, task: Any) -> None:
+    async def _attach_audio_buffer_from_pipeline(self, task: Any) -> None:
         """
         Walk the task's pipeline processors looking for an ``AudioBufferProcessor``.
 
@@ -339,22 +341,21 @@ class NoveumTraceObserver(
                 try:
                     proc.add_event_handler("on_audio_data", self._on_conversation_audio)
                     self._audio_buffer_processor = proc
-                    # PipelineTask uses TaskObserver: on_push_frame is queued and may run
-                    # AFTER frames have already been processed, so await start_recording()
-                    # in the observer is too late.  Mirror start_recording() synchronously
-                    # (same as await start_recording before any PCM).
+                    # ABP drops InputAudio/OutputAudio until start_recording(); observer
+                    # on_push_frame runs after process_frame, so start here before run().
                     try:
-                        proc._recording = True  # noqa: SLF001
-                        proc._reset_recording()  # noqa: SLF001
-                    except AttributeError as e:
+                        await proc.start_recording()
+                    except Exception as e:
                         logger.warning(
-                            "AudioBufferProcessor recording API mismatch: %s", e
+                            "Failed to start AudioBufferProcessor recording: %s",
+                            e,
+                            exc_info=True,
                         )
                     logger.info(
                         "Noveum trace: full-conversation audio attached (nested pipeline OK)"
                     )
                     logger.debug(
-                        "Attached to AudioBufferProcessor; recording enabled synchronously"
+                        "Attached to AudioBufferProcessor; start_recording() completed"
                     )
                 except Exception as e:
                     logger.warning(
@@ -366,15 +367,16 @@ class NoveumTraceObserver(
             logger.warning(
                 "No AudioBufferProcessor found in pipeline — full-conversation audio "
                 "will not be recorded. Add AudioBufferProcessor(num_channels=2) to "
-                "your pipeline and call attach_to_task() after pipeline construction."
+                "your pipeline and await attach_to_task() before runner.run()."
             )
 
     async def _ensure_audio_buffer_recording(self) -> None:
         """
         Ensure AudioBufferProcessor is recording.
 
-        attach_to_task enables recording synchronously.  After ``stop_recording()``
-        (EndFrame), ``_recording`` is False — call ``await start_recording()`` again.
+        ``attach_to_task`` awaits ``start_recording()`` before ``runner.run``.  After
+        ``stop_recording()`` (EndFrame), ``_recording`` is False — call
+        ``await start_recording()`` again.
         Skips if already recording to avoid ``start_recording()`` wiping buffers.
         """
         proc = self._audio_buffer_processor

@@ -301,49 +301,51 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
         # Reset source pin so next utterance re-pins on its first audio frame
         self._stt_source_processor = None
 
-        if span:
-            loop = asyncio.get_running_loop()
-            now = loop.time()
-            raw_result = getattr(frame, "result", None)
-            conf = extract_stt_confidence(raw_result)
-            if conf is not None:
-                span.attributes["stt.confidence"] = conf
+        try:
+            if span:
+                loop = asyncio.get_running_loop()
+                now = loop.time()
+                raw_result = getattr(frame, "result", None)
+                conf = extract_stt_confidence(raw_result)
+                if conf is not None:
+                    span.attributes["stt.confidence"] = conf
 
-            vad_start = self._vad_speech_start_time
-            if vad_start is not None:
-                span.attributes["stt.vad_to_final_ms"] = (now - vad_start) * 1000.0
+                vad_start = self._vad_speech_start_time
+                if vad_start is not None:
+                    span.attributes["stt.vad_to_final_ms"] = (now - vad_start) * 1000.0
 
-            interim_pairs = self._stt_interim_results
-            if interim_pairs:
-                try:
-                    span.attributes["stt.interim_results"] = json.dumps(
-                        interim_pairs, ensure_ascii=False
-                    )
-                except Exception:  # pylint: disable=broad-except
-                    span.attributes["stt.interim_results"] = json.dumps(
-                        interim_pairs, default=str
-                    )
+                interim_pairs = self._stt_interim_results
+                if interim_pairs:
+                    try:
+                        span.attributes["stt.interim_results"] = json.dumps(
+                            interim_pairs, ensure_ascii=False
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        span.attributes["stt.interim_results"] = json.dumps(
+                            interim_pairs, default=str
+                        )
 
+                stt_status = "ok"
+                if self._record_audio and self._stt_audio_buffer:
+                    audio_uuid = str(uuid.uuid4())
+                    if upload_audio_frames(
+                        self._stt_audio_buffer,
+                        audio_uuid,
+                        "stt",
+                        span.trace_id,
+                        span.span_id,
+                        client=self._get_client(),
+                    ):
+                        span.attributes["stt.audio_uuid"] = audio_uuid
+                    else:
+                        stt_status = "upload_failed"
+                span.attributes["pipecat_span_status"] = stt_status
+                span.finish()
+        finally:
             self._vad_speech_start_time = None
             self._stt_interim_results.clear()
-
-            self._stt_first_text_latency_recorded = False
-
-            if self._record_audio and self._stt_audio_buffer:
-                audio_uuid = str(uuid.uuid4())
-                upload_audio_frames(
-                    self._stt_audio_buffer,
-                    audio_uuid,
-                    "stt",
-                    span.trace_id,
-                    span.span_id,
-                    client=self._get_client(),
-                )
-                span.attributes["stt.audio_uuid"] = audio_uuid
             self._stt_audio_buffer.clear()
-
-            span.attributes["pipecat_span_status"] = "ok"
-            span.finish()
+            self._stt_first_text_latency_recorded = False
 
     # ---------------------------------------------------------------------- #
     # Interim transcription                                                   #

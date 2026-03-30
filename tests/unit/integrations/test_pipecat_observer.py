@@ -234,8 +234,10 @@ async def test_attach_to_task_wires_observers() -> None:
     task._pipeline = None
     task.pipeline = None
 
-    with patch.object(obs, "_attach_audio_buffer_from_pipeline"):
-        obs.attach_to_task(task)
+    with patch.object(
+        obs, "_attach_audio_buffer_from_pipeline", new_callable=AsyncMock
+    ):
+        await obs.attach_to_task(task)
 
     task.turn_tracking_observer.add_event_handler.assert_called()
     task._user_bot_latency_observer.add_event_handler.assert_called()
@@ -265,6 +267,7 @@ async def test_attach_audio_buffer_registers_processor() -> None:
 
     abp = MagicMock()
     abp.__class__.__name__ = "AudioBufferProcessor"
+    abp.start_recording = AsyncMock()
 
     pipeline = MagicMock()
     pipeline.processors = [abp]
@@ -272,10 +275,11 @@ async def test_attach_audio_buffer_registers_processor() -> None:
     task._pipeline = pipeline
 
     obs = NoveumTraceObserver(record_audio=True)
-    obs._attach_audio_buffer_from_pipeline(task)
+    await obs._attach_audio_buffer_from_pipeline(task)
 
     assert obs._audio_buffer_processor is abp
     abp.add_event_handler.assert_called()
+    abp.start_recording.assert_called_once()
     call_args = abp.add_event_handler.call_args[0]
     assert call_args[0] == "on_audio_data"
 

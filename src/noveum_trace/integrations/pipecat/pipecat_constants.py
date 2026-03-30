@@ -19,9 +19,7 @@ SPAN_TTS = "pipecat.tts"
 MAX_CONVERSATION_HISTORY = 50
 MAX_TEXT_BUFFER_LENGTH = 50_000
 # Dedupe observer callbacks when the same frame id is pushed twice (Pipecat pattern).
-# Sized to comfortably cover a busy turn: ~100 LLM text frames + ~500 TTS audio frames
-# (20 ms each, 10 s utterance) + ~50 misc × ~3 pipeline-processor hops each ≈ 1 950.
-# 4 000 gives comfortable headroom; keys are plain ints (~28 B each) so ~112 KB total.
+# Busy-turn order of magnitude: ~100 LLM text frames + ~500 TTS audio frames
 MAX_FRAME_DEDUP_HISTORY = 20_000
 
 # ---------------------------------------------------------------------------

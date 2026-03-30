@@ -119,22 +119,38 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
         # Cleared when the next TTS span opens.
         self._last_tts_span = span
 
-        if self._capture_text and self._tts_text_buffer:
-            span.attributes["tts.input_text"] = "".join(self._tts_text_buffer)
-        self._tts_text_buffer.clear()
+        try:
+            if self._capture_text and self._tts_text_buffer:
+                span.attributes["tts.input_text"] = "".join(self._tts_text_buffer)
+            self._tts_text_buffer.clear()
 
-        if self._record_audio and self._tts_audio_buffer:
-            audio_uuid = str(uuid.uuid4())
-            upload_audio_frames(
-                self._tts_audio_buffer,
-                audio_uuid,
-                "tts",
-                span.trace_id,
-                span.span_id,
-                client=self._get_client(),
-            )
-            span.attributes["tts.audio_uuid"] = audio_uuid
-            self._tts_audio_buffer.clear()
+            tts_status = "ok"
+            if self._record_audio and self._tts_audio_buffer:
+                audio_uuid = str(uuid.uuid4())
+                upload_ok = False
+                try:
+                    upload_ok = upload_audio_frames(
+                        self._tts_audio_buffer,
+                        audio_uuid,
+                        "tts",
+                        span.trace_id,
+                        span.span_id,
+                        client=self._get_client(),
+                    )
+                except Exception as e:  # pylint: disable=broad-except
+                    logger.warning(
+                        "Failed to upload TTS audio %s: %s",
+                        audio_uuid,
+                        e,
+                        exc_info=True,
+                    )
+                    upload_ok = False
+                if upload_ok:
+                    span.attributes["tts.audio_uuid"] = audio_uuid
+                    self._tts_audio_buffer.clear()
+                else:
+                    tts_status = "upload_failed"
 
-        span.attributes["pipecat_span_status"] = "ok"
-        span.finish()
+            span.attributes["pipecat_span_status"] = tts_status
+        finally:
+            span.finish()

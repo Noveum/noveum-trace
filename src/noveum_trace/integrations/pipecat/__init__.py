@@ -8,7 +8,7 @@ The observer always uses the **globally** initialised Noveum client (see
 ``noveum_trace.init`` or ``noveum_trace.get_client``). It does not create or
 hold a per-observer client.
 
-Usage::
+Usage (from an ``async`` function, before ``await runner.run(task)``)::
 
     import noveum_trace
     from noveum_trace.integrations.pipecat import NoveumTraceObserver
@@ -17,7 +17,7 @@ Usage::
 
     obs = NoveumTraceObserver()
     task = PipelineTask(pipeline, observers=[obs])
-    obs.attach_to_task(task)
+    await obs.attach_to_task(task)
 
 ``attach_to_task`` wires ``TurnTrackingObserver`` / ``UserBotLatencyObserver``
 from the task so turn spans match Pipecat's turn boundaries.  It also
@@ -34,16 +34,18 @@ pipeline::
     audio_buffer = AudioBufferProcessor(num_channels=2)
     pipeline = Pipeline([..., audio_buffer, ...])
     task = PipelineTask(pipeline, observers=[obs])
-    obs.attach_to_task(task)   # auto-detects audio_buffer
+    await obs.attach_to_task(task)   # auto-detects audio_buffer
 
 Or use the convenience helper::
 
     from noveum_trace.integrations.pipecat import setup_pipecat_tracing
 
+    observer = setup_pipecat_tracing(record_audio=True)
     task = PipelineTask(
         pipeline,
-        observers=[setup_pipecat_tracing(record_audio=True)],
+        observers=[observer],
     )
+    await observer.attach_to_task(task)
 """
 
 from typing import Any

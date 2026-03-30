@@ -36,6 +36,8 @@ pip install "noveum-trace[pipecat]"
 Three changes to your existing pipeline code:
 
 ```python
+import asyncio
+
 import noveum_trace
 from noveum_trace.integrations.pipecat import NoveumTraceObserver
 
@@ -60,19 +62,23 @@ pipeline = Pipeline([
     context_aggregator.assistant(),
 ])
 
-# 2. Add NoveumTraceObserver to your PipelineTask
-trace_obs = NoveumTraceObserver()
+async def main():
+    # 2. Add NoveumTraceObserver to your PipelineTask
+    trace_obs = NoveumTraceObserver()
 
-task = PipelineTask(
-    pipeline,
-    observers=[trace_obs],
-)
+    task = PipelineTask(
+        pipeline,
+        observers=[trace_obs],
+    )
 
-# 3. Wire turn tracking — this is required
-trace_obs.attach_to_task(task)
+    # 3. Wire turn tracking — this is required
+    await trace_obs.attach_to_task(task)
 
-runner = PipelineRunner()
-await runner.run(task)
+    runner = PipelineRunner()
+    await runner.run(task)
+
+
+asyncio.run(main())
 ```
 
 That's it. Traces are flushed automatically when the pipeline ends (`EndFrame` / `CancelFrame`).
@@ -148,10 +154,6 @@ Span: pipecat.llm.thought
 
 ```python
 trace_obs = NoveumTraceObserver(
-    # API credentials — omit to use noveum_trace.init() global client
-    api_key="your-noveum-api-key",
-    project="my-voice-bot",
-
     # Prefix for the conversation trace name (default: "pipecat")
     # Produces trace named "pipecat.conversation"
     trace_name_prefix="pipecat",
@@ -162,20 +164,10 @@ trace_obs = NoveumTraceObserver(
     # Create child spans for each tool/function call (default: True)
     capture_function_calls=True,
 
-    # Buffer and upload STT/TTS audio as WAV files per span (default: False)
+    # Buffer and upload STT/TTS audio as WAV files per span (default: True)
     # Adds stt.audio_uuid / tts.audio_uuid attributes when enabled
-    record_audio=False,
+    record_audio=True,
 )
-```
-
-### Using a global client
-
-If you already called `noveum_trace.init()` at startup, you don't need to pass credentials to the observer:
-
-```python
-noveum_trace.init(api_key="your-noveum-api-key", project="my-voice-bot")
-
-trace_obs = NoveumTraceObserver()  # uses the global client automatically
 ```
 
 ---
@@ -185,12 +177,12 @@ trace_obs = NoveumTraceObserver()  # uses the global client automatically
 **No traces appearing**
 
 - Verify `noveum_trace.init()` is called before the pipeline starts.
-- Check that `trace_obs.attach_to_task(task)` is called after `PipelineTask` is constructed and before the runner starts. Missing this call means turn spans won't have accurate boundaries.
+- Check that `await trace_obs.attach_to_task(task)` is called (from async code) after `PipelineTask` is constructed and before the runner starts. Missing this call means turn spans won't have accurate boundaries.
 - Confirm your API key is correct and the project name matches what you set up in the Noveum dashboard.
 
 **Turn spans missing or not splitting correctly**
 
-- `attach_to_task(task)` is required for accurate turn tracking. Make sure it is called.
+- `await attach_to_task(task)` is required for accurate turn tracking. Make sure it is called before `runner.run`.
 - Ensure `PipelineTask` has turn tracking enabled (it is on by default in recent Pipecat versions).
 
 **LLM token counts not appearing**
@@ -203,8 +195,3 @@ trace_obs = NoveumTraceObserver()  # uses the global client automatically
 - Confirm your LLM processor emits `FunctionCallInProgressFrame` / `FunctionCallResultFrame`.
 
 ---
-
-## Related Docs
-
-- [PIPECAT_PIPELINE_TRACE_EXAMPLE.md](./PIPECAT_PIPELINE_TRACE_EXAMPLE.md) — detailed trace shape for a full session
-- [PIPECAT_FRAMES_REFERENCE.md](./PIPECAT_FRAMES_REFERENCE.md) — every handled Pipecat frame and its trace mapping

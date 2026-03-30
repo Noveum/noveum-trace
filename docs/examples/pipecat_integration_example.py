@@ -349,7 +349,7 @@ If they ask for something not on the menu, politely let them know and suggest al
         observers=[trace_obs],
     )
 
-    trace_obs.attach_to_task(task)
+    await trace_obs.attach_to_task(task)
 
     async def end_call(params: FunctionCallParams):
         """End the call: fixed goodbye via TTS, then graceful task shutdown."""
