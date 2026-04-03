@@ -332,6 +332,7 @@ class NoveumTraceObserver(
                 _CancelFrame: Any = None
                 try:
                     from pipecat.frames.frames import CancelFrame as _CF
+
                     _CancelFrame = _CF
                 except ImportError:
                     pass
@@ -340,7 +341,9 @@ class NoveumTraceObserver(
 
                 @task.event_handler("on_pipeline_finished")
                 async def _on_pipeline_finished(task_ref: Any, frame: Any) -> None:
-                    is_cancel = _CancelFrame is not None and isinstance(frame, _CancelFrame)
+                    is_cancel = _CancelFrame is not None and isinstance(
+                        frame, _CancelFrame
+                    )
                     logger.debug(
                         "on_pipeline_finished fired (frame=%s, cancelled=%s) — "
                         "ensuring trace cleanup via safety net",
@@ -349,7 +352,9 @@ class NoveumTraceObserver(
                     )
                     await observer_ref._finish_conversation(cancelled=is_cancel)
 
-                logger.debug("Registered on_pipeline_finished safety-net handler on task")
+                logger.debug(
+                    "Registered on_pipeline_finished safety-net handler on task"
+                )
             except Exception as e:
                 logger.warning(
                     "Could not register on_pipeline_finished safety-net handler: %s", e

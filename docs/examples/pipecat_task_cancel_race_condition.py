@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""Reproduce missed Noveum trace flush when using ``task.cancel()`` (hang-up teardown).
+r"""Reproduce missed Noveum trace flush when using ``task.cancel()`` (hang-up teardown).
 
 Production pattern (e.g. Exotel WebSocket): ``on_client_disconnected`` calls
 ``await task.cancel()``. Pipecat queues a ``CancelFrame`` and eventually tears
@@ -71,7 +71,9 @@ OBSERVER_PUSH_DELAY_SEC = float(os.getenv("NOVEUM_REPRO_OBSERVER_DELAY", "8e-5")
 class SlowNoveumTraceObserver(NoveumTraceObserver):
     """NoveumTraceObserver with an optional delay in ``on_push_frame`` for repro only."""
 
-    def __init__(self, *args: object, push_delay_sec: float = 0.0, **kwargs: object) -> None:
+    def __init__(
+        self, *args: object, push_delay_sec: float = 0.0, **kwargs: object
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._push_delay_sec = push_delay_sec
 
@@ -94,7 +96,9 @@ async def main() -> None:
         project=os.getenv("NOVEUM_PROJECT", "pipecat-cancel-repro"),
     )
 
-    processors = [IdentityFilter(name=f"identity-{i}") for i in range(NUM_IDENTITY_STAGES)]
+    processors = [
+        IdentityFilter(name=f"identity-{i}") for i in range(NUM_IDENTITY_STAGES)
+    ]
     pipeline = Pipeline(processors)
 
     trace_obs = SlowNoveumTraceObserver(

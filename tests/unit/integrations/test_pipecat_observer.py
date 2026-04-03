@@ -513,12 +513,13 @@ async def test_attach_to_task_registers_on_pipeline_finished() -> None:
             def decorator(fn):
                 registered[event_name] = fn
                 return fn
+
             return decorator
 
     await obs.attach_to_task(FakeTask())
-    assert "on_pipeline_finished" in registered, (
-        "attach_to_task should register an on_pipeline_finished handler"
-    )
+    assert (
+        "on_pipeline_finished" in registered
+    ), "attach_to_task should register an on_pipeline_finished handler"
 
 
 @pytest.mark.asyncio
@@ -549,6 +550,7 @@ async def test_on_pipeline_finished_calls_finish_conversation_cancelled() -> Non
             def decorator(fn):
                 registered[event_name] = fn
                 return fn
+
             return decorator
 
     await obs.attach_to_task(FakeTask())
@@ -588,6 +590,7 @@ async def test_on_pipeline_finished_calls_finish_conversation_not_cancelled() ->
             def decorator(fn):
                 registered[event_name] = fn
                 return fn
+
             return decorator
 
     await obs.attach_to_task(FakeTask())
@@ -610,6 +613,7 @@ async def test_attach_to_task_skips_safety_net_without_event_handler() -> None:
 
     class LegacyTask:
         """Simulates a pipecat version that does not have event_handler()."""
+
         turn_tracking_observer = None
         _user_bot_latency_observer = None
         # no event_handler attribute
@@ -649,6 +653,7 @@ async def test_on_pipeline_finished_idempotent_after_proxy_path() -> None:
             def decorator(fn):
                 registered[event_name] = fn
                 return fn
+
             return decorator
 
     await obs.attach_to_task(FakeTask())
@@ -662,4 +667,6 @@ async def test_on_pipeline_finished_idempotent_after_proxy_path() -> None:
     # Safety net fires afterwards — real _finish_conversation would be a no-op
     # because _trace is now None; our mock just counts calls
     await handler(FakeTask(), CancelFrame())  # type: ignore[operator]
-    assert call_count == 2  # mock doesn't guard, but real impl would no-op via _trace check
+    assert (
+        call_count == 2
+    )  # mock doesn't guard, but real impl would no-op via _trace check
