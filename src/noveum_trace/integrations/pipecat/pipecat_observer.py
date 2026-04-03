@@ -215,6 +215,12 @@ class NoveumTraceObserver(
         # aggregators that re-emit TTSAudioRawFrame with new IDs are ignored.
         self._tts_source_processor: Any = None
 
+        # Set of tasks we have registered the on_pipeline_finished safety-net on.
+        # Used as a dedup guard so repeated attach_to_task() calls on the same
+        # task are no-ops, even if attach_to_task(task1), attach_to_task(task2),
+        # attach_to_task(task1) is called in sequence.
+        self._registered_pipeline_tasks: set[Any] = set()
+
         # Full-conversation audio (populated via AudioBufferProcessor wired in attach_to_task)
         # Holds raw PCM bytes from on_audio_data until EndFrame flushes them.
         self._audio_buffer_processor: Any = None
@@ -328,37 +334,48 @@ class NoveumTraceObserver(
         # _finish_conversation is idempotent, so whichever path fires first wins. #
         # ---------------------------------------------------------------------- #
         if hasattr(task, "event_handler"):
-            try:
-                _CancelFrame: Any = None
-                try:
-                    from pipecat.frames.frames import CancelFrame as _CF
-
-                    _CancelFrame = _CF
-                except ImportError:
-                    pass
-
-                observer_ref = self
-
-                @task.event_handler("on_pipeline_finished")
-                async def _on_pipeline_finished(task_ref: Any, frame: Any) -> None:
-                    is_cancel = _CancelFrame is not None and isinstance(
-                        frame, _CancelFrame
-                    )
-                    logger.debug(
-                        "on_pipeline_finished fired (frame=%s, cancelled=%s) — "
-                        "ensuring trace cleanup via safety net",
-                        type(frame).__name__,
-                        is_cancel,
-                    )
-                    await observer_ref._finish_conversation(cancelled=is_cancel)
-
+            # Deduplication guard: check our own set of already-registered tasks
+            # so repeated attach_to_task() calls on the same task are no-ops,
+            # regardless of interleaving with other tasks.
+            if task in self._registered_pipeline_tasks:
                 logger.debug(
-                    "Registered on_pipeline_finished safety-net handler on task"
+                    "on_pipeline_finished safety-net already registered for this "
+                    "observer+task pair — skipping duplicate registration"
                 )
-            except Exception as e:
-                logger.warning(
-                    "Could not register on_pipeline_finished safety-net handler: %s", e
-                )
+            else:
+                try:
+                    _CancelFrame: Any = None
+                    try:
+                        from pipecat.frames.frames import CancelFrame as _CF
+
+                        _CancelFrame = _CF
+                    except ImportError:
+                        pass
+
+                    observer_ref = self
+
+                    @task.event_handler("on_pipeline_finished")
+                    async def _on_pipeline_finished(task_ref: Any, frame: Any) -> None:
+                        is_cancel = _CancelFrame is not None and isinstance(
+                            frame, _CancelFrame
+                        )
+                        logger.debug(
+                            "on_pipeline_finished fired (frame=%s, cancelled=%s) — "
+                            "ensuring trace cleanup via safety net",
+                            type(frame).__name__,
+                            is_cancel,
+                        )
+                        await observer_ref._finish_conversation(cancelled=is_cancel)
+
+                    self._registered_pipeline_tasks.add(task)
+                    logger.debug(
+                        "Registered on_pipeline_finished safety-net handler on task"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not register on_pipeline_finished safety-net handler: %s",
+                        e,
+                    )
         else:
             logger.debug(
                 "PipelineTask does not expose event_handler(); "

@@ -24,7 +24,7 @@ queues, then ``task.cancel()`` simulating hang-up.
 Run from anywhere after adding ``NOVEUM_API_KEY`` to ``.env`` at the repository
 root (same as other examples)::
 
-    python docs/examples/pipecat_task_cancel_repro_example.py
+    python docs/examples/pipecat_task_cancel_race_condition.py
 
 If the race triggers, logs report that ``NoveumTraceObserver`` still holds an
 open trace when the runner exits.
