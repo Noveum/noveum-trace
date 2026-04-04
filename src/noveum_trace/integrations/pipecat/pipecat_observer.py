@@ -34,8 +34,23 @@ Turn boundaries are detected in two modes:
   logic (VAD started/stopped + BotStopped + timeout). (users should be using External mode only.
    In a further release standalone mode can even be removed)
 
-Trace cleanup runs on ``EndFrame`` / ``CancelFrame`` (``BaseObserver`` does not
-define ``on_pipeline_stopped``; Pipecat's ``TaskObserver`` does not call it).
+Trace cleanup runs on ``EndFrame`` / ``CancelFrame`` via two complementary paths:
+
+1. **Safety net (primary):** ``attach_to_task`` registers a ``on_pipeline_finished``
+   event handler on the ``PipelineTask``. This fires inline in the main pipeline
+   coroutine — before ``_cancel_tasks()`` kills the ``TaskObserver`` proxy tasks —
+   so ``_finish_conversation`` is guaranteed to run regardless of proxy queue depth.
+
+2. **Proxy path (secondary):** ``on_push_frame`` still handles ``EndFrame`` /
+   ``CancelFrame`` as before. ``_finish_conversation`` is idempotent (no-op when
+   ``_trace`` is already ``None``), so whichever path fires first wins and the other
+   is a no-op.
+
+Background: Pipecat's ``TaskObserver`` delivers ``FramePushed`` events to each
+observer via a per-observer ``asyncio.Queue`` consumed by a dedicated asyncio task.
+When ``task.cancel()`` races with a backlogged proxy queue, ``_cancel_tasks()`` can
+kill the proxy task before it drains to the terminal-frame notification, causing the
+trace to be silently lost. The ``on_pipeline_finished`` handler bypasses this queue.
 
 Internal structure
 ------------------
@@ -200,6 +215,12 @@ class NoveumTraceObserver(
         # aggregators that re-emit TTSAudioRawFrame with new IDs are ignored.
         self._tts_source_processor: Any = None
 
+        # Set of tasks we have registered the on_pipeline_finished safety-net on.
+        # Used as a dedup guard so repeated attach_to_task() calls on the same
+        # task are no-ops, even if attach_to_task(task1), attach_to_task(task2),
+        # attach_to_task(task1) is called in sequence.
+        self._registered_pipeline_tasks: set[Any] = set()
+
         # Full-conversation audio (populated via AudioBufferProcessor wired in attach_to_task)
         # Holds raw PCM bytes from on_audio_data until EndFrame flushes them.
         self._audio_buffer_processor: Any = None
@@ -286,6 +307,11 @@ class NoveumTraceObserver(
         tracking). Also auto-detects an ``AudioBufferProcessor`` in the pipeline
         to enable full-conversation stereo audio recording.
 
+        Registers an ``on_pipeline_finished`` safety-net handler on the task so
+        ``_finish_conversation`` is guaranteed to run even when Pipecat's
+        ``TaskObserver`` proxy queue is cancelled before draining (the
+        ``task.cancel()`` race condition).
+
         Call from async code after constructing ``PipelineTask`` and this observer,
         before ``runner.run(task)``, so conversation audio recording can start
         before the pipeline processes PCM.
@@ -301,6 +327,61 @@ class NoveumTraceObserver(
         lto = getattr(task, "_user_bot_latency_observer", None)
         if lto is not None:
             self.attach_latency_observer(lto)
+
+        # ---------------------------------------------------------------------- #
+        # Safety net: on_pipeline_finished fires inline in the main pipeline      #
+        # coroutine, before _cancel_tasks() kills the TaskObserver proxy tasks.   #
+        # _finish_conversation is idempotent, so whichever path fires first wins. #
+        # ---------------------------------------------------------------------- #
+        if hasattr(task, "event_handler"):
+            # Deduplication guard: check our own set of already-registered tasks
+            # so repeated attach_to_task() calls on the same task are no-ops,
+            # regardless of interleaving with other tasks.
+            if task in self._registered_pipeline_tasks:
+                logger.debug(
+                    "on_pipeline_finished safety-net already registered for this "
+                    "observer+task pair — skipping duplicate registration"
+                )
+            else:
+                try:
+                    _CancelFrame: Any = None
+                    try:
+                        from pipecat.frames.frames import CancelFrame as _CF
+
+                        _CancelFrame = _CF
+                    except ImportError:
+                        pass
+
+                    observer_ref = self
+
+                    @task.event_handler("on_pipeline_finished")
+                    async def _on_pipeline_finished(task_ref: Any, frame: Any) -> None:
+                        is_cancel = _CancelFrame is not None and isinstance(
+                            frame, _CancelFrame
+                        )
+                        logger.debug(
+                            "on_pipeline_finished fired (frame=%s, cancelled=%s) — "
+                            "ensuring trace cleanup via safety net",
+                            type(frame).__name__,
+                            is_cancel,
+                        )
+                        await observer_ref._finish_conversation(cancelled=is_cancel)
+
+                    self._registered_pipeline_tasks.add(task)
+                    logger.debug(
+                        "Registered on_pipeline_finished safety-net handler on task"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not register on_pipeline_finished safety-net handler: %s",
+                        e,
+                    )
+        else:
+            logger.debug(
+                "PipelineTask does not expose event_handler(); "
+                "on_pipeline_finished safety net not registered — "
+                "trace cleanup relies on on_push_frame CancelFrame/EndFrame path only"
+            )
 
         # Auto-detect AudioBufferProcessor for full-conversation recording
         if self._record_audio:
@@ -780,7 +861,16 @@ class NoveumTraceObserver(
         Safe to call multiple times (guarded by ``_trace`` ``None``-check).
         """
         if self._trace is None:
+            logger.debug(
+                "_finish_conversation called but _trace is already None — idempotent no-op"
+            )
             return
+
+        logger.debug(
+            "_finish_conversation starting (cancelled=%s, trace_id=%s)",
+            cancelled,
+            getattr(self._trace, "trace_id", "<unknown>"),
+        )
 
         await self._cancel_turn_end_timer()
 
@@ -871,7 +961,9 @@ class NoveumTraceObserver(
         except Exception as e:
             logger.warning("Failed to finish pipecat trace: %s", e, exc_info=True)
 
-        logger.debug("Pipecat conversation trace finished")
+        logger.debug(
+            "_finish_conversation completed — trace flushed (cancelled=%s)", cancelled
+        )
 
         # Reset conversation-scoped caches for observer reuse
         self._metrics_accumulator = {

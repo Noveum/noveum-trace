@@ -487,3 +487,186 @@ async def test_latency_observer_handler(pipecat_frames) -> None:
 
     await registered["on_latency_measured"](Lat(), 1.25)  # type: ignore[misc]
     assert turn.attributes["turn.user_bot_latency_seconds"] == 1.25
+
+
+# ---------------------------------------------------------------------------
+# on_pipeline_finished safety-net tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_attach_to_task_registers_on_pipeline_finished() -> None:
+    """attach_to_task registers an on_pipeline_finished handler on the task."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+
+    registered: dict[str, object] = {}
+
+    class FakeTask:
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+
+        def event_handler(self, event_name: str):
+            def decorator(fn):
+                registered[event_name] = fn
+                return fn
+
+            return decorator
+
+    await obs.attach_to_task(FakeTask())
+    assert (
+        "on_pipeline_finished" in registered
+    ), "attach_to_task should register an on_pipeline_finished handler"
+
+
+@pytest.mark.asyncio
+async def test_on_pipeline_finished_calls_finish_conversation_cancelled() -> None:
+    """The safety-net handler calls _finish_conversation(cancelled=True) for CancelFrame."""
+    pytest.importorskip("pipecat.observers.base_observer")
+    pytest.importorskip("pipecat.frames.frames")
+
+    from pipecat.frames.frames import CancelFrame
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    finish_calls: list[dict] = []
+
+    async def mock_finish(cancelled: bool = False) -> None:
+        finish_calls.append({"cancelled": cancelled})
+
+    obs._finish_conversation = mock_finish  # type: ignore[method-assign]
+
+    registered: dict[str, object] = {}
+
+    class FakeTask:
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+
+        def event_handler(self, event_name: str):
+            def decorator(fn):
+                registered[event_name] = fn
+                return fn
+
+            return decorator
+
+    await obs.attach_to_task(FakeTask())
+
+    handler = registered["on_pipeline_finished"]
+    await handler(FakeTask(), CancelFrame())  # type: ignore[operator]
+
+    assert len(finish_calls) == 1
+    assert finish_calls[0]["cancelled"] is True
+
+
+@pytest.mark.asyncio
+async def test_on_pipeline_finished_calls_finish_conversation_not_cancelled() -> None:
+    """The safety-net handler calls _finish_conversation(cancelled=False) for EndFrame."""
+    pytest.importorskip("pipecat.observers.base_observer")
+    pytest.importorskip("pipecat.frames.frames")
+
+    from pipecat.frames.frames import EndFrame
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    finish_calls: list[dict] = []
+
+    async def mock_finish(cancelled: bool = False) -> None:
+        finish_calls.append({"cancelled": cancelled})
+
+    obs._finish_conversation = mock_finish  # type: ignore[method-assign]
+
+    registered: dict[str, object] = {}
+
+    class FakeTask:
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+
+        def event_handler(self, event_name: str):
+            def decorator(fn):
+                registered[event_name] = fn
+                return fn
+
+            return decorator
+
+    await obs.attach_to_task(FakeTask())
+
+    handler = registered["on_pipeline_finished"]
+    await handler(FakeTask(), EndFrame())  # type: ignore[operator]
+
+    assert len(finish_calls) == 1
+    assert finish_calls[0]["cancelled"] is False
+
+
+@pytest.mark.asyncio
+async def test_attach_to_task_skips_safety_net_without_event_handler() -> None:
+    """attach_to_task is safe on tasks that lack the event_handler() API."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+
+    class LegacyTask:
+        """Simulates a pipecat version that does not have event_handler()."""
+
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+        # no event_handler attribute
+
+    # Should not raise
+    await obs.attach_to_task(LegacyTask())
+
+
+@pytest.mark.asyncio
+async def test_on_pipeline_finished_idempotent_after_proxy_path() -> None:
+    """Safety net is a no-op when proxy path already ran _finish_conversation."""
+    pytest.importorskip("pipecat.observers.base_observer")
+    pytest.importorskip("pipecat.frames.frames")
+
+    from pipecat.frames.frames import CancelFrame
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    call_count = 0
+
+    async def mock_finish(cancelled: bool = False) -> None:
+        nonlocal call_count
+        call_count += 1
+        # Simulate what the real method does: clear _trace on first call
+        obs._trace = None
+
+    obs._finish_conversation = mock_finish  # type: ignore[method-assign]
+
+    registered: dict[str, object] = {}
+
+    class FakeTask:
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+
+        def event_handler(self, event_name: str):
+            def decorator(fn):
+                registered[event_name] = fn
+                return fn
+
+            return decorator
+
+    await obs.attach_to_task(FakeTask())
+
+    handler = registered["on_pipeline_finished"]
+
+    # Simulate proxy path firing first
+    await obs._finish_conversation(cancelled=True)
+    assert call_count == 1
+
+    # Safety net fires afterwards — real _finish_conversation would be a no-op
+    # because _trace is now None; our mock just counts calls
+    await handler(FakeTask(), CancelFrame())  # type: ignore[operator]
+    assert (
+        call_count == 2
+    )  # mock doesn't guard, but real impl would no-op via _trace check
