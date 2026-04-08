@@ -335,10 +335,14 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
 
     def _attach_latency_tracker(self, latency_tracker: Any) -> None:
         """
-        Subscribe to ``UserBotLatencyObserver.on_latency_measured``.
+        Subscribe to ``UserBotLatencyObserver`` events. Idempotent.
 
-        Handler signature: ``handler(emitter, latency_seconds)`` — the emitter
-        argument is captured but ignored. Idempotent.
+        Registers two handlers:
+        - ``on_latency_measured`` — total user→bot latency in seconds
+        - ``on_latency_breakdown`` — per-service TTFB, text aggregation, and
+          function-call timing (requires ``PipelineParams(enable_metrics=True)``)
+
+        Both handlers receive ``(emitter, data)``; the emitter is discarded.
         """
         if not _PIPECAT_AVAILABLE or latency_tracker is None:
             return
@@ -346,15 +350,22 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         if self._latency_tracker is latency_tracker:
             return
         try:
-
             async def _on_latency_measured(
                 _emitter: Any, latency_seconds: float
             ) -> None:
                 await self._handle_latency_measured(latency_seconds)
 
+            async def _on_latency_breakdown(
+                _emitter: Any, breakdown: Any
+            ) -> None:
+                await self._handle_latency_breakdown(breakdown)
+
             if hasattr(latency_tracker, "add_event_handler"):
                 latency_tracker.add_event_handler(
                     "on_latency_measured", _on_latency_measured
+                )
+                latency_tracker.add_event_handler(
+                    "on_latency_breakdown", _on_latency_breakdown
                 )
 
             self._latency_tracker = latency_tracker
@@ -386,6 +397,44 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         if self._current_turn_span:
             self._current_turn_span.attributes["turn.user_bot_latency_seconds"] = (
                 latency_seconds
+            )
+
+    async def _handle_latency_breakdown(self, breakdown: Any) -> None:
+        """Called by ``UserBotLatencyObserver`` with a detailed ``LatencyBreakdown``."""
+        if not self._current_turn_span:
+            return
+        span = self._current_turn_span
+
+        user_turn_secs = getattr(breakdown, "user_turn_secs", None)
+        if user_turn_secs is not None:
+            span.attributes["turn.latency.user_turn_secs"] = float(user_turn_secs)
+
+        text_agg = getattr(breakdown, "text_aggregation", None)
+        if text_agg is not None:
+            dur = getattr(text_agg, "duration_secs", None)
+            if dur is not None:
+                span.attributes["turn.latency.text_aggregation_ms"] = float(dur) * 1000
+
+        ttfb_list = getattr(breakdown, "ttfb", []) or []
+        for i, ttfb in enumerate(ttfb_list):
+            proc = getattr(ttfb, "processor", f"service_{i}")
+            dur = getattr(ttfb, "duration_secs", None)
+            if dur is not None:
+                base_key = f"turn.latency.ttfb.{proc.lower().split('#')[0]}_ms"
+                # Append an index suffix when the same processor class appears more
+                # than once (e.g. two OpenAISTTService instances in the pipeline).
+                attr_key = base_key
+                suffix = 2
+                while attr_key in span.attributes:
+                    attr_key = f"{base_key}_{suffix}"
+                    suffix += 1
+                span.attributes[attr_key] = float(dur) * 1000
+
+        fn_calls = getattr(breakdown, "function_calls", []) or []
+        if fn_calls:
+            span.attributes["turn.latency.function_call_count"] = len(fn_calls)
+            span.attributes["turn.latency.function_calls_total_ms"] = (
+                sum(getattr(fc, "duration_secs", 0) or 0 for fc in fn_calls) * 1000
             )
 
     # ---------------------------------------------------------------------- #
@@ -475,6 +524,11 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
             )
 
         span.attributes["turn.was_interrupted"] = was_interrupted
+
+        if was_interrupted:
+            self._metrics_accumulator["interrupted_turns"] = (
+                self._metrics_accumulator.get("interrupted_turns", 0) + 1
+            )
 
         if duration is not None:
             span.attributes["turn.duration_seconds"] = duration

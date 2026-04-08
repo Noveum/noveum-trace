@@ -42,6 +42,8 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
         if raw is None:
             return settings
 
+        # Falsy guard is intentional for model/voice/language — an empty string is
+        # not a useful value for these fields and should be treated as absent.
         if hasattr(raw, "model") and raw.model:
             settings["model"] = str(raw.model)
 
@@ -52,10 +54,12 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
             lang = raw.language
             settings["language"] = str(lang.value if hasattr(lang, "value") else lang)
 
-        # LLM system instruction
+        # `is not None` (not falsy) is deliberate here: an empty-string system prompt
+        # is a valid operator intent (explicitly clearing the default instruction) and
+        # must be recorded, unlike an absent model name above.
         for attr in ("system_instruction", "system_prompt"):
             val = getattr(raw, attr, None)
-            if val:
+            if val is not None:
                 settings["system_instruction"] = str(val)
                 break
 

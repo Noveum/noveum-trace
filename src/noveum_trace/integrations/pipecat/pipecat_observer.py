@@ -251,6 +251,7 @@ class NoveumTraceObserver(
             "total_output_tokens": 0,
             "total_cost": 0.0,
             "turn_count": 0,
+            "interrupted_turns": 0,
         }
 
         # ------------------------------------------------------------------ #
@@ -931,8 +932,16 @@ class NoveumTraceObserver(
             ]
         if self._metrics_accumulator.get("total_cost"):
             summary["conversation.total_cost"] = self._metrics_accumulator["total_cost"]
-        if self._metrics_accumulator.get("turn_count"):
-            summary["conversation.turn_count"] = self._metrics_accumulator["turn_count"]
+        turn_count = self._metrics_accumulator.get("turn_count", 0)
+        if turn_count:
+            summary["conversation.turn_count"] = turn_count
+        interrupted = self._metrics_accumulator.get("interrupted_turns", 0)
+        if turn_count > 0:
+            summary["conversation.barge_in_rate"] = round(interrupted / turn_count, 3)
+            # Only written when there were actual interruptions — avoids noise on clean
+            # conversations where the value would always be 0.
+            if interrupted > 0:
+                summary["conversation.interrupted_turn_count"] = interrupted
         if self._transcription_buffer:
             summary["conversation.last_user_input"] = " ".join(
                 self._transcription_buffer[-5:]
@@ -971,6 +980,7 @@ class NoveumTraceObserver(
             "total_output_tokens": 0,
             "total_cost": 0.0,
             "turn_count": 0,
+            "interrupted_turns": 0,
         }
         self._transcription_buffer = []
         self._llm_text_buffer.clear()

@@ -30,6 +30,7 @@ pipecat.llm span rather than as child spans:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -227,6 +228,26 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 val = settings.get(settings_key)
                 if val is not None:
                     attributes[attr_key] = val
+
+        # Fallback: if _settings had no system prompt, try the pending context stash.
+        # _pending_llm_context["messages"] is a JSON string from LLMContextFrame.
+        if "llm.system_prompt" not in attributes:
+            pending_msgs_json = self._pending_llm_context.get("messages")
+            if pending_msgs_json:
+                try:
+                    msgs = json.loads(pending_msgs_json)
+                    for msg in msgs:
+                        if isinstance(msg, dict) and msg.get("role") == "system":
+                            content = msg.get("content", "")
+                            if content:
+                                attributes["llm.system_prompt"] = (
+                                    content
+                                    if isinstance(content, str)
+                                    else json.dumps(content)
+                                )
+                            break
+                except Exception:
+                    pass
 
         # Flush stashed context data (Path A + Path B frames)
         pending = self._pending_llm_context

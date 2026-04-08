@@ -55,6 +55,9 @@ def test_noveum_trace_observer_turn_handlers_emitter_first() -> None:
 def test_eou_metrics_buffered_when_no_turn_span() -> None:
     """EOU metrics are buffered when no turn span exists, then flushed on new turn."""
     pytest.importorskip("pipecat.metrics.metrics")
+    pipecat_metrics = pytest.importorskip("pipecat.metrics.metrics")
+    if not hasattr(pipecat_metrics, "TurnMetricsData"):
+        pytest.skip("TurnMetricsData not available in this pipecat version")
 
     from pipecat.frames.frames import MetricsFrame
     from pipecat.metrics.metrics import TurnMetricsData
@@ -670,3 +673,570 @@ async def test_on_pipeline_finished_idempotent_after_proxy_path() -> None:
     assert (
         call_count == 2
     )  # mock doesn't guard, but real impl would no-op via _trace check
+
+
+# ---------------------------------------------------------------------------
+# Tests for new behaviors added in the pipecat trace improvements
+# ---------------------------------------------------------------------------
+
+
+# --- pipecat_utils.py: extract_service_settings ---
+
+
+def test_extract_service_settings_empty_string_system_prompt() -> None:
+    """Empty-string system_instruction must NOT be silently dropped (is not None fix)."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class FakeSettings:
+        system_instruction = ""  # explicitly empty — still a valid operator intent
+
+    class FakeProcessor:
+        _settings = FakeSettings()
+
+    result = extract_service_settings(FakeProcessor())
+    assert "system_instruction" in result
+    assert result["system_instruction"] == ""
+
+
+def test_extract_service_settings_none_system_prompt_absent() -> None:
+    """When system_instruction is None, the key must not appear in the result."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class FakeSettings:
+        system_instruction = None
+
+    class FakeProcessor:
+        _settings = FakeSettings()
+
+    result = extract_service_settings(FakeProcessor())
+    assert "system_instruction" not in result
+
+
+def test_extract_service_settings_empty_model_absent() -> None:
+    """Empty-string model must be treated as absent (falsy guard is intentional)."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class FakeSettings:
+        model = ""
+
+    class FakeProcessor:
+        _settings = FakeSettings()
+
+    result = extract_service_settings(FakeProcessor())
+    assert "model" not in result
+
+
+# --- _handlers_llm.py: system prompt fallback from pending context ---
+
+
+@pytest.mark.asyncio
+async def test_llm_system_prompt_fallback_from_pending_context() -> None:
+    """llm.system_prompt is extracted from pending LLM context when _settings is absent."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    import json
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    turn_span.span_id = "t1"
+    obs._trace = trace
+    obs._current_turn_span = turn_span
+
+    llm_span = MagicMock()
+    llm_span.attributes = {}
+    trace.create_span = MagicMock(return_value=llm_span)
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+    ]
+    obs._pending_llm_context = {"messages": json.dumps(messages)}
+
+    data = MagicMock()
+    # source has no _settings — simulates custom LLM processor
+    data.source = MagicMock(spec=[])
+
+    await obs._handle_llm_response_start(data)
+
+    # Attributes are passed to trace.create_span() at span creation time.
+    # Check the call args rather than llm_span.attributes (which is a MagicMock stub).
+    _, kwargs = trace.create_span.call_args
+    assert kwargs["attributes"].get("llm.system_prompt") == "You are a helpful assistant."
+
+
+@pytest.mark.asyncio
+async def test_llm_system_prompt_fallback_skipped_when_settings_provides_it() -> None:
+    """When _settings provides system_prompt, the fallback must NOT overwrite it."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    import json
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    obs._trace = trace
+    obs._current_turn_span = turn_span
+
+    llm_span = MagicMock()
+    llm_span.attributes = {}
+    trace.create_span = MagicMock(return_value=llm_span)
+
+    messages = [
+        {"role": "system", "content": "Context prompt from messages"},
+    ]
+    obs._pending_llm_context = {"messages": json.dumps(messages)}
+
+    class FakeSettings:
+        system_instruction = "Prompt from _settings"
+        model = None
+        voice = None
+        language = None
+        temperature = None
+        max_tokens = None
+        max_completion_tokens = None
+        top_p = None
+        top_k = None
+        frequency_penalty = None
+        presence_penalty = None
+        seed = None
+
+    class FakeSource:
+        _settings = FakeSettings()
+
+    data = MagicMock()
+    data.source = FakeSource()
+
+    await obs._handle_llm_response_start(data)
+
+    _, kwargs = trace.create_span.call_args
+    assert kwargs["attributes"].get("llm.system_prompt") == "Prompt from _settings"
+
+
+@pytest.mark.asyncio
+async def test_llm_system_prompt_fallback_no_system_role() -> None:
+    """No llm.system_prompt attribute is set when no system role message exists."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    import json
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    obs._trace = trace
+    obs._current_turn_span = turn_span
+
+    llm_span = MagicMock()
+    llm_span.attributes = {}
+    trace.create_span = MagicMock(return_value=llm_span)
+
+    messages = [{"role": "user", "content": "Hello"}]
+    obs._pending_llm_context = {"messages": json.dumps(messages)}
+
+    data = MagicMock()
+    data.source = MagicMock(spec=[])
+
+    await obs._handle_llm_response_start(data)
+
+    _, kwargs = trace.create_span.call_args
+    assert "llm.system_prompt" not in kwargs["attributes"]
+
+
+# --- _handlers_stt.py: enriched cancelled STT spans ---
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stt_span_enriched_with_partial_transcript() -> None:
+    """Orphaned STT spans are closed with stt.was_cancelled, partial_transcript, interim_count."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    obs._trace = trace
+    obs._vad_present = True
+    obs._using_external_turn_tracking = True
+
+    orphan_span = MagicMock()
+    orphan_span.attributes = {}
+    orphan_span.finish = MagicMock()
+
+    obs._active_stt_span = orphan_span
+    obs._stt_interim_results = [
+        {"text": "hello there", "confidence": 0.9},
+        {"text": "hello world", "confidence": 0.95},
+    ]
+    obs._vad_speech_start_time = asyncio.get_event_loop().time() - 0.5
+
+    new_span = MagicMock()
+    new_span.attributes = {}
+    trace.create_span = MagicMock(return_value=new_span)
+
+    data = MagicMock()
+    data.direction = None
+
+    await obs._handle_vad_stt_start(data)
+
+    assert orphan_span.attributes["stt.was_cancelled"] is True
+    assert orphan_span.attributes["stt.partial_transcript"] == "hello world"
+    assert orphan_span.attributes["stt.interim_count"] == 2
+    assert "stt.vad_to_cancel_ms" in orphan_span.attributes
+    assert orphan_span.attributes["stt.vad_to_cancel_ms"] >= 0
+    assert orphan_span.attributes["pipecat_span_status"] == "cancelled"
+    orphan_span.finish.assert_called_once()
+    assert obs._active_stt_span is new_span
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stt_span_no_partial_when_no_interim_results() -> None:
+    """Orphaned span with no interim results does not get partial_transcript attributes."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    obs._trace = trace
+    obs._vad_present = True
+    obs._using_external_turn_tracking = True
+
+    orphan_span = MagicMock()
+    orphan_span.attributes = {}
+    orphan_span.finish = MagicMock()
+
+    obs._active_stt_span = orphan_span
+    obs._stt_interim_results = []
+    obs._vad_speech_start_time = None
+
+    new_span = MagicMock()
+    new_span.attributes = {}
+    trace.create_span = MagicMock(return_value=new_span)
+
+    data = MagicMock()
+    data.direction = None
+
+    await obs._handle_vad_stt_start(data)
+
+    assert orphan_span.attributes["stt.was_cancelled"] is True
+    assert "stt.partial_transcript" not in orphan_span.attributes
+    assert "stt.interim_count" not in orphan_span.attributes
+    assert "stt.vad_to_cancel_ms" not in orphan_span.attributes
+
+
+# --- _turn_manager.py: on_latency_breakdown subscription ---
+
+
+@pytest.mark.asyncio
+async def test_latency_breakdown_handler_registered() -> None:
+    """_attach_latency_tracker registers on_latency_breakdown alongside on_latency_measured."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    registered: dict[str, object] = {}
+
+    class FakeLat:
+        def add_event_handler(self, name: str, h: object) -> None:
+            registered[name] = h
+
+    obs._attach_latency_tracker(FakeLat())
+
+    assert "on_latency_measured" in registered
+    assert "on_latency_breakdown" in registered
+
+
+@pytest.mark.asyncio
+async def test_handle_latency_breakdown_writes_turn_attributes() -> None:
+    """_handle_latency_breakdown writes user_turn_secs, text_aggregation_ms, and TTFB keys."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    obs._current_turn_span = turn_span
+
+    class FakeTTFB:
+        processor = "OpenAISTTService"
+        duration_secs = 0.25
+
+    class FakeTextAgg:
+        duration_secs = 0.1
+
+    class FakeBreakdown:
+        user_turn_secs = 1.5
+        text_aggregation = FakeTextAgg()
+        ttfb = [FakeTTFB()]
+        function_calls = []
+
+    await obs._handle_latency_breakdown(FakeBreakdown())
+
+    assert turn_span.attributes["turn.latency.user_turn_secs"] == 1.5
+    assert turn_span.attributes["turn.latency.text_aggregation_ms"] == pytest.approx(100.0)
+    assert turn_span.attributes["turn.latency.ttfb.openaisttservice_ms"] == pytest.approx(250.0)
+
+
+@pytest.mark.asyncio
+async def test_handle_latency_breakdown_ttfb_key_collision_gets_suffix() -> None:
+    """When two processors share the same class name, the second gets a _2 suffix."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    obs._current_turn_span = turn_span
+
+    class FakeTTFB:
+        def __init__(self, proc: str, dur: float) -> None:
+            self.processor = proc
+            self.duration_secs = dur
+
+    class FakeBreakdown:
+        user_turn_secs = None
+        text_aggregation = None
+        ttfb = [
+            FakeTTFB("OpenAISTTService#1", 0.2),
+            FakeTTFB("OpenAISTTService#2", 0.3),
+        ]
+        function_calls = []
+
+    await obs._handle_latency_breakdown(FakeBreakdown())
+
+    assert "turn.latency.ttfb.openaisttservice_ms" in turn_span.attributes
+    assert "turn.latency.ttfb.openaisttservice_ms_2" in turn_span.attributes
+    assert turn_span.attributes["turn.latency.ttfb.openaisttservice_ms"] == pytest.approx(200.0)
+    assert turn_span.attributes["turn.latency.ttfb.openaisttservice_ms_2"] == pytest.approx(300.0)
+
+
+@pytest.mark.asyncio
+async def test_handle_latency_breakdown_no_span_is_noop() -> None:
+    """_handle_latency_breakdown is a no-op when there is no active turn span."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._current_turn_span = None
+
+    class FakeBreakdown:
+        user_turn_secs = 1.0
+        text_aggregation = None
+        ttfb = []
+        function_calls = []
+
+    # Must not raise
+    await obs._handle_latency_breakdown(FakeBreakdown())
+
+
+@pytest.mark.asyncio
+async def test_handle_latency_breakdown_function_calls_aggregated() -> None:
+    """function_call_count and function_calls_total_ms are written when fn_calls present."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    turn_span = MagicMock()
+    turn_span.attributes = {}
+    obs._current_turn_span = turn_span
+
+    class FakeFC:
+        def __init__(self, dur: float) -> None:
+            self.duration_secs = dur
+
+    class FakeBreakdown:
+        user_turn_secs = None
+        text_aggregation = None
+        ttfb = []
+        function_calls = [FakeFC(0.4), FakeFC(0.6)]
+
+    await obs._handle_latency_breakdown(FakeBreakdown())
+
+    assert turn_span.attributes["turn.latency.function_call_count"] == 2
+    assert turn_span.attributes["turn.latency.function_calls_total_ms"] == pytest.approx(1000.0)
+
+
+# --- _turn_manager.py: interrupted_turns accumulator ---
+
+
+@pytest.mark.asyncio
+async def test_end_turn_increments_interrupted_turns() -> None:
+    """_end_current_turn increments interrupted_turns counter when was_interrupted=True."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    obs._trace = trace
+
+    span = MagicMock()
+    span.attributes = {}
+    obs._current_turn_span = span
+
+    await obs._end_current_turn(was_interrupted=True)
+
+    assert obs._metrics_accumulator["interrupted_turns"] == 1
+
+
+@pytest.mark.asyncio
+async def test_end_turn_does_not_increment_when_not_interrupted() -> None:
+    """_end_current_turn does NOT increment interrupted_turns on clean turn end."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    obs._trace = trace
+
+    span = MagicMock()
+    span.attributes = {}
+    obs._current_turn_span = span
+
+    await obs._end_current_turn(was_interrupted=False)
+
+    assert obs._metrics_accumulator["interrupted_turns"] == 0
+
+
+# --- pipecat_observer.py: _finish_conversation barge-in rate ---
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_barge_in_rate_written() -> None:
+    """barge_in_rate is correctly computed when there are interrupted turns."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._metrics_accumulator["turn_count"] = 4
+    obs._metrics_accumulator["interrupted_turns"] = 2
+
+    trace = MagicMock()
+    trace.attributes = {}
+    trace.finish = MagicMock()
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    call_attrs = trace.set_attributes.call_args[0][0]
+    assert call_attrs["conversation.barge_in_rate"] == pytest.approx(0.5)
+    assert call_attrs["conversation.interrupted_turn_count"] == 2
+    assert call_attrs["conversation.turn_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_barge_in_rate_zero_no_interruptions() -> None:
+    """When there are no interruptions, barge_in_rate=0.0 and interrupted_turn_count is absent."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._metrics_accumulator["turn_count"] = 3
+    obs._metrics_accumulator["interrupted_turns"] = 0
+
+    trace = MagicMock()
+    trace.attributes = {}
+    trace.finish = MagicMock()
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    call_attrs = trace.set_attributes.call_args[0][0]
+    assert call_attrs["conversation.barge_in_rate"] == pytest.approx(0.0)
+    assert "conversation.interrupted_turn_count" not in call_attrs
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_no_barge_in_rate_when_no_turns() -> None:
+    """barge_in_rate is not written when turn_count is zero (avoids division by zero)."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._metrics_accumulator["turn_count"] = 0
+    obs._metrics_accumulator["interrupted_turns"] = 0
+
+    trace = MagicMock()
+    trace.attributes = {}
+    trace.finish = MagicMock()
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    if trace.set_attributes.called:
+        call_attrs = trace.set_attributes.call_args[0][0]
+        assert "conversation.barge_in_rate" not in call_attrs
+        assert "conversation.interrupted_turn_count" not in call_attrs
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_accumulator_reset_includes_interrupted_turns() -> None:
+    """After _finish_conversation, interrupted_turns is reset to 0 (observer reuse support)."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._metrics_accumulator["interrupted_turns"] = 5
+
+    trace = MagicMock()
+    trace.attributes = {}
+    trace.finish = MagicMock()
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    assert obs._metrics_accumulator["interrupted_turns"] == 0
+
+
+# --- _attach_latency_tracker idempotency ---
+
+
+def test_attach_latency_tracker_idempotent() -> None:
+    """Calling _attach_latency_tracker twice with the same object registers handlers only once."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    call_count = 0
+
+    class FakeLat:
+        def add_event_handler(self, name: str, h: object) -> None:
+            nonlocal call_count
+            call_count += 1
+
+    lat = FakeLat()
+    obs._attach_latency_tracker(lat)
+    obs._attach_latency_tracker(lat)  # second call with same instance
+
+    # Only 2 handlers registered (on_latency_measured + on_latency_breakdown), not 4
+    assert call_count == 2
