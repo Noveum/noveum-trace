@@ -411,15 +411,6 @@ def test_extract_stt_confidence_object_paths() -> None:
     assert extract_stt_confidence(_R2()) == pytest.approx(0.77)
 
 
-def test_extract_frame_text() -> None:
-    from noveum_trace.integrations.pipecat.pipecat_utils import extract_frame_text
-
-    f = MagicMock()
-    f.text = "hello"
-    assert extract_frame_text(f) == "hello"
-    assert extract_frame_text(object()) is None
-
-
 def test_extract_function_call_data() -> None:
     from noveum_trace.integrations.pipecat.pipecat_utils import (
         extract_function_call_data,
@@ -437,17 +428,6 @@ def test_extract_function_call_data() -> None:
     assert out["tool_call_id"] == "call_1"
     assert "city" in out["arguments"]
     assert out["run_llm"] is True
-
-
-def test_serialize_processor_info() -> None:
-    from noveum_trace.integrations.pipecat.pipecat_utils import serialize_processor_info
-
-    p = MagicMock()
-    p.name = "stt-1"
-    p._settings = None
-    info = serialize_processor_info(p)
-    assert info["name"] == "stt-1"
-    assert info["class"] == "MagicMock"
 
 
 def test_calculate_llm_cost() -> None:

@@ -80,6 +80,8 @@ class _PipecatObserverState:
     _processed_frame_ids: set[int]
     _frame_id_history: deque[int]
 
+    _registered_pipeline_tasks: set[Any]
+
     _frame_handlers: dict[type, Any]
 
 

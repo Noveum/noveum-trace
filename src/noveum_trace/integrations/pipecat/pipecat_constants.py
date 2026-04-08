@@ -34,23 +34,3 @@ AUDIO_DURATION_MS_DEFAULT_VALUE = 0.0
 AUDIO_SAMPLE_RATE_DEFAULT = 16_000
 AUDIO_NUM_CHANNELS_DEFAULT = 1
 AUDIO_BYTES_PER_SAMPLE = 2  # 16-bit PCM
-
-# ---------------------------------------------------------------------------
-# STT attribute defaults
-# ---------------------------------------------------------------------------
-STT_TEXT_DEFAULT_VALUE = ""
-STT_LANGUAGE_DEFAULT_VALUE = None
-STT_USER_ID_DEFAULT_VALUE = None
-
-# ---------------------------------------------------------------------------
-# LLM attribute defaults
-# ---------------------------------------------------------------------------
-LLM_OUTPUT_DEFAULT_VALUE = ""
-LLM_MODEL_DEFAULT_VALUE = "unknown"
-
-# ---------------------------------------------------------------------------
-# TTS attribute defaults
-# ---------------------------------------------------------------------------
-TTS_INPUT_TEXT_DEFAULT_VALUE = ""
-TTS_VOICE_DEFAULT_VALUE = None
-TTS_MODEL_DEFAULT_VALUE = None

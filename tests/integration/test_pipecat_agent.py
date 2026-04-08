@@ -23,10 +23,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_span(span_id: str, spans: list) -> MagicMock:
     s = MagicMock()
@@ -72,6 +72,7 @@ def _make_client_and_trace(spans: list):
 # Mock voice-agent processor
 # ---------------------------------------------------------------------------
 
+
 class MockVoiceAgentProcessor:
     """
     Minimal FrameProcessor subclass that simulates a full LLM+TTS response.
@@ -85,6 +86,7 @@ class MockVoiceAgentProcessor:
 # ---------------------------------------------------------------------------
 # Main test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_full_conversation_captures_all_spans() -> None:
@@ -101,11 +103,10 @@ async def test_full_conversation_captures_all_spans() -> None:
       - TTS spans created with tts.input_text, tts.time_to_first_byte_ms
       - MetricsFrame token/latency data written to LLM span
     """
-    ff = pytest.importorskip("pipecat.frames.frames")
+    pytest.importorskip("pipecat.frames.frames")
     pytest.importorskip("pipecat.pipeline.pipeline")
 
     from pipecat.frames.frames import (
-        ControlFrame,
         EndFrame,
         Frame,
         LLMFullResponseEndFrame,
@@ -113,11 +114,11 @@ async def test_full_conversation_captures_all_spans() -> None:
         LLMMessagesFrame,
         LLMTextFrame,
         MetricsFrame,
+        TranscriptionFrame,
         TTSAudioRawFrame,
         TTSStartedFrame,
         TTSStoppedFrame,
         TTSTextFrame,
-        TranscriptionFrame,
         VADUserStartedSpeakingFrame,
         VADUserStoppedSpeakingFrame,
     )
@@ -245,7 +246,6 @@ async def test_full_conversation_captures_all_spans() -> None:
         VADUserStartedSpeakingFrame(),
         VADUserStoppedSpeakingFrame(),
         SleepFrame(sleep=0.05),
-
         # --- Turn 2: user asks a question -----------------------------------
         SleepFrame(sleep=0.02),
         VADUserStartedSpeakingFrame(),
@@ -264,7 +264,9 @@ async def test_full_conversation_captures_all_spans() -> None:
         queue=received_up, queue_direction=FrameDirection.UPSTREAM, ignore_start=True
     )
     sink_proc = QueuedFrameProcessor(
-        queue=received_down, queue_direction=FrameDirection.DOWNSTREAM, ignore_start=True
+        queue=received_down,
+        queue_direction=FrameDirection.DOWNSTREAM,
+        ignore_start=True,
     )
 
     pipeline = Pipeline([source_proc, agent, sink_proc])
@@ -276,6 +278,7 @@ async def test_full_conversation_captures_all_spans() -> None:
     )
 
     with patch.object(observer, "_get_client", return_value=client):
+
         async def _push() -> None:
             await asyncio.sleep(0.01)
             for frame in frames_to_send:
@@ -316,22 +319,24 @@ async def test_full_conversation_captures_all_spans() -> None:
 
     # Check LLM span attributes — model + system prompt from _settings
     llm_span_calls = [
-        c for c in mock_trace.create_span.call_args_list
+        c
+        for c in mock_trace.create_span.call_args_list
         if "llm" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
     ]
     assert llm_span_calls, "create_span called for pipecat.llm"
 
     first_llm_attrs = llm_span_calls[0].kwargs.get("attributes") or {}
-    assert first_llm_attrs.get("llm.model") == LLM_MODEL, (
-        f"llm.model not captured; got: {first_llm_attrs}"
-    )
-    assert SYSTEM_PROMPT in str(first_llm_attrs.get("llm.system_prompt", "")), (
-        f"llm.system_prompt not captured; got: {first_llm_attrs}"
-    )
+    assert (
+        first_llm_attrs.get("llm.model") == LLM_MODEL
+    ), f"llm.model not captured; got: {first_llm_attrs}"
+    assert SYSTEM_PROMPT in str(
+        first_llm_attrs.get("llm.system_prompt", "")
+    ), f"llm.system_prompt not captured; got: {first_llm_attrs}"
 
     # Check TTS span attributes
     tts_span_calls = [
-        c for c in mock_trace.create_span.call_args_list
+        c
+        for c in mock_trace.create_span.call_args_list
         if "tts" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
     ]
     first_tts_attrs = tts_span_calls[0].kwargs.get("attributes") or {}
@@ -339,33 +344,33 @@ async def test_full_conversation_captures_all_spans() -> None:
 
     # STT transcript captured
     stt_span_calls = [
-        c for c in mock_trace.create_span.call_args_list
+        c
+        for c in mock_trace.create_span.call_args_list
         if "stt" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
     ]
     if stt_span_calls:
-        stt_span = spans[[
-            i for i, c in enumerate(mock_trace.create_span.call_args_list)
-            if "stt" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
-        ][0]]
+        stt_span = spans[
+            [
+                i
+                for i, c in enumerate(mock_trace.create_span.call_args_list)
+                if "stt" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
+            ][0]
+        ]
         print("STT span attributes:", stt_span.attributes)
         if stt_span.attributes.get("stt.text"):
             assert USER_TRANSCRIPT in stt_span.attributes["stt.text"]
 
     # LLM output captured via llm.output on finished span
-    finished_llm_spans = [
-        sp for sp in spans
-        if sp.attributes.get("llm.output")
-    ]
+    finished_llm_spans = [sp for sp in spans if sp.attributes.get("llm.output")]
     assert finished_llm_spans, "llm.output should be written when LLM span closes"
-    assert TURN1_LLM_TEXT in finished_llm_spans[0].attributes["llm.output"] or \
-           TURN2_LLM_TEXT in finished_llm_spans[0].attributes["llm.output"], (
-        f"Expected LLM output text, got: {finished_llm_spans[0].attributes}"
-    )
+    assert (
+        TURN1_LLM_TEXT in finished_llm_spans[0].attributes["llm.output"]
+        or TURN2_LLM_TEXT in finished_llm_spans[0].attributes["llm.output"]
+    ), f"Expected LLM output text, got: {finished_llm_spans[0].attributes}"
 
     # Metrics captured: llm.processing_ms (from ProcessingMetricsData)
     spans_with_metrics = [
-        sp for sp in spans
-        if sp.attributes.get("llm.processing_ms") is not None
+        sp for sp in spans if sp.attributes.get("llm.processing_ms") is not None
     ]
     assert spans_with_metrics, "llm.processing_ms should be captured from MetricsFrame"
 
@@ -397,6 +402,7 @@ async def test_full_conversation_captures_all_spans() -> None:
 #   Fix: re-emit (pass-through) InputAudioRawFrame after internal processing.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_audio_buffer_processor_captures_full_conversation() -> None:
     """
@@ -416,12 +422,11 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
         LLMFullResponseStartFrame,
         LLMTextFrame,
         MetricsFrame,
-        OutputAudioRawFrame,
+        TranscriptionFrame,
         TTSAudioRawFrame,
         TTSStartedFrame,
         TTSStoppedFrame,
         TTSTextFrame,
-        TranscriptionFrame,
         VADUserStartedSpeakingFrame,
         VADUserStoppedSpeakingFrame,
     )
@@ -470,7 +475,9 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
                 await self._emit_llm_tts_response()
 
         async def _emit_llm_tts_response(self) -> None:
-            bot_text = "Table tennis is played on a 9-foot table with a net in the middle."
+            bot_text = (
+                "Table tennis is played on a 9-foot table with a net in the middle."
+            )
 
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(LLMTextFrame(text=bot_text))
@@ -523,10 +530,10 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
 
     agent = _MockVoiceAgentWithAudio()
 
-    # 16-byte minimal user audio frame (1 ms @ 8kHz/16-bit mono)
-    user_audio_bytes = b"\x10\x20" * 8
+    # 32-byte minimal user audio frame (1 ms @ 16kHz/16-bit mono, matches audio_out_sample_rate)
+    user_audio_bytes = b"\x10\x20" * 16
     user_audio_frame = InputAudioRawFrame(
-        audio=user_audio_bytes, sample_rate=8000, num_channels=1
+        audio=user_audio_bytes, sample_rate=16000, num_channels=1
     )
 
     frames_to_send = [
@@ -534,7 +541,9 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
         # User audio frames (normally from transport.input — must pass through MandateProcessor!)
         user_audio_frame,
         VADUserStartedSpeakingFrame(),
-        TranscriptionFrame(text="How do I play table tennis?", user_id="u1", timestamp="0"),
+        TranscriptionFrame(
+            text="How do I play table tennis?", user_id="u1", timestamp="0"
+        ),
         VADUserStoppedSpeakingFrame(),
         SleepFrame(sleep=0.06),
     ]
@@ -547,7 +556,9 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
         queue=received_up, queue_direction=FrameDirection.UPSTREAM, ignore_start=True
     )
     sink_proc = QueuedFrameProcessor(
-        queue=received_down, queue_direction=FrameDirection.DOWNSTREAM, ignore_start=True
+        queue=received_down,
+        queue_direction=FrameDirection.DOWNSTREAM,
+        ignore_start=True,
     )
 
     pipeline = Pipeline([source_proc, agent, audio_buffer, sink_proc])
@@ -590,36 +601,50 @@ async def test_audio_buffer_processor_captures_full_conversation() -> None:
         for c in mock_trace.create_span.call_args_list
     ]
     print("Spans created:", span_names)
-    print("Captured audio:", {k: (len(v) if k == "audio" else v) for k, v in captured_audio.items()})
+    print(
+        "Captured audio:",
+        {k: (len(v) if k == "audio" else v) for k, v in captured_audio.items()},
+    )
 
     full_conv_calls = [
-        c for c in mock_trace.create_span.call_args_list
-        if "full_conversation" in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
+        c
+        for c in mock_trace.create_span.call_args_list
+        if "full_conversation"
+        in str(c.kwargs.get("name") or (c.args[0] if c.args else ""))
     ]
-    assert full_conv_calls, (
-        f"pipecat.full_conversation span not created; got spans: {span_names}"
-    )
+    assert (
+        full_conv_calls
+    ), f"pipecat.full_conversation span not created; got spans: {span_names}"
 
     full_conv_attrs = full_conv_calls[0].kwargs.get("attributes") or {}
     print("full_conversation attributes:", full_conv_attrs)
 
     # Stereo attributes set
-    assert full_conv_attrs.get("full_conversation.audio_channels") == "stereo", (
-        f"Expected stereo; got: {full_conv_attrs}"
-    )
+    assert (
+        full_conv_attrs.get("full_conversation.audio_channels") == "stereo"
+    ), f"Expected stereo; got: {full_conv_attrs}"
     assert full_conv_attrs.get("full_conversation.audio_channel_left") == "user"
     assert full_conv_attrs.get("full_conversation.audio_channel_right") == "bot"
-    assert full_conv_attrs.get("full_conversation.audio_source") == "AudioBufferProcessor"
+    assert (
+        full_conv_attrs.get("full_conversation.audio_source") == "AudioBufferProcessor"
+    )
     assert "full_conversation.audio_uuid" in full_conv_attrs
 
     # Audio was uploaded to Noveum
-    assert client.export_audio.called, (
-        "client.export_audio() should be called with the WAV bytes"
-    )
+    assert (
+        client.export_audio.called
+    ), "client.export_audio() should be called with the WAV bytes"
     export_call = client.export_audio.call_args
-    assert export_call.kwargs.get("metadata", {}).get("num_channels") == 2
-    assert export_call.kwargs.get("metadata", {}).get("format") == "wav"
+    export_metadata = export_call.kwargs.get("metadata", {})
+    assert export_metadata.get("num_channels") == 2
+    assert export_metadata.get("format") == "wav"
+    assert export_metadata.get("type") == "conversation"
 
-    # The ABP on_audio_data handler should have fired with audio
-    # (either from our handler above or captured via observer's internal handler)
+    # WAV bytes must be non-empty (header alone is 44 bytes)
+    exported_wav = export_call.kwargs.get("audio_data", b"")
+    assert (
+        len(exported_wav) > 44
+    ), f"Expected non-empty WAV; got {len(exported_wav)} bytes"
+
+    # Conversation was properly finished
     assert client.finish_trace.called

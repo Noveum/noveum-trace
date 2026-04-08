@@ -175,7 +175,10 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         frame = data.frame
         error_msg = str(getattr(frame, "error", "Unknown error"))
 
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
+        active_spans: list[Any] = [
+            s for s in [self._active_llm_span, self._active_tts_span] if s is not None
+        ]
+        for span in active_spans:
             span.attributes["pipecat_span_status"] = "error"
             span.attributes["pipecat_span_status_message"] = error_msg
 
@@ -350,14 +353,13 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         if self._latency_tracker is latency_tracker:
             return
         try:
+
             async def _on_latency_measured(
                 _emitter: Any, latency_seconds: float
             ) -> None:
                 await self._handle_latency_measured(latency_seconds)
 
-            async def _on_latency_breakdown(
-                _emitter: Any, breakdown: Any
-            ) -> None:
+            async def _on_latency_breakdown(_emitter: Any, breakdown: Any) -> None:
                 await self._handle_latency_breakdown(breakdown)
 
             if hasattr(latency_tracker, "add_event_handler"):
@@ -420,7 +422,10 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
             proc = getattr(ttfb, "processor", f"service_{i}")
             dur = getattr(ttfb, "duration_secs", None)
             if dur is not None:
-                base_key = f"turn.latency.ttfb.{proc.lower().split('#')[0]}_ms"
+                # Strip pipecat's instance suffix (e.g. "OpenAISTTService#1" → "openaisttstservice")
+                # and cap the name at 40 chars to keep attribute keys readable.
+                proc_name = proc.lower().split("#")[0][:40]
+                base_key = f"turn.latency.ttfb.{proc_name}_ms"
                 # Append an index suffix when the same processor class appears more
                 # than once (e.g. two OpenAISTTService instances in the pipeline).
                 attr_key = base_key
@@ -469,33 +474,32 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
 
         # Flush any buffered EOU metrics onto the new turn span
         if self._pending_turn_eou_metrics:
-            eou_attrs = {
-                "turn.eou_is_complete": self._pending_turn_eou_metrics.get(
+            pending = self._pending_turn_eou_metrics
+            if "turn_eou_is_complete" in pending:
+                self._current_turn_span.attributes["turn.eou_is_complete"] = pending[
                     "turn_eou_is_complete"
-                ),
-                "turn.eou_confidence": self._pending_turn_eou_metrics.get(
+                ]
+            if "turn_eou_confidence" in pending:
+                self._current_turn_span.attributes["turn.eou_confidence"] = pending[
                     "turn_eou_confidence"
-                ),
-                "turn.eou_processing_time_ms": self._pending_turn_eou_metrics.get(
-                    "turn_eou_processing_time_ms"
-                ),
-                "turn.eou_inference_ms": self._pending_turn_eou_metrics.get(
+                ]
+            if "turn_eou_processing_time_ms" in pending:
+                self._current_turn_span.attributes["turn.eou_processing_time_ms"] = (
+                    pending["turn_eou_processing_time_ms"]
+                )
+            if "turn_eou_inference_ms" in pending:
+                self._current_turn_span.attributes["turn.eou_inference_ms"] = pending[
                     "turn_eou_inference_ms"
-                ),
-                "turn.eou_server_total_ms": self._pending_turn_eou_metrics.get(
-                    "turn_eou_server_total_ms"
-                ),
-            }
-            # Only set non-None values
-            for attr_name, val in eou_attrs.items():
-                if val is not None:
-                    self._current_turn_span.attributes[attr_name] = val
+                ]
+            if "turn_eou_server_total_ms" in pending:
+                self._current_turn_span.attributes["turn.eou_server_total_ms"] = (
+                    pending["turn_eou_server_total_ms"]
+                )
             logger.debug(
                 "Flushed buffered EOU metrics to turn %s: %s",
                 self._current_turn_number,
-                [k for k, v in eou_attrs.items() if v is not None],
+                list(pending.keys()),
             )
-
             self._pending_turn_eou_metrics.clear()
 
         logger.debug("Started turn %s", self._current_turn_number)
@@ -523,9 +527,15 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 "STT span crosses turn boundary — preserved (always-buffer mode)"
             )
 
-        span.attributes["turn.was_interrupted"] = was_interrupted
+        # Preserve any True already written by _handle_interruption_internal before
+        # _start_new_turn called us with was_interrupted=False.  That earlier write
+        # marks a real user barge-in; overwriting it with False would erase the
+        # interruption from both the span and the conversation-level counter.
+        existing_interrupted = bool(span.attributes.get("turn.was_interrupted", False))
+        final_interrupted = existing_interrupted or was_interrupted
+        span.attributes["turn.was_interrupted"] = final_interrupted
 
-        if was_interrupted:
+        if final_interrupted:
             self._metrics_accumulator["interrupted_turns"] = (
                 self._metrics_accumulator.get("interrupted_turns", 0) + 1
             )
