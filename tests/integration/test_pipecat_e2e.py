@@ -71,7 +71,7 @@ async def test_conversation_flow_start_llm_tts_end() -> None:
         )
     )
     await obs._handle_tts_text(
-        MagicMock(frame=ff.TTSTextFrame(text="Answer", aggregated_by="sentence"))
+        MagicMock(frame=ff.TTSTextFrame(text="Answer"))
     )
     await obs._handle_tts_stopped(MagicMock())
 

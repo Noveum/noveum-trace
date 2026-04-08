@@ -343,7 +343,7 @@ async def test_upload_full_conversation_audio_creates_error_span_when_no_chunks(
     obs._conversation_audio_chunks = []
     obs._audio_buffer_processor = None
 
-    await obs._upload_full_conversation_audio()
+    await obs._upload_full_conversation_audio(trace)
 
     trace.create_span.assert_called_once()
     args, kwargs = trace.create_span.call_args
@@ -382,7 +382,7 @@ async def test_upload_full_conversation_audio_uploads_when_chunks_present() -> N
 
     obs._get_client = MagicMock(return_value=client)  # type: ignore[method-assign]
 
-    await obs._upload_full_conversation_audio()
+    await obs._upload_full_conversation_audio(trace)
 
     trace.create_span.assert_called_once()
     client.export_audio.assert_called_once()

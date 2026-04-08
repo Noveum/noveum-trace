@@ -139,6 +139,29 @@ def merge_llm_pending_stash(
             existing[key] = val
 
 
+def system_prompt_from_messages_json(json_str: str) -> str | None:
+    """
+    Return the ``system`` role content from a JSON-encoded messages list.
+
+    Scans the list for the first message with ``role == "system"`` and returns
+    its content as a string. Returns ``None`` when the input is absent, the
+    JSON is invalid, or no system message is found.
+    """
+    if not json_str:
+        return None
+    try:
+        for msg in json.loads(json_str):
+            if not (isinstance(msg, dict) and msg.get("role") == "system"):
+                continue
+            content = msg.get("content") or ""
+            if content:
+                return content if isinstance(content, str) else json.dumps(content)
+            break
+    except Exception:
+        pass
+    return None
+
+
 def json_dumps_messages(messages: Any) -> str | None:
     """Serialise a message list to JSON, or ``None`` if empty / invalid."""
     if not messages:
