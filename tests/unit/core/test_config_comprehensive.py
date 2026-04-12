@@ -299,6 +299,8 @@ class TestConfig:
             environment="production",
             debug=True,
             log_level="DEBUG",
+            dev_mode=True,
+            dev_traces_dir="/tmp/noveum-dev-traces",
         )
 
         data = config.to_dict()
@@ -308,6 +310,8 @@ class TestConfig:
         assert data["environment"] == "production"
         assert data["debug"] is True
         assert data["log_level"] == "DEBUG"
+        assert data["dev_mode"] is True
+        assert data["dev_traces_dir"] == "/tmp/noveum-dev-traces"
         assert "tracing" in data
         assert "transport" in data
         assert "security" in data
@@ -321,6 +325,8 @@ class TestConfig:
             "environment": "production",
             "debug": True,
             "log_level": "DEBUG",
+            "dev_mode": True,
+            "dev_traces_dir": "/var/tmp/traces",
         }
 
         config = Config.from_dict(data)
@@ -330,6 +336,8 @@ class TestConfig:
         assert config.environment == "production"
         assert config.debug is True
         assert config.log_level == "DEBUG"
+        assert config.dev_mode is True
+        assert config.dev_traces_dir == "/var/tmp/traces"
 
     def test_config_from_dict_with_endpoint(self):
         """Test Config.from_dict() method with endpoint."""

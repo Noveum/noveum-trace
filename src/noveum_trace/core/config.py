@@ -23,6 +23,7 @@ DEFAULT_BATCH_SIZE = 100
 DEFAULT_BATCH_TIMEOUT = 5.0
 DEFAULT_MAX_QUEUE_SIZE = 1000
 DEFAULT_MAX_SPANS_PER_TRACE = 1000
+DEFAULT_DEV_TRACES_DIR = ".noveum_trace_dev"
 
 
 @dataclass
@@ -50,9 +51,11 @@ class TransportConfig:
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
     compression: bool = True
     ssl_verify: bool = (
-        True  # Set to False to disable SSL verification (NOT recommended for production)
+        # Set to False to disable SSL verification (NOT recommended for production)
+        True
     )
-    ca_bundle: Optional[str] = None  # Path to custom CA bundle for corporate proxies
+    # Path to custom CA bundle for corporate proxies
+    ca_bundle: Optional[str] = None
 
 
 @dataclass
@@ -93,6 +96,8 @@ class Config:
     # Additional settings
     debug: bool = False
     log_level: str = "ERROR"
+    dev_mode: bool = False
+    dev_traces_dir: Optional[str] = None
 
     # Private field to store endpoint override
     _endpoint_override: Optional[str] = field(default=None, init=False, repr=False)
@@ -124,6 +129,8 @@ class Config:
         integrations: Optional[IntegrationConfig] = None,
         debug: bool = False,
         log_level: str = "ERROR",
+        dev_mode: bool = False,
+        dev_traces_dir: Optional[str] = None,
     ) -> "Config":
         """Create a Config instance with optional endpoint override."""
         # Create the config instance
@@ -137,6 +144,8 @@ class Config:
             integrations=integrations or IntegrationConfig(),
             debug=debug,
             log_level=log_level,
+            dev_mode=dev_mode,
+            dev_traces_dir=dev_traces_dir,
         )
 
         # Handle endpoint override after initialization
@@ -221,6 +230,8 @@ class Config:
             },
             "debug": self.debug,
             "log_level": self.log_level,
+            "dev_mode": self.dev_mode,
+            "dev_traces_dir": self.dev_traces_dir,
         }
 
     @classmethod
@@ -234,6 +245,8 @@ class Config:
         config.environment = data.get("environment", "development")
         config.debug = data.get("debug", False)
         config.log_level = data.get("log_level", "ERROR")
+        config.dev_mode = data.get("dev_mode", False)
+        config.dev_traces_dir = data.get("dev_traces_dir")
 
         # Handle top-level endpoint parameter
         top_level_endpoint = data.get("endpoint")
@@ -458,6 +471,14 @@ def _load_from_environment() -> Config:
     debug_env = os.getenv("NOVEUM_DEBUG")
     if debug_env:
         config_data["debug"] = debug_env.lower() in ("true", "1", "yes")
+
+    dev_mode_env = os.getenv("NOVEUM_DEV_MODE")
+    if dev_mode_env:
+        config_data["dev_mode"] = dev_mode_env.lower() in ("true", "1", "yes")
+
+    dev_traces_dir_env = os.getenv("NOVEUM_DEV_TRACES_DIR")
+    if dev_traces_dir_env:
+        config_data["dev_traces_dir"] = dev_traces_dir_env
 
     # Try to load from config files
     config_files = [

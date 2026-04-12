@@ -5,6 +5,7 @@ This module provides extensive test coverage for the HttpTransport class,
 including all methods, error conditions, and edge cases.
 """
 
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1289,3 +1290,98 @@ class TestHttpTransportIntegration:
         # Verify subsequent exports are rejected by the real export_trace method
         with pytest.raises(TransportError, match="Transport has been shutdown"):
             transport.export_trace(trace)
+
+
+class TestHttpTransportDevMode:
+    """dev_mode persists trace JSON bodies to disk immediately before POST."""
+
+    def test_dev_mode_writes_batch_payload(self, tmp_path):
+        config = Config(
+            dev_mode=True,
+            dev_traces_dir=str(tmp_path),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "{}"
+        transport.session.post = Mock(return_value=mock_response)
+
+        traces = [{"trace_id": "abc-uuid", "name": "t", "spans": []}]
+        transport._send_trace_batch(traces)
+
+        out_file = tmp_path / "abc-uuid.json"
+        assert out_file.is_file()
+        saved = json.loads(out_file.read_text(encoding="utf-8"))
+        assert saved == traces[0]
+
+        transport.session.post.assert_called_once()
+        posted = transport.session.post.call_args.kwargs["json"]
+        assert posted["traces"] == traces
+
+    def test_dev_mode_batch_writes_one_file_per_trace(self, tmp_path):
+        config = Config(
+            dev_mode=True,
+            dev_traces_dir=str(tmp_path),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "{}"
+        transport.session.post = Mock(return_value=mock_response)
+
+        traces = [
+            {"trace_id": "trace-a", "name": "a", "spans": []},
+            {"trace_id": "trace-b", "name": "b", "spans": []},
+        ]
+        transport._send_trace_batch(traces)
+
+        assert (
+            json.loads((tmp_path / "trace-a.json").read_text(encoding="utf-8"))
+            == traces[0]
+        )
+        assert (
+            json.loads((tmp_path / "trace-b.json").read_text(encoding="utf-8"))
+            == traces[1]
+        )
+        assert len(list(tmp_path.glob("*.json"))) == 2
+
+    def test_dev_mode_disabled_writes_nothing(self, tmp_path):
+        config = Config(
+            dev_mode=False,
+            dev_traces_dir=str(tmp_path),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "{}"
+        transport.session.post = Mock(return_value=mock_response)
+
+        transport._send_trace_batch([{"trace_id": "x", "name": "t", "spans": []}])
+
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_dev_mode_writes_single_trace_payload(self, tmp_path):
+        config = Config(
+            dev_mode=True,
+            dev_traces_dir=str(tmp_path),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True}
+        transport.session.post = Mock(return_value=mock_response)
+
+        trace_data = {"trace_id": "single-tid", "name": "n"}
+        transport._send_request(trace_data)
+
+        out_file = tmp_path / "single-tid.json"
+        assert out_file.is_file()
+        assert json.loads(out_file.read_text(encoding="utf-8")) == trace_data
