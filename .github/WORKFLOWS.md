@@ -55,12 +55,11 @@ This document describes the GitHub Actions workflows and their test execution st
 tests/
 ├── unit/                    # Fast, isolated tests
 │   ├── core/               # Core SDK components
-│   ├── decorators/         # Decorator functionality
 │   ├── transport/          # Transport layer
 │   ├── integrations/       # Integration components
 │   └── utils/              # Utility functions
 ├── integration/            # Multi-component tests
-│   ├── test_decorators_integration.py
+│   ├── mock_endpoint/
 │   ├── test_endpoint_*.py
 │   └── test_openai_integration.py
 ├── e2e/                   # End-to-end tests (future)

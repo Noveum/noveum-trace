@@ -43,7 +43,6 @@ SDK_LOGGERS = [
     "noveum_trace.transport",
     "noveum_trace.transport.http_transport",
     "noveum_trace.transport.batch_processor",
-    "noveum_trace.decorators",
     "noveum_trace.integrations",
 ]
 

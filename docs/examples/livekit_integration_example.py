@@ -164,10 +164,9 @@ class Userdata:
 # =============================================================================
 
 
-@noveum_trace.trace_llm(provider="openai", metadata={"model": "gpt-4o-mini"})
 def call_llm(prompt: str, system_prompt: Optional[str] = None) -> str:
     """
-    Call LLM for conversation (traced automatically).
+    Call LLM for conversation (traced via trace_llm_call context manager).
 
     Requires OpenAI API key to be set.
     """
@@ -178,19 +177,24 @@ def call_llm(prompt: str, system_prompt: Optional[str] = None) -> str:
             "Set it with: export OPENAI_API_KEY=your-key"
         )
 
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    client = OpenAI()
-    response = client.chat.completions.create(
+    with noveum_trace.trace_llm_call(
         model="gpt-4o-mini",
-        messages=messages,
-        max_tokens=150,
-        temperature=0.7,
-    )
-    return response.choices[0].message.content or ""
+        provider="openai",
+        attributes={"metadata.model": "gpt-4o-mini"},
+    ):
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        client = OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=150,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content or ""
 
 
 def create_system_prompt(order: Order) -> str:

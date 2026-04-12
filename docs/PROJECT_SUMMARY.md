@@ -2,7 +2,7 @@
 
 ## 🎯 Project Overview
 
-The Noveum Trace SDK is a cloud-first, modular Python package designed for comprehensive LLM application tracing and observability. Built with enterprise requirements in mind, it provides a simple decorator-based API while maintaining extensibility for future enhancements.
+The Noveum Trace SDK is a cloud-first, modular Python package designed for comprehensive LLM application tracing and observability. Built with enterprise requirements in mind, it provides context managers and manual span APIs while maintaining extensibility for future enhancements.
 
 ## 📦 Package Structure
 
@@ -17,13 +17,6 @@ noveum-trace-sdk/
 │   │   ├── context.py             # Context propagation
 │   │   ├── span.py                # Span implementation
 │   │   └── trace.py               # Trace implementation
-│   ├── decorators/                 # Decorator-based API
-│   │   ├── __init__.py
-│   │   ├── base.py                # Base @trace decorator
-│   │   ├── llm.py                 # @trace_llm decorator
-│   │   ├── agent.py               # @trace_agent decorator
-│   │   ├── tool.py                # @trace_tool decorator
-│   │   └── retrieval.py           # @trace_retrieval decorator
 │   ├── context_managers.py        # Context managers for inline tracing
 │   ├── agents.py                   # Multi-agent system support
 │   ├── streaming.py               # Streaming LLM response support
@@ -42,7 +35,6 @@ noveum-trace-sdk/
 │   ├── __init__.py
 │   ├── unit/                      # Unit tests
 │   │   ├── core/                  # Core functionality tests
-│   │   ├── decorators/            # Decorator tests
 │   │   ├── transport/             # Transport layer tests
 │   │   └── utils/                 # Utility tests
 │   ├── integration/               # Integration tests
@@ -88,7 +80,6 @@ noveum-trace-sdk/
 
 ### ✅ Multiple Tracing Approaches
 
-- **Decorator-Based API** - `@trace`, `@trace_llm`, `@trace_agent`, `@trace_tool`, `@trace_retrieval`
 - **Context Managers** - Inline tracing with `trace_llm_call`, `trace_agent_operation`, `trace_operation`
 - **Manual Instrumentation** - Full control with client methods
 
@@ -148,19 +139,19 @@ noveum-trace-sdk/
 
 ```python
 import noveum_trace
+
 noveum_trace.init(project="my-app")
 
-@noveum_trace.trace
 def my_function():
-    return "Hello, World!"
+    with noveum_trace.trace_operation("my_function"):
+        return "Hello, World!"
 ```
 
 ### 2. **Multiple Flexible Approaches**
 
 Unlike competitors that force a single pattern, Noveum Trace supports:
 
-- Decorators for new code
-- Context managers for existing code
+- Context managers for granular, inline tracing
 - Manual instrumentation for full control
 
 ### 3. **Built for Multi-Agent Systems**

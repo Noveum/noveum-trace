@@ -5,19 +5,18 @@ This module provides context managers that allow tracing specific operations
 within functions without requiring decorators on the entire function.
 """
 
-import functools
 import inspect
 import logging
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 from noveum_trace.core.context import attach_context_to_span, get_current_trace
 from noveum_trace.core.span import Span, SpanStatus
-from noveum_trace.decorators.base import _serialize_value
 from noveum_trace.utils.llm_utils import (
     estimate_cost,
     extract_llm_metadata,
 )
+from noveum_trace.utils.serialization import _serialize_value
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ class TraceContextManager:
         self.client: Optional[Any] = None
         self.auto_trace: Optional[Any] = None
 
-    def __enter__(self) -> Union[Span, "NoOpSpan"]:
+    def __enter__(self) -> Union[Span, "NoOpSpan", "TraceContextManager"]:
         """Enter the context and start a span."""
         from noveum_trace import get_client, is_initialized
 
@@ -154,18 +153,19 @@ class LLMContextManager(TraceContextManager):
     ):
         name = f"llm.{operation}" if operation else "llm_call"
 
+        incoming_attributes = kwargs.pop("attributes", {})
         attributes = {
             "llm.model": model,
             "llm.provider": provider,
             "llm.operation": operation or "unknown",
-            **kwargs.get("attributes", {}),
+            **incoming_attributes,
         }
 
         super().__init__(name=name, attributes=attributes, **kwargs)
         self.capture_inputs = capture_inputs
         self.capture_outputs = capture_outputs
 
-    def __enter__(self) -> Union[Span, "NoOpSpan", "LLMContextManager"]:  # type: ignore[override]
+    def __enter__(self) -> Union[Span, "NoOpSpan", "LLMContextManager"]:
         """Enter the context and start a span, returning self for method access."""
         # Call parent to set up span
         super().__enter__()
@@ -397,12 +397,20 @@ class AgentContextManager(TraceContextManager):
 
         super().__init__(name=name, attributes=attributes, **kwargs)
 
+    def __enter__(self) -> Union[Span, "NoOpSpan"]:
+        """Narrow binding type: base implementation always returns a span-like object."""
+        return cast(Union[Span, NoOpSpan], super().__enter__())
+
 
 class OperationContextManager(TraceContextManager):
     """Generic context manager for any operation."""
 
     def __init__(self, operation_name: str, **kwargs: Any) -> None:
         super().__init__(name=operation_name, **kwargs)
+
+    def __enter__(self) -> Union[Span, "NoOpSpan"]:
+        """Narrow binding type: base implementation always returns a span-like object."""
+        return cast(Union[Span, NoOpSpan], super().__enter__())
 
 
 class NoOpSpan:
@@ -513,7 +521,7 @@ def trace_operation(
         operation_name: Name of the operation
         attributes: Operation attributes
         tags: Operation tags
-        capture_args: Whether to capture function arguments if used as decorator (default: False)
+        capture_args: Whether to capture caller arguments when used programmatically (default: False)
         **kwargs: Additional configuration
 
     Returns:
@@ -652,85 +660,3 @@ def create_child_span(
             client.finish_span(child_span)
 
     return child_span_context()
-
-
-def trace_function_calls(
-    func: Optional[Any] = None,
-    *,
-    span_name: Optional[str] = None,
-    attributes: Optional[dict[str, Any]] = None,
-    capture_args: bool = True,
-) -> Any:
-    """
-    Decorator that uses context managers internally to trace function calls.
-
-    Can be used as:
-        @trace_function_calls
-        def my_func():
-            pass
-
-        @trace_function_calls(capture_args=False)
-        def my_func():
-            pass
-
-    Args:
-        func: Function to trace (when used as @trace_function_calls)
-        span_name: Custom span name
-        attributes: Additional attributes
-        capture_args: Whether to capture function arguments (default: True)
-
-    Returns:
-        Traced function or decorator
-
-    Example:
-        # Trace an existing function
-        traced_func = trace_function_calls(existing_function, span_name="custom_operation")
-        result = traced_func(arg1, arg2)
-    """
-    # Handle being called with keyword arguments only
-    if func is None:
-        # Called as @trace_function_calls(capture_args=True)
-        def decorator(f: Any) -> Any:
-            return trace_function_calls(
-                f, span_name=span_name, attributes=attributes, capture_args=capture_args
-            )
-
-        return decorator
-
-    # Handle being called with function as first argument
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        name = span_name or f"function.{func.__name__}"
-        func_attributes = {
-            "function.name": func.__name__,
-            "function.module": func.__module__,
-            "function.args_count": len(args),
-            "function.kwargs_count": len(kwargs),
-            **(attributes or {}),
-        }
-
-        # Create context manager with capture_args enabled
-        context_mgr = trace_operation(name, func_attributes, capture_args=capture_args)
-
-        with context_mgr as span:
-            # Capture function arguments if enabled
-            if capture_args:
-                context_mgr.capture_function_args(func, *args, **kwargs)
-
-            try:
-                result = func(*args, **kwargs)
-                span.set_attribute("function.success", True)
-
-                # Capture result if it's a simple type
-                try:
-                    serialized_result = _serialize_value(result)
-                    span.set_attribute("output.result", serialized_result)
-                except Exception:
-                    pass  # Silently ignore result serialization errors
-
-                return result
-            except Exception:
-                span.set_attribute("function.success", False)
-                raise
-
-    return wrapper

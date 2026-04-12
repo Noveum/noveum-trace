@@ -185,7 +185,7 @@ NOVEUM_TEST_ENDPOINT="https://staging.noveum.ai" pytest tests/integration/
 **Test Categories:**
 
 - **Base Configuration** (`test_base_configuration.py`): Endpoint switching, health checks, configuration persistence
-- **Decorator Integration** (`test_decorator_integrations.py`): All decorators (@trace, @trace_llm, @trace_agent, @trace_tool)
+- **Mock endpoint / HTTP capture** (`tests/integration/mock_endpoint/`): Transport, endpoint validation, and `trace_operation`-style traces
 - **Real LLM Scenarios** (`test_real_llm_scenarios.py`): Multi-turn conversations, function calling, multi-agent workflows
 - **OpenTelemetry Integration** (`test_opentelemetry_integration.py`): Auto-instrumentation, framework integration, dual export
 

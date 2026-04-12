@@ -324,7 +324,7 @@ def client_with_mocked_transport():
         client = NoveumClient(api_key="test-key", project="test-project")
         client.transport = transport  # Ensure it's set
 
-        # Set as global client for decorator tests
+        # Set as global client for integration tests
         import noveum_trace
 
         with noveum_trace._client_lock:

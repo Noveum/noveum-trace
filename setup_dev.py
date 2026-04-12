@@ -109,9 +109,9 @@ def check_imports():
 
         print("✅ Main package imports successfully")
 
-        from noveum_trace import trace, trace_agent, trace_llm  # noqa: F401
+        from noveum_trace import trace_llm_call, trace_operation  # noqa: F401
 
-        print("✅ Decorators import successfully")
+        print("✅ Context manager imports successful")
 
         from noveum_trace.core.config import Config  # noqa: F401
 
@@ -167,13 +167,15 @@ def print_summary():
     print("   isort --check-only src/ tests/")
     print("   mypy src/noveum_trace/")
     print("\n5. Start developing!")
-    print("   - Add new decorators in src/noveum_trace/decorators/")
+    print("   - Extend context managers or core tracing in src/noveum_trace/")
     print("   - Add new integrations in src/noveum_trace/integrations/")
     print("   - Add tests in tests/")
 
     print("\n📚 Key Features Implemented:")
     print("✅ Modular architecture with clear separation of concerns")
-    print("✅ Decorator-based API (@trace, @trace_llm, @trace_agent, etc.)")
+    print(
+        "✅ Context-manager API (trace_llm_call, trace_operation, trace_agent_operation, etc.)"
+    )
     print("✅ HTTP transport with batching and retry logic")
     print("✅ Comprehensive configuration system")
     print("✅ Framework integration support")

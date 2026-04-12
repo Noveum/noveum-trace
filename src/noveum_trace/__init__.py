@@ -1,64 +1,32 @@
 """
 Noveum Trace SDK - Cloud-first, flexible tracing for LLM applications.
 
-This package provides comprehensive observability for LLM applications and
-multi-agent systems through multiple flexible tracing approaches.
+This package provides observability for LLM applications and multi-agent
+systems through context managers, manual spans, and integrations.
 
-Import Patterns:
-    Recommended: Direct imports from package root
+Import patterns (recommended: package root):
 
-    >>> from noveum_trace import init, trace_context, trace, NoveumClient
-    >>> from noveum_trace import trace_llm, trace_agent, trace_tool
-    >>> from noveum_trace import trace_llm_call, trace_operation
-
-    Alternative: Module-level imports
+    >>> from noveum_trace import init, trace_context, trace_llm_call, NoveumClient
+    >>> from noveum_trace import trace_operation, trace_agent_operation
 
     >>> import noveum_trace
     >>> noveum_trace.init(project="my-app")
-    >>> noveum_trace.trace_context(...)
 
-    Submodule imports (when needed):
+Submodule imports (when needed):
 
-    >>> from noveum_trace.decorators import trace
-    >>> from noveum_trace.integrations import NoveumTraceCallbackHandler
+    >>> from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
     >>> from noveum_trace.core.client import NoveumClient
 
-    For complete import documentation, see README.md
+For complete documentation, see README.md.
 
-Example:
-    Basic usage with decorators:
-
-    >>> import noveum_trace
-    >>> noveum_trace.init(project="my-app")
-    >>>
-    >>> @noveum_trace.trace
-    >>> def my_function(data: str) -> str:
-    ...     return process_data(data)
-
-    Or using direct imports:
-
-    >>> from noveum_trace import init, trace
-    >>> init(project="my-app")
-    >>>
-    >>> @trace
-    >>> def my_function(data: str) -> str:
-    ...     return process_data(data)
-
-    LLM tracing with context managers:
+Example (LLM tracing with context managers):
 
     >>> def process_query(query: str) -> str:
-    ...     # Pre-processing (not traced)
     ...     cleaned_query = clean_query(query)
-    ...
-    ...     # LLM call (traced)
     ...     with noveum_trace.trace_llm_call(model="gpt-4") as span:
     ...         response = openai.chat.completions.create(...)
     ...         span.set_attribute("llm.tokens", response.usage.total_tokens)
-    ...
-    ...     # Post-processing (not traced)
     ...     return format_response(response)
-
-    Or using direct imports:
 
     >>> from noveum_trace import trace_llm_call
     >>> with trace_llm_call(model="gpt-4") as span:
@@ -103,7 +71,6 @@ from noveum_trace.context_managers import (
 from noveum_trace.context_managers import trace_agent as trace_agent_operation
 from noveum_trace.context_managers import (
     trace_batch_operation,
-    trace_function_calls,
 )
 from noveum_trace.context_managers import trace_llm as trace_llm_call
 from noveum_trace.context_managers import (
@@ -122,13 +89,6 @@ from noveum_trace.core.context import (
 )
 from noveum_trace.core.span import Span
 from noveum_trace.core.trace import Trace
-
-# Decorator imports
-from noveum_trace.decorators.agent import trace_agent
-from noveum_trace.decorators.base import trace
-from noveum_trace.decorators.llm import trace_llm
-from noveum_trace.decorators.retrieval import trace_retrieval
-from noveum_trace.decorators.tool import trace_tool
 
 # Streaming imports
 from noveum_trace.streaming import (
@@ -394,12 +354,6 @@ __all__ = [
     "get_config",
     "get_client",
     "is_initialized",
-    # Decorators
-    "trace",
-    "trace_llm",
-    "trace_agent",
-    "trace_tool",
-    "trace_retrieval",
     # Context managers
     "trace_context",
     "trace_llm_call",
@@ -408,7 +362,6 @@ __all__ = [
     "trace_batch_operation",
     "trace_pipeline_stage",
     "create_child_span",
-    "trace_function_calls",
     # Streaming
     "trace_streaming",
     "streaming_llm",

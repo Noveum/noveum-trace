@@ -329,15 +329,13 @@ class TestBasicImports:
         # Should not raise any exceptions
         assert noveum_trace is not None
 
-    def test_decorator_imports(self):
-        """Test importing decorators."""
-        from noveum_trace import trace, trace_agent, trace_llm, trace_tool
+    def test_context_manager_imports(self):
+        """Test importing context manager API."""
+        from noveum_trace import trace_context, trace_llm_call, trace_operation
 
-        # Should not raise any exceptions
-        assert trace is not None
-        assert trace_llm is not None
-        assert trace_agent is not None
-        assert trace_tool is not None
+        assert trace_llm_call is not None
+        assert trace_operation is not None
+        assert trace_context is not None
 
     def test_core_imports(self):
         """Test importing core classes."""

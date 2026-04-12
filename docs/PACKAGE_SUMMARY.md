@@ -19,13 +19,6 @@ noveum-trace-sdk/
 │   │   ├── context.py          # Context management
 │   │   ├── span.py             # Span implementation
 │   │   └── trace.py            # Trace implementation
-│   ├── decorators/              # Decorator API (6 files)
-│   │   ├── __init__.py         # Package initialization
-│   │   ├── base.py             # Base decorator
-│   │   ├── llm.py              # LLM tracing
-│   │   ├── agent.py            # Agent tracing
-│   │   ├── tool.py             # Tool tracing
-│   │   └── retrieval.py        # Retrieval tracing
 │   ├── context_managers.py     # Context managers for inline tracing
 │   ├── agents.py               # Multi-agent system support
 │   ├── streaming.py            # Streaming LLM response support
@@ -41,7 +34,6 @@ noveum-trace-sdk/
 ├── tests/                       # Test suite (50+ files)
 │   ├── unit/                   # Unit tests
 │   │   ├── core/               # Core functionality tests
-│   │   ├── decorators/         # Decorator tests
 │   │   ├── transport/          # Transport layer tests
 │   │   └── utils/              # Utility tests
 │   ├── integration/            # Integration tests
@@ -78,7 +70,6 @@ noveum-trace-sdk/
 
 ### 🎯 Core Tracing System
 
-- **Complete Decorator API** - `@trace`, `@trace_llm`, `@trace_agent`, `@trace_tool`, `@trace_retrieval`
 - **Context Managers** - `trace_llm_call`, `trace_agent_operation`, `trace_operation` for inline tracing
 - **Manual Instrumentation** - Full client API for custom tracing needs
 
@@ -159,12 +150,10 @@ noveum_trace.init(
     project="my-app"
 )
 
-# Use decorators
-@noveum_trace.trace
-def my_function():
-    return "Hello, World!"
+# Context managers
+with noveum_trace.trace_operation("my_function"):
+    result = "Hello, World!"
 
-# Use context managers
 with noveum_trace.trace_llm_call(model="gpt-4") as span:
     response = openai_client.chat.completions.create(...)
 ```
