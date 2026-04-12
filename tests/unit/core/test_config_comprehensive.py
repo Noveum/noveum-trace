@@ -299,6 +299,8 @@ class TestConfig:
             environment="production",
             debug=True,
             log_level="DEBUG",
+            dev_mode=True,
+            dev_traces_dir="/tmp/noveum-dev-traces",
         )
 
         data = config.to_dict()
@@ -308,6 +310,8 @@ class TestConfig:
         assert data["environment"] == "production"
         assert data["debug"] is True
         assert data["log_level"] == "DEBUG"
+        assert data["dev_mode"] is True
+        assert data["dev_traces_dir"] == "/tmp/noveum-dev-traces"
         assert "tracing" in data
         assert "transport" in data
         assert "security" in data
@@ -321,6 +325,8 @@ class TestConfig:
             "environment": "production",
             "debug": True,
             "log_level": "DEBUG",
+            "dev_mode": True,
+            "dev_traces_dir": "/var/tmp/traces",
         }
 
         config = Config.from_dict(data)
@@ -330,6 +336,31 @@ class TestConfig:
         assert config.environment == "production"
         assert config.debug is True
         assert config.log_level == "DEBUG"
+        assert config.dev_mode is True
+        assert config.dev_traces_dir == "/var/tmp/traces"
+
+    def test_config_from_dict_dev_mode_string_coercion(self):
+        """dev_mode from YAML/JSON files is often a string; coerce to bool."""
+        assert Config.from_dict({"dev_mode": "false"}).dev_mode is False
+        assert Config.from_dict({"dev_mode": "FALSE"}).dev_mode is False
+        assert Config.from_dict({"dev_mode": "true"}).dev_mode is True
+        assert Config.from_dict({"dev_mode": "0"}).dev_mode is False
+        assert Config.from_dict({"dev_mode": "1"}).dev_mode is True
+        assert Config.from_dict({"dev_mode": "no"}).dev_mode is False
+        assert Config.from_dict({"dev_mode": "yes"}).dev_mode is True
+        assert Config.from_dict({"dev_mode": "off"}).dev_mode is False
+        assert Config.from_dict({"dev_mode": "on"}).dev_mode is True
+        assert Config.from_dict({}).dev_mode is False
+        assert Config.from_dict({"dev_mode": None}).dev_mode is False
+        assert Config.from_dict({"dev_mode": 0}).dev_mode is False
+        assert Config.from_dict({"dev_mode": 1}).dev_mode is True
+
+    def test_config_from_dict_dev_mode_invalid(self):
+        with pytest.raises(ConfigurationError, match="Invalid boolean for dev_mode"):
+            Config.from_dict({"dev_mode": "maybe"})
+
+    def test_config_from_dict_dev_traces_dir_empty_string(self):
+        assert Config.from_dict({"dev_traces_dir": "   "}).dev_traces_dir is None
 
     def test_config_from_dict_with_endpoint(self):
         """Test Config.from_dict() method with endpoint."""

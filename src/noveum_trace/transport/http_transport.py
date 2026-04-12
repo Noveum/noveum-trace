@@ -6,9 +6,11 @@ including request formatting, authentication, and error handling.
 """
 
 import base64
+import json
 import time
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 
 # Import for type hints
 from typing import TYPE_CHECKING, Any, NoReturn, Optional
@@ -20,7 +22,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from noveum_trace import __version__
-from noveum_trace.core.config import get_config
+from noveum_trace.core.config import DEFAULT_DEV_TRACES_DIR, get_config
 
 if TYPE_CHECKING:
     from noveum_trace.core.config import Config
@@ -748,6 +750,45 @@ class HttpTransport:
 
         return trace_data
 
+    def _dev_trace_filename_stem(self, trace: dict[str, Any]) -> str:
+        """Filesystem-safe filename stem from a single trace's trace_id."""
+        trace_id = trace.get("trace_id")
+        if trace_id is None:
+            return f"unknown_{time.time_ns()}"
+        safe = "".join(c for c in str(trace_id) if c.isalnum() or c in "-_")
+        return safe if safe else f"unknown_{time.time_ns()}"
+
+    def _write_dev_trace_json_file(self, trace: dict[str, Any]) -> None:
+        """Write one trace dict to ``{trace_id}.json`` (caller checks dev_mode)."""
+        dir_str = self.config.dev_traces_dir or DEFAULT_DEV_TRACES_DIR
+        out_dir = Path(dir_str).expanduser()
+        stem = self._dev_trace_filename_stem(trace)
+        path = out_dir / f"{stem}.json"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(trace, indent=2, default=str), encoding="utf-8")
+        except OSError as e:
+            logger.warning("dev_mode: failed to write trace JSON to %s: %s", path, e)
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "dev_mode: failed to serialize trace JSON for %s: %s", path, e
+            )
+
+    def _write_dev_trace_payload(self, payload: dict[str, Any]) -> None:
+        """Persist each trace as ``{trace_id}.json`` right before the API send.
+
+        Batches write one file per trace; trace IDs are unique.
+        """
+        if not self.config.dev_mode:
+            return
+        traces = payload.get("traces")
+        if isinstance(traces, list) and traces:
+            for trace in traces:
+                if isinstance(trace, dict):
+                    self._write_dev_trace_json_file(trace)
+            return
+        self._write_dev_trace_json_file(payload)
+
     def _send_request(self, trace_data: dict[str, Any]) -> dict[str, Any]:
         """
         Send a single trace request to the Noveum platform.
@@ -771,6 +812,8 @@ class HttpTransport:
             content_type="application/json",
             timeout=self.config.transport.timeout,
         )
+
+        self._write_dev_trace_payload(trace_data)
 
         try:
             # Send request with explicit Content-Type for JSON
@@ -909,6 +952,8 @@ class HttpTransport:
                 logger.debug(
                     f"    [{i+1}] {trace_name} (ID: {trace_id}) - {span_count} spans"
                 )
+
+        self._write_dev_trace_payload(payload)
 
         try:
             # Send request with explicit Content-Type for JSON
