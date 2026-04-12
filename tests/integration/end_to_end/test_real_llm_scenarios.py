@@ -114,13 +114,17 @@ def validate_trace_via_api(trace_id: str, timeout: int = 120) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
     url = f"{ENDPOINT.rstrip('/')}/v1/traces/{trace_id}"
+    # Noveum API omits span payloads unless includeSpans=true (see noveum-app-nextjs getTraceByIdHandler).
+    trace_get_params = {"includeSpans": "true"}
 
     # Retry for up to timeout seconds
     start_time = time.time()
     retry_count = 0
     while time.time() - start_time < timeout:
         try:
-            response = requests.get(url, headers=headers, timeout=5)
+            response = requests.get(
+                url, headers=headers, params=trace_get_params, timeout=5
+            )
 
             if response.status_code == 200:
                 trace_data = response.json()
@@ -132,6 +136,20 @@ def validate_trace_via_api(trace_id: str, timeout: int = 120) -> dict[str, Any]:
                         assert (
                             trace["trace_id"] == trace_id
                         ), f"Trace ID mismatch: expected {trace_id}, got {trace['trace_id']}"
+
+                        spans = trace.get("spans") or []
+                        if (
+                            trace_get_params.get("includeSpans") == "true"
+                            and trace.get("span_count", 0) > 0
+                            and len(spans) == 0
+                        ):
+                            print(
+                                f"⏳ Trace {trace_id} has span_count={trace['span_count']} but spans not loaded yet "
+                                f"(attempt {retry_count})"
+                            )
+                            retry_count += 1
+                            time.sleep(RETRY_SLEEP)
+                            continue
 
                         print(
                             f"✅ Successfully validated trace {trace_id} after {retry_count} retries"
@@ -149,6 +167,20 @@ def validate_trace_via_api(trace_id: str, timeout: int = 120) -> dict[str, Any]:
                         assert (
                             trace["trace_id"] == trace_id
                         ), f"Trace ID mismatch: expected {trace_id}, got {trace['trace_id']}"
+
+                        spans = trace.get("spans") or []
+                        if (
+                            trace_get_params.get("includeSpans") == "true"
+                            and trace.get("span_count", 0) > 0
+                            and len(spans) == 0
+                        ):
+                            print(
+                                f"⏳ Trace {trace_id} has span_count={trace['span_count']} but spans not loaded yet "
+                                f"(attempt {retry_count})"
+                            )
+                            retry_count += 1
+                            time.sleep(RETRY_SLEEP)
+                            continue
 
                         print(
                             f"✅ Successfully validated trace {trace_id} after {retry_count} retries"
