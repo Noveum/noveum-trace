@@ -15,6 +15,43 @@ import yaml
 
 from noveum_trace.utils.exceptions import ConfigurationError
 
+
+def _parse_config_bool(value: Any, *, field_name: str) -> bool:
+    """
+    Coerce config dict values to bool (YAML/JSON often yield strings).
+
+    Accepts bool, int (0/1), and common string forms; raises ConfigurationError
+    for unrecognized values.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, int):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+        raise ConfigurationError(
+            f"Invalid boolean for {field_name}: {value!r} "
+            "(expected 0 or 1 when using an integer)"
+        )
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        raise ConfigurationError(
+            f"Invalid boolean for {field_name}: {value!r} "
+            '(expected "true"/"false", "1"/"0", "yes"/"no", etc.)'
+        )
+    raise ConfigurationError(
+        f"Invalid boolean for {field_name}: {value!r} "
+        f"(unsupported type {type(value).__name__})"
+    )
+
+
 # Configuration constants
 DEFAULT_ENDPOINT = "https://api.noveum.ai/api"
 DEFAULT_TIMEOUT = 30
@@ -245,8 +282,19 @@ class Config:
         config.environment = data.get("environment", "development")
         config.debug = data.get("debug", False)
         config.log_level = data.get("log_level", "ERROR")
-        config.dev_mode = data.get("dev_mode", False)
-        config.dev_traces_dir = data.get("dev_traces_dir")
+        if "dev_mode" in data:
+            config.dev_mode = _parse_config_bool(
+                data["dev_mode"], field_name="dev_mode"
+            )
+        else:
+            config.dev_mode = False
+        dev_traces_dir_raw = data.get("dev_traces_dir")
+        if dev_traces_dir_raw is None:
+            config.dev_traces_dir = None
+        elif isinstance(dev_traces_dir_raw, str) and not dev_traces_dir_raw.strip():
+            config.dev_traces_dir = None
+        else:
+            config.dev_traces_dir = dev_traces_dir_raw
 
         # Handle top-level endpoint parameter
         top_level_endpoint = data.get("endpoint")
