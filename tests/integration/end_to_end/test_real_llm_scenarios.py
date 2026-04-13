@@ -306,57 +306,58 @@ class TestRealLLMBasicScenarios:
         """Test simple chat completion with real LLM providers."""
         client = client_factory()
 
-        @noveum_trace.trace_llm(provider=provider, metadata={"model": model_name})
         def call_llm(prompt: str) -> str:
-            current_span = noveum_trace.get_current_span()
+            with noveum_trace.trace_llm_call(model=model_name, provider=provider):
+                current_span = noveum_trace.get_current_span()
 
-            if provider == "openai":
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=100,
-                )
-                result = response.choices[0].message.content
+                if provider == "openai":
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=100,
+                    )
+                    result = response.choices[0].message.content
 
-                # Add detailed attributes
+                    if current_span:
+                        current_span.set_attribute(
+                            "llm.usage.input_tokens", response.usage.prompt_tokens
+                        )
+                        current_span.set_attribute(
+                            "llm.usage.output_tokens", response.usage.completion_tokens
+                        )
+                        current_span.set_attribute(
+                            "llm.usage.total_tokens", response.usage.total_tokens
+                        )
+
+                elif provider == "anthropic":
+                    response = client.messages.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=100,
+                    )
+                    result = response.content[0].text
+
+                    if current_span:
+                        current_span.set_attribute(
+                            "llm.usage.input_tokens", response.usage.input_tokens
+                        )
+                        current_span.set_attribute(
+                            "llm.usage.output_tokens", response.usage.output_tokens
+                        )
+                        current_span.set_attribute(
+                            "llm.usage.total_tokens",
+                            response.usage.input_tokens + response.usage.output_tokens,
+                        )
+
+                else:
+                    raise AssertionError(f"unsupported provider {provider}")
+
                 if current_span:
-                    current_span.set_attribute(
-                        "llm.usage.input_tokens", response.usage.prompt_tokens
-                    )
-                    current_span.set_attribute(
-                        "llm.usage.output_tokens", response.usage.completion_tokens
-                    )
-                    current_span.set_attribute(
-                        "llm.usage.total_tokens", response.usage.total_tokens
-                    )
+                    current_span.set_attribute("llm.response", result)
+                    current_span.set_attribute("llm.model", model_name)
+                    current_span.set_attribute("llm.provider", provider)
 
-            elif provider == "anthropic":
-                response = client.messages.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=100,
-                )
-                result = response.content[0].text
-
-                # Add detailed attributes
-                if current_span:
-                    current_span.set_attribute(
-                        "llm.usage.input_tokens", response.usage.input_tokens
-                    )
-                    current_span.set_attribute(
-                        "llm.usage.output_tokens", response.usage.output_tokens
-                    )
-                    current_span.set_attribute(
-                        "llm.usage.total_tokens",
-                        response.usage.input_tokens + response.usage.output_tokens,
-                    )
-
-            if current_span:
-                current_span.set_attribute("llm.response", result)
-                current_span.set_attribute("llm.model", model_name)
-                current_span.set_attribute("llm.provider", provider)
-
-            return result
+                return result
 
         # Execute the test and capture the trace ID
         prompt = "What is the capital of France? Answer in one sentence."
@@ -425,111 +426,122 @@ class TestRealLLMFunctionCalling:
         """Test OpenAI function calling with real API."""
         client = get_openai_client()
 
-        @noveum_trace.trace_tool(tool_name="get_weather", tool_type="api_tool")
         def get_weather(location: str) -> dict[str, Any]:
             """Get weather information for a location."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("tool.location", location)
-                current_span.set_attribute("tool.api_call", "weather_service")
+            with noveum_trace.trace_operation(
+                "tool:get_weather:get_weather",
+                attributes={
+                    "function.type": "tool_call",
+                    "tool.name": "get_weather",
+                    "tool.type": "api_tool",
+                    "tool.operation": "get_weather",
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("tool.location", location)
+                    current_span.set_attribute("tool.api_call", "weather_service")
 
-            # Simulate weather API response
-            weather_data = {
-                "location": location,
-                "temperature": 22,
-                "condition": "sunny",
-                "humidity": 65,
-                "timestamp": "2024-01-15T12:00:00Z",
-            }
+                weather_data = {
+                    "location": location,
+                    "temperature": 22,
+                    "condition": "sunny",
+                    "humidity": 65,
+                    "timestamp": "2024-01-15T12:00:00Z",
+                }
 
-            if current_span:
-                import json
+                if current_span:
+                    import json
 
-                current_span.set_attribute("tool.result", json.dumps(weather_data))
-                current_span.set_attribute("tool.success", True)
+                    current_span.set_attribute("tool.result", json.dumps(weather_data))
+                    current_span.set_attribute("tool.success", True)
 
-            return weather_data
+                return weather_data
 
-        @noveum_trace.trace_llm(
-            provider="openai",
-            metadata={"model": "gpt-4o-mini", "function_calling": True},
-        )
         def llm_with_function_calling(user_message: str) -> str:
             """LLM call that can use function calling."""
-            current_span = noveum_trace.get_current_span()
+            with noveum_trace.trace_llm_call(
+                model="gpt-4o-mini",
+                provider="openai",
+                attributes={
+                    "metadata.model": "gpt-4o-mini",
+                    "metadata.function_calling": True,
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
 
-            tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get current weather information for a specific location",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "location": {
-                                    "type": "string",
-                                    "description": "The city and state, e.g. San Francisco, CA",
-                                }
+                tools = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get current weather information for a specific location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "location": {
+                                        "type": "string",
+                                        "description": "The city and state, e.g. San Francisco, CA",
+                                    }
+                                },
+                                "required": ["location"],
                             },
-                            "required": ["location"],
                         },
-                    },
-                }
-            ]
+                    }
+                ]
 
-            messages = [{"role": "user", "content": user_message}]
+                messages = [{"role": "user", "content": user_message}]
 
-            # First LLM call
-            response = client.chat.completions.create(
-                model="gpt-4o-mini", messages=messages, tools=tools, tool_choice="auto"
-            )
-
-            message = response.choices[0].message
-
-            if current_span:
-                current_span.set_attribute(
-                    "llm.has_tool_calls", bool(message.tool_calls)
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
                 )
-                if message.tool_calls:
-                    current_span.set_attribute(
-                        "llm.tool_calls_count", len(message.tool_calls)
-                    )
 
-            # Handle tool calls
-            if message.tool_calls:
-                messages.append(message)
-
-                for tool_call in message.tool_calls:
-                    if tool_call.function.name == "get_weather":
-                        import json
-
-                        function_args = json.loads(tool_call.function.arguments)
-                        function_response = get_weather(function_args["location"])
-
-                        messages.append(
-                            {
-                                "tool_call_id": tool_call.id,
-                                "role": "tool",
-                                "content": json.dumps(function_response),
-                            }
-                        )
-
-                # Second LLM call with function results
-                second_response = client.chat.completions.create(
-                    model="gpt-4o-mini", messages=messages
-                )
+                message = response.choices[0].message
 
                 if current_span:
                     current_span.set_attribute(
-                        "llm.total_tokens",
-                        response.usage.total_tokens
-                        + second_response.usage.total_tokens,
+                        "llm.has_tool_calls", bool(message.tool_calls)
+                    )
+                    if message.tool_calls:
+                        current_span.set_attribute(
+                            "llm.tool_calls_count", len(message.tool_calls)
+                        )
+
+                if message.tool_calls:
+                    messages.append(message)
+
+                    for tool_call in message.tool_calls:
+                        if tool_call.function.name == "get_weather":
+                            import json
+
+                            function_args = json.loads(tool_call.function.arguments)
+                            function_response = get_weather(function_args["location"])
+
+                            messages.append(
+                                {
+                                    "tool_call_id": tool_call.id,
+                                    "role": "tool",
+                                    "content": json.dumps(function_response),
+                                }
+                            )
+
+                    second_response = client.chat.completions.create(
+                        model="gpt-4o-mini", messages=messages
                     )
 
-                return second_response.choices[0].message.content
+                    if current_span:
+                        current_span.set_attribute(
+                            "llm.total_tokens",
+                            response.usage.total_tokens
+                            + second_response.usage.total_tokens,
+                        )
 
-            return message.content
+                    return second_response.choices[0].message.content
+
+                return message.content
 
         # Execute function calling test
         user_query = "What's the weather like in San Francisco?"
@@ -611,143 +623,171 @@ class TestRealAgentScenarios:
         """Test multi-agent research workflow with real LLM calls."""
         client = client_factory()
 
-        @noveum_trace.trace_agent(
-            agent_id="research_coordinator", agent_type="coordinator"
-        )
         def research_coordinator(research_topic: str) -> dict[str, Any]:
             """Coordinate research workflow across multiple agents."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("research.topic", research_topic)
-                current_span.set_attribute("agent.workflow", "multi_agent_research")
+            with noveum_trace.trace_agent_operation(
+                agent_type="coordinator",
+                operation="research_coordinator",
+                attributes={
+                    "agent.id": "research_coordinator",
+                    "research.topic": research_topic,
+                    "agent.workflow": "multi_agent_research",
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
 
-            # Execute research workflow
-            search_results = search_agent(research_topic)
-            analysis = analysis_agent(search_results, research_topic)
-            summary = summary_agent(analysis, research_topic)
+                search_results = search_agent(research_topic)
+                analysis = analysis_agent(search_results, research_topic)
+                summary = summary_agent(analysis, research_topic)
 
-            workflow_result = {
-                "topic": research_topic,
-                "search_results": search_results,
-                "analysis": analysis,
-                "summary": summary,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "coordinator_agent": "research_coordinator",
-            }
+                workflow_result = {
+                    "topic": research_topic,
+                    "search_results": search_results,
+                    "analysis": analysis,
+                    "summary": summary,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "coordinator_agent": "research_coordinator",
+                }
 
-            if current_span:
-                current_span.set_attribute("agent.completed_steps", 3)
-                import json
+                if current_span:
+                    current_span.set_attribute("agent.completed_steps", 3)
+                    import json
 
-                current_span.set_attribute(
-                    "research.result_size", len(json.dumps(workflow_result))
-                )
+                    current_span.set_attribute(
+                        "research.result_size", len(json.dumps(workflow_result))
+                    )
 
-            return workflow_result
+                return workflow_result
 
-        @noveum_trace.trace_agent(agent_id="search_agent", agent_type="researcher")
         def search_agent(topic: str) -> list[dict[str, Any]]:
             """Simulate research search agent."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("agent.search_topic", topic)
+            with noveum_trace.trace_agent_operation(
+                agent_type="researcher",
+                operation="search_agent",
+                attributes={"agent.id": "search_agent"},
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("agent.search_topic", topic)
 
-            # Use search tools
-            web_results = web_search_tool(topic)
-            academic_results = academic_search_tool(topic)
+                web_results = web_search_tool(topic)
+                academic_results = academic_search_tool(topic)
 
-            combined_results = web_results + academic_results
+                combined_results = web_results + academic_results
 
-            if current_span:
-                current_span.set_attribute("agent.results_count", len(combined_results))
-                current_span.set_attribute("agent.sources", "web,academic")
+                if current_span:
+                    current_span.set_attribute(
+                        "agent.results_count", len(combined_results)
+                    )
+                    current_span.set_attribute("agent.sources", "web,academic")
 
-            return combined_results
+                return combined_results
 
-        @noveum_trace.trace_tool(tool_name="web_search", tool_type="search_engine")
         def web_search_tool(query: str) -> list[dict[str, Any]]:
             """Simulate web search tool."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("tool.query", query)
-                current_span.set_attribute("tool.search_engine", "simulated_google")
-
-            # Simulate realistic search results
-            results = [
-                {
-                    "title": f"Understanding {query}: A Comprehensive Guide",
-                    "url": f"https://example.com/{query.replace(' ', '-').lower()}",
-                    "snippet": f"Learn about {query} with detailed explanations and examples...",
-                    "relevance_score": 0.92,
-                    "source_type": "web",
+            with noveum_trace.trace_operation(
+                "tool:web_search:web_search_tool",
+                attributes={
+                    "function.type": "tool_call",
+                    "tool.name": "web_search",
+                    "tool.type": "search_engine",
+                    "tool.operation": "web_search_tool",
                 },
-                {
-                    "title": f"{query} Best Practices and Applications",
-                    "url": f"https://tech-blog.com/{query.replace(' ', '-').lower()}-guide",
-                    "snippet": f"Discover the best practices and real-world applications of {query}...",
-                    "relevance_score": 0.87,
-                    "source_type": "web",
-                },
-            ]
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("tool.query", query)
+                    current_span.set_attribute("tool.search_engine", "simulated_google")
 
-            if current_span:
-                current_span.set_attribute("tool.results_count", len(results))
-                current_span.set_attribute(
-                    "tool.avg_relevance",
-                    sum(r["relevance_score"] for r in results) / len(results),
-                )
+                results = [
+                    {
+                        "title": f"Understanding {query}: A Comprehensive Guide",
+                        "url": f"https://example.com/{query.replace(' ', '-').lower()}",
+                        "snippet": f"Learn about {query} with detailed explanations and examples...",
+                        "relevance_score": 0.92,
+                        "source_type": "web",
+                    },
+                    {
+                        "title": f"{query} Best Practices and Applications",
+                        "url": f"https://tech-blog.com/{query.replace(' ', '-').lower()}-guide",
+                        "snippet": f"Discover the best practices and real-world applications of {query}...",
+                        "relevance_score": 0.87,
+                        "source_type": "web",
+                    },
+                ]
 
-            return results
+                if current_span:
+                    current_span.set_attribute("tool.results_count", len(results))
+                    current_span.set_attribute(
+                        "tool.avg_relevance",
+                        sum(r["relevance_score"] for r in results) / len(results),
+                    )
 
-        @noveum_trace.trace_tool(
-            tool_name="academic_search", tool_type="academic_database"
-        )
+                return results
+
         def academic_search_tool(query: str) -> list[dict[str, Any]]:
             """Simulate academic search tool."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("tool.query", query)
-                current_span.set_attribute("tool.database", "simulated_arxiv")
+            with noveum_trace.trace_operation(
+                "tool:academic_search:academic_search_tool",
+                attributes={
+                    "function.type": "tool_call",
+                    "tool.name": "academic_search",
+                    "tool.type": "academic_database",
+                    "tool.operation": "academic_search_tool",
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("tool.query", query)
+                    current_span.set_attribute("tool.database", "simulated_arxiv")
 
-            # Simulate academic search results
-            results = [
-                {
-                    "title": f"Recent Advances in {query}: A Comprehensive Survey",
-                    "authors": ["Dr. Jane Smith", "Dr. John Doe", "Dr. Alice Johnson"],
-                    "abstract": f"This paper provides a comprehensive survey of recent advances in {query}, covering theoretical foundations and practical applications...",
-                    "arxiv_id": f"2024.{hash(query) % 10000:04d}",
-                    "citations": 42,
-                    "source_type": "academic",
-                }
-            ]
+                results = [
+                    {
+                        "title": f"Recent Advances in {query}: A Comprehensive Survey",
+                        "authors": [
+                            "Dr. Jane Smith",
+                            "Dr. John Doe",
+                            "Dr. Alice Johnson",
+                        ],
+                        "abstract": f"This paper provides a comprehensive survey of recent advances in {query}, covering theoretical foundations and practical applications...",
+                        "arxiv_id": f"2024.{hash(query) % 10000:04d}",
+                        "citations": 42,
+                        "source_type": "academic",
+                    }
+                ]
 
-            if current_span:
-                current_span.set_attribute("tool.papers_found", len(results))
-                current_span.set_attribute(
-                    "tool.total_citations", sum(r["citations"] for r in results)
-                )
+                if current_span:
+                    current_span.set_attribute("tool.papers_found", len(results))
+                    current_span.set_attribute(
+                        "tool.total_citations", sum(r["citations"] for r in results)
+                    )
 
-            return results
+                return results
 
-        @noveum_trace.trace_agent(agent_id="analysis_agent", agent_type="analyzer")
         def analysis_agent(
             search_results: list[dict[str, Any]], topic: str
         ) -> dict[str, Any]:
             """Agent that analyzes search results using LLM."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("agent.input_sources", len(search_results))
-                current_span.set_attribute("analysis.topic", topic)
+            with noveum_trace.trace_agent_operation(
+                agent_type="analyzer",
+                operation="analysis_agent",
+                attributes={"agent.id": "analysis_agent"},
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute(
+                        "agent.input_sources", len(search_results)
+                    )
+                    current_span.set_attribute("analysis.topic", topic)
 
-            # Create analysis prompt from search results
-            results_summary = "\n".join(
-                [
-                    f"- {result['title']}: {result.get('snippet', result.get('abstract', 'No description'))}"
-                    for result in search_results[:3]  # Limit to top 3 results
-                ]
-            )
+                results_summary = "\n".join(
+                    [
+                        f"- {result['title']}: {result.get('snippet', result.get('abstract', 'No description'))}"
+                        for result in search_results[:3]
+                    ]
+                )
 
-            analysis_prompt = f"""Analyze the following research results about '{topic}':
+                analysis_prompt = f"""Analyze the following research results about '{topic}':
 
 {results_summary}
 
@@ -758,145 +798,161 @@ Provide a structured analysis including:
 
 Keep the response concise and factual."""
 
-            # Use LLM for analysis
-            analysis_result = llm_analysis_call(analysis_prompt, topic)
+                analysis_result = llm_analysis_call(analysis_prompt, topic)
 
-            # Structure the analysis result
-            analysis_data = {
-                "topic": topic,
-                "input_sources": len(search_results),
-                "llm_analysis": analysis_result,
-                "confidence_score": 0.85,  # Could be extracted from LLM response
-                "analysis_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            }
+                analysis_data = {
+                    "topic": topic,
+                    "input_sources": len(search_results),
+                    "llm_analysis": analysis_result,
+                    "confidence_score": 0.85,
+                    "analysis_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
 
-            if current_span:
-                current_span.set_attribute(
-                    "agent.analysis_confidence", analysis_data["confidence_score"]
-                )
-                current_span.set_attribute(
-                    "agent.analysis_length", len(analysis_result)
-                )
+                if current_span:
+                    current_span.set_attribute(
+                        "agent.analysis_confidence", analysis_data["confidence_score"]
+                    )
+                    current_span.set_attribute(
+                        "agent.analysis_length", len(analysis_result)
+                    )
 
-            return analysis_data
+                return analysis_data
 
-        @noveum_trace.trace_llm(
-            provider=provider, metadata={"model": model_name, "task": "analysis"}
-        )
         def llm_analysis_call(prompt: str, topic: str) -> str:
             """LLM call for analysis task."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("llm.task", "research_analysis")
-                current_span.set_attribute("llm.topic", topic)
-                current_span.set_attribute("llm.prompt_length", len(prompt))
+            with noveum_trace.trace_llm_call(
+                model=model_name,
+                provider=provider,
+                attributes={
+                    "metadata.model": model_name,
+                    "metadata.task": "analysis",
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("llm.task", "research_analysis")
+                    current_span.set_attribute("llm.topic", topic)
+                    current_span.set_attribute("llm.prompt_length", len(prompt))
 
-            if provider == "openai":
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert research analyst. Provide clear, structured analysis.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    max_tokens=100,
-                    temperature=0.3,
-                )
-                result = response.choices[0].message.content
+                if provider == "openai":
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert research analyst. Provide clear, structured analysis.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=100,
+                        temperature=0.3,
+                    )
+                    result = response.choices[0].message.content
+
+                    if current_span:
+                        current_span.set_attribute(
+                            "llm.usage.total_tokens", response.usage.total_tokens
+                        )
+
+                elif provider == "anthropic":
+                    response = client.messages.create(
+                        model=model_name,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"As an expert research analyst, {prompt}",
+                            }
+                        ],
+                        max_tokens=100,
+                    )
+                    result = response.content[0].text
+
+                    if current_span:
+                        current_span.set_attribute(
+                            "llm.usage.total_tokens",
+                            response.usage.input_tokens + response.usage.output_tokens,
+                        )
+                else:
+                    raise AssertionError(f"unsupported provider {provider}")
 
                 if current_span:
-                    current_span.set_attribute(
-                        "llm.usage.total_tokens", response.usage.total_tokens
-                    )
+                    current_span.set_attribute("llm.response_length", len(result))
 
-            elif provider == "anthropic":
-                response = client.messages.create(
-                    model=model_name,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"As an expert research analyst, {prompt}",
-                        }
-                    ],
-                    max_tokens=100,
-                )
-                result = response.content[0].text
+                return result
 
-                if current_span:
-                    current_span.set_attribute(
-                        "llm.usage.total_tokens",
-                        response.usage.input_tokens + response.usage.output_tokens,
-                    )
-
-            if current_span:
-                current_span.set_attribute("llm.response_length", len(result))
-
-            return result
-
-        @noveum_trace.trace_agent(agent_id="summary_agent", agent_type="summarizer")
         def summary_agent(analysis: dict[str, Any], topic: str) -> str:
             """Agent that creates executive summary."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("summary.topic", topic)
-                current_span.set_attribute(
-                    "summary.input_confidence", analysis.get("confidence_score", 0)
-                )
+            with noveum_trace.trace_agent_operation(
+                agent_type="summarizer",
+                operation="summary_agent",
+                attributes={"agent.id": "summary_agent"},
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("summary.topic", topic)
+                    current_span.set_attribute(
+                        "summary.input_confidence", analysis.get("confidence_score", 0)
+                    )
 
-            summary_prompt = f"""Create a concise executive summary for research on '{topic}' based on this analysis:
+                summary_prompt = f"""Create a concise executive summary for research on '{topic}' based on this analysis:
 
 {analysis['llm_analysis']}
 
 Provide a 2-3 sentence executive summary that captures the key insights."""
 
-            summary = llm_summary_call(summary_prompt, topic)
+                summary = llm_summary_call(summary_prompt, topic)
 
-            if current_span:
-                current_span.set_attribute("agent.summary_length", len(summary))
+                if current_span:
+                    current_span.set_attribute("agent.summary_length", len(summary))
 
-            return summary
+                return summary
 
-        @noveum_trace.trace_llm(
-            provider=provider, metadata={"model": model_name, "task": "summarization"}
-        )
         def llm_summary_call(prompt: str, topic: str) -> str:
             """LLM call for summarization task."""
-            current_span = noveum_trace.get_current_span()
-            if current_span:
-                current_span.set_attribute("llm.task", "summarization")
-                current_span.set_attribute("llm.topic", topic)
+            with noveum_trace.trace_llm_call(
+                model=model_name,
+                provider=provider,
+                attributes={
+                    "metadata.model": model_name,
+                    "metadata.task": "summarization",
+                },
+            ):
+                current_span = noveum_trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("llm.task", "summarization")
+                    current_span.set_attribute("llm.topic", topic)
 
-            if provider == "openai":
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert at creating concise executive summaries.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    max_tokens=50,
-                    temperature=0.2,
-                )
-                result = response.choices[0].message.content
+                if provider == "openai":
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert at creating concise executive summaries.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=50,
+                        temperature=0.2,
+                    )
+                    result = response.choices[0].message.content
 
-            elif provider == "anthropic":
-                response = client.messages.create(
-                    model=model_name,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"As an expert summarizer, {prompt}",
-                        }
-                    ],
-                    max_tokens=50,
-                )
-                result = response.content[0].text
+                elif provider == "anthropic":
+                    response = client.messages.create(
+                        model=model_name,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"As an expert summarizer, {prompt}",
+                            }
+                        ],
+                        max_tokens=50,
+                    )
+                    result = response.content[0].text
+                else:
+                    raise AssertionError(f"unsupported provider {provider}")
 
-            return result
+                return result
 
         # Execute the full research workflow
         research_topic = "artificial intelligence in healthcare"
@@ -978,6 +1034,9 @@ Provide a 2-3 sentence executive summary that captures the key insights."""
         # Validate tool spans
         tool_spans = [s for s in spans if "tool.name" in s["attributes"]]
         assert len(tool_spans) >= 2, "Should have at least 2 tool spans"
+
+
+# (Async decorator-based scenarios removed; use context managers for new async tests.)
 
 
 # @pytest.mark.integration

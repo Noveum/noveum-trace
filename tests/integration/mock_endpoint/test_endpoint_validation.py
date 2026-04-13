@@ -204,8 +204,8 @@ class TestEndpointValidation:
         attributes = test_span.get("attributes", {})
         assert attributes.get("test.key") == "test-value"
 
-    def test_decorator_trace_capture(self, capturing_client, endpoint_capture):
-        """Test that decorator-based traces are captured correctly"""
+    def test_operation_trace_capture(self, capturing_client, endpoint_capture):
+        """Test that trace_operation-based traces are captured correctly"""
         endpoint_capture.clear()
 
         # Initialize noveum_trace with immediate batch export configuration
@@ -219,13 +219,10 @@ class TestEndpointValidation:
             },
         )
 
-        # Use a decorator-based trace
-        @noveum_trace.trace
         def test_function(x, y):
-            """Test function with parameters"""
-            return x + y
+            with noveum_trace.trace_operation("test_function") as _span:
+                return x + y
 
-        # Execute the function
         result = test_function(5, 3)
         assert result == 8
 
@@ -238,7 +235,7 @@ class TestEndpointValidation:
         # Validate trace was captured
         latest_trace = endpoint_capture.get_latest_trace()
 
-        assert latest_trace is not None, "Decorator trace not captured"
+        assert latest_trace is not None, "Operation trace not captured"
 
         self._validate_trace_structure(latest_trace)
 

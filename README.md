@@ -79,7 +79,7 @@ from noveum_trace import trace_llm_call, trace_operation, trace_agent_operation
 
 **Available imports from root:**
 - **Core functions**: `init`, `shutdown`, `flush`, `configure`, `get_config`, `get_client`
-- **Context managers**: `trace_context`, `trace_llm_call`, `trace_operation`, `trace_agent_operation`, `trace_batch_operation`, `trace_pipeline_stage`, `create_child_span`, `trace_function_calls`
+- **Context managers**: `trace_context`, `trace_llm_call`, `trace_operation`, `trace_agent_operation`, `trace_batch_operation`, `trace_pipeline_stage`, `create_child_span`
 - **Core classes**: `NoveumClient`, `Trace`, `Span`, `ContextualTrace`
 - **Integrations**: `NoveumTraceCallbackHandler` (LangChain integration)
 

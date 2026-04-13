@@ -74,34 +74,6 @@ pytest tests/integration/mock_endpoint/test_base_configuration.py::TestBaseConfi
 - Health check functionality
 - Configuration persistence across operations
 
-#### Decorator Integration Tests (`test_decorator_integrations.py`)
-
-Tests all decorator types with realistic usage patterns:
-
-```bash
-# Test @trace decorator
-pytest tests/integration/mock_endpoint/test_decorator_integrations.py::TestTraceDecoratorIntegration
-
-# Test @trace_llm decorator
-pytest tests/integration/mock_endpoint/test_decorator_integrations.py::TestLLMDecoratorIntegration
-
-# Test @trace_agent decorator
-pytest tests/integration/mock_endpoint/test_decorator_integrations.py::TestAgentDecoratorIntegration
-
-# Test @trace_tool decorator
-pytest tests/integration/mock_endpoint/test_decorator_integrations.py::TestToolDecoratorIntegration
-
-# Test decorator composition
-pytest tests/integration/mock_endpoint/test_decorator_integrations.py::TestDecoratorComposition
-```
-
-**Key scenarios:**
-
-- Individual decorator functionality
-- Decorator composition and nesting
-- Error handling across decorators
-- Attribute and metadata capture
-
 #### OpenTelemetry Integration Tests (`test_opentelemetry_integration.py`)
 
 Tests OpenTelemetry auto-instrumentation and integration:
