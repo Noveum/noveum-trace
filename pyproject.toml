@@ -38,6 +38,7 @@ keywords = [
     "langchain",
     "openai",
     "anthropic",
+    "crewai",
 ]
 requires-python = ">=3.9"
 dependencies = [
@@ -57,6 +58,7 @@ langchain = [
 ]
 livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 pipecat = ["pipecat-ai>=0.0.50"]
+crewai = ["crewai>=0.86.0"]
 
 # Development dependencies
 dev = [
@@ -256,6 +258,8 @@ module = [
     "langchain_core.*",
     "livekit.*",
     "pipecat.*",
+    "crewai",
+    "crewai.*",
     "google",
     "google.*",
     "google.generativeai",

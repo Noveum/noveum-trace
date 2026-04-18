@@ -344,6 +344,17 @@ except ImportError:
     # LiveKit not installed
     pass
 
+try:
+    from noveum_trace.integrations.crewai import (
+        NoveumCrewAIListener,
+        setup_crewai_tracing,
+    )
+
+    _integration_exports.extend(["NoveumCrewAIListener", "setup_crewai_tracing"])
+except ImportError:
+    # CrewAI not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions
