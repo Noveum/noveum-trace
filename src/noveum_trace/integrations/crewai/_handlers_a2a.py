@@ -22,10 +22,10 @@ Handles CrewAI A2A events across multiple span types:
   - ``on_a2a_message_sent``          → append to message buffer
   - ``on_a2a_message_received``      → append to message buffer
 
-  Streaming (message accumulation):
-  - ``on_a2a_streaming_started``     → initialize stream buffer for conversation
-  - ``on_a2a_streaming_chunk``       → append chunk to buffer
-  - ``on_a2a_streaming_completed``   → finalize and write to span
+  Streaming (raw chunks, separate from message dict buffer):
+  - ``on_a2a_streaming_started``     → initialize ``_a2a_streaming_chunks`` for conversation
+  - ``on_a2a_streaming_chunk``       → append string chunk to ``_a2a_streaming_chunks``
+  - ``on_a2a_streaming_completed``   → flush chunks to ``a2a.streaming_content`` on the span
 
   Polling (status polling for async delegation):
   - ``on_a2a_polling_started``       → record polling start
@@ -39,9 +39,9 @@ Handles CrewAI A2A events across multiple span types:
   - ``on_a2a_connection_error``      → connection failure
 
 State consumed / mutated (declared in _CrewAIObserverState):
-    _lock, _is_shutdown,
-    _agent_spans, _task_spans, _a2a_spans,
-    _a2a_stream_buffers, _a2a_start_times
+    _lock, _is_shutdown, _agent_spans, _task_spans,
+    _a2a_spans, _a2a_stream_buffers, _a2a_streaming_chunks, _a2a_start_times
+    (composite keys ``(context_id, "delegation")`` / ``(context_id, "conversation")``)
 """
 
 from __future__ import annotations
@@ -76,6 +76,15 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Composite dict keys so delegation and conversation spans for the same context_id
+# do not overwrite each other.
+_A2A_SPAN_DELEGATION = "delegation"
+_A2A_SPAN_CONVERSATION = "conversation"
+
+
+def _a2a_entry_key(context_id: str, span_type: str) -> tuple[str, str]:
+    return (context_id, span_type)
 
 
 class _A2AHandlersMixin(_CrewAIObserverMixinBase):
@@ -129,16 +138,15 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
             with self._lock:
-                self._a2a_spans[context_id] = {
+                dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
+                self._a2a_spans[dk] = {
                     "span": span,
                     "type": "delegation",
                     "agent_id": agent_id,
                     "task_id": task_id,
                     "start_t": start_t,
                 }
-                # Initialize message buffer for this conversation
-                self._a2a_stream_buffers.setdefault(context_id, [])
-                self._a2a_start_times[context_id] = start_t
+                self._a2a_start_times[dk] = start_t
 
             logger.debug(
                 "A2A delegation span opened: context_id=%s delegating=%s receiving=%s",
@@ -181,6 +189,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
             self._finish_a2a_span(
                 context_id=context_id,
+                span_type=_A2A_SPAN_DELEGATION,
                 status=status,
                 error=None,
                 extra_attrs=extra,
@@ -209,6 +218,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_a2a_span(
                 context_id=context_id,
+                span_type=_A2A_SPAN_DELEGATION,
                 status=ATTR_STATUS_ERROR,
                 error=error,
             )
@@ -250,15 +260,17 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
             with self._lock:
-                self._a2a_spans[context_id] = {
+                ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
+                self._a2a_spans[ck] = {
                     "span": span,
                     "type": "conversation",
                     "agent_id": agent_id,
                     "task_id": task_id,
                     "start_t": start_t,
                 }
-                self._a2a_stream_buffers.setdefault(context_id, [])
-                self._a2a_start_times[context_id] = start_t
+                self._a2a_stream_buffers.setdefault(ck, [])
+                self._a2a_streaming_chunks.setdefault(ck, [])
+                self._a2a_start_times[ck] = start_t
 
             logger.debug("A2A conversation span opened: context_id=%s", context_id)
 
@@ -284,6 +296,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
             self._finish_a2a_span(
                 context_id=context_id,
+                span_type=_A2A_SPAN_CONVERSATION,
                 status=ATTR_STATUS_SUCCESS,
                 error=None,
                 extra_attrs=extra,
@@ -302,6 +315,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_a2a_span(
                 context_id=context_id,
+                span_type=_A2A_SPAN_CONVERSATION,
                 status=ATTR_STATUS_ERROR,
                 error=error,
             )
@@ -342,11 +356,12 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 "sender": str(sender) if sender else "unknown",
             }
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                buf = self._a2a_stream_buffers.get(context_id, [])
+                buf = self._a2a_stream_buffers.get(ck, [])
                 if len(buf) < 1000:  # Limit buffer size per conversation
                     buf.append(msg_entry)
-                    self._a2a_stream_buffers[context_id] = buf
+                    self._a2a_stream_buffers[ck] = buf
 
             logger.debug(
                 "A2A message sent: context_id=%s turn=%s",
@@ -380,11 +395,12 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 "sender": str(sender) if sender else "unknown",
             }
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                buf = self._a2a_stream_buffers.get(context_id, [])
+                buf = self._a2a_stream_buffers.get(ck, [])
                 if len(buf) < 1000:
                     buf.append(msg_entry)
-                    self._a2a_stream_buffers[context_id] = buf
+                    self._a2a_stream_buffers[ck] = buf
 
             logger.debug(
                 "A2A message received: context_id=%s turn=%s",
@@ -400,23 +416,22 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     # =========================================================================
 
     def on_a2a_streaming_started(self, source: Any, event: Any) -> None:
-        """Initialize streaming buffer for this A2A context."""
+        """Initialize raw streaming chunk buffer (separate from message dict buffer)."""
         if not self._is_active():
             return
         try:
             context_id = _resolve_context_id(event, source)
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                if context_id not in self._a2a_stream_buffers:
-                    self._a2a_stream_buffers[context_id] = []
+                if ck not in self._a2a_streaming_chunks:
+                    self._a2a_streaming_chunks[ck] = []
             logger.debug("A2A streaming started: context_id=%s", context_id)
         except Exception:
             logger.debug("on_a2a_streaming_started error:\n%s", traceback.format_exc())
 
     def on_a2a_streaming_chunk(self, source: Any, event: Any) -> None:
         """
-        Append a streaming chunk to the buffer.
-
-        Chunks are accumulated until streaming completes, then written to span.
+        Append a raw text chunk to ``_a2a_streaming_chunks`` (not the message buffer).
 
         Attributes captured
         -------------------
@@ -436,15 +451,12 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             is_final = safe_getattr(event, "is_final") or False
             chunk_str = str(chunk)
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                buf = self._a2a_stream_buffers.get(context_id, [])
-                current_len = sum(
-                    len(item["content"]) if isinstance(item, dict) else len(str(item))
-                    for item in buf
-                )
+                chunks = self._a2a_streaming_chunks.setdefault(ck, [])
+                current_len = sum(len(s) for s in chunks)
                 if current_len + len(chunk_str) <= MAX_TEXT_LENGTH:
-                    buf.append(chunk_str)
-                    self._a2a_stream_buffers[context_id] = buf
+                    chunks.append(chunk_str)
 
             if is_final:
                 logger.debug("A2A streaming final chunk: context_id=%s", context_id)
@@ -453,29 +465,25 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             logger.debug("on_a2a_streaming_chunk error:\n%s", traceback.format_exc())
 
     def on_a2a_streaming_completed(self, source: Any, event: Any) -> None:
-        """Write accumulated streaming chunks to the span."""
+        """Flush raw streaming chunks to the span (message buffer is left intact)."""
         if not self._is_active():
             return
         try:
             context_id = _resolve_context_id(event, source)
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                buf = self._a2a_stream_buffers.pop(context_id, [])
-                span_entry = self._a2a_spans.get(context_id)
+                raw_chunks = self._a2a_streaming_chunks.pop(ck, [])
+                span_entry = self._a2a_spans.get(ck)
 
             if not span_entry:
                 return
 
             span = span_entry.get("span")
-            if not span or not buf:
+            if not span or not raw_chunks:
                 return
 
-            # Join chunks and write to span
-            content = "".join(
-                item if isinstance(item, str) else str(item.get("content", ""))
-                for item in buf
-            )
-            content = truncate_str(content, MAX_TEXT_LENGTH)
+            content = truncate_str("".join(raw_chunks), MAX_TEXT_LENGTH)
 
             try:
                 span.set_attribute("a2a.streaming_content", content)
@@ -506,8 +514,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk)
 
             if not span_entry:
                 return
@@ -542,8 +551,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk)
 
             if not span_entry:
                 return
@@ -603,8 +613,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk)
 
             if not span_entry:
                 return
@@ -679,8 +690,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk)
 
             if not span_entry:
                 return
@@ -731,8 +743,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(ck)
 
             if not span_entry:
                 return
@@ -774,8 +787,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(ck)
 
             if not span_entry:
                 return
@@ -827,8 +841,10 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk) or self._a2a_spans.get(ck)
 
             if not span_entry:
                 return
@@ -892,8 +908,10 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         try:
             context_id = _resolve_context_id(event, source)
 
+            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
-                span_entry = self._a2a_spans.get(context_id)
+                span_entry = self._a2a_spans.get(dk) or self._a2a_spans.get(ck)
 
             if not span_entry:
                 return
@@ -951,6 +969,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     def _finish_a2a_span(
         self,
         context_id: str,
+        span_type: str,
         status: str,
         error: Optional[Any] = None,
         extra_attrs: Optional[dict[str, Any]] = None,
@@ -960,18 +979,23 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
         Args:
             context_id:  Unique context ID
+            span_type:   ``"delegation"`` or ``"conversation"`` (composite dict key)
             status:      "success" or "error"
             error:       Exception object (if error status)
             extra_attrs: Additional attributes to write
         """
+        key = _a2a_entry_key(context_id, span_type)
         with self._lock:
-            entry = self._a2a_spans.pop(context_id, None)
-            start_t = self._a2a_start_times.pop(context_id, None)
-            buf = self._a2a_stream_buffers.pop(context_id, None)
+            entry = self._a2a_spans.pop(key, None)
+            start_t = self._a2a_start_times.pop(key, None)
+            buf = self._a2a_stream_buffers.pop(key, None)
+            stream_chunks = self._a2a_streaming_chunks.pop(key, None)
 
         if entry is None:
             logger.debug(
-                "_finish_a2a_span: no open entry for context_id=%s", context_id
+                "_finish_a2a_span: no open entry for context_id=%s span_type=%s",
+                context_id,
+                span_type,
             )
             return
 
@@ -989,20 +1013,18 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         if extra_attrs:
             attrs.update(extra_attrs)
 
-        # Persist any buffered message / streaming chunks (see on_a2a_message_*,
-        # on_a2a_streaming_chunk). Buffer is cleared under the lock above.
+        # Message dicts (on_a2a_message_*) and any leftover raw chunks (if streaming
+        # completed before span close did not flush) — buffers cleared under the lock above.
         if buf:
             attrs["a2a.messages"] = truncate_str(
                 safe_json_dumps(buf),
                 MAX_TEXT_LENGTH,
             )
-            streaming_content = "".join(
-                item if isinstance(item, str) else str(item.get("content", ""))
-                for item in buf
-            )
-            if streaming_content:
+        if stream_chunks:
+            joined = "".join(stream_chunks)
+            if joined:
                 attrs["a2a.streaming_content"] = truncate_str(
-                    streaming_content,
+                    joined,
                     MAX_TEXT_LENGTH,
                 )
 
@@ -1040,8 +1062,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             pass
 
         logger.debug(
-            "A2A span finished: context_id=%s status=%s duration_ms=%s",
+            "A2A span finished: context_id=%s span_type=%s status=%s duration_ms=%s",
             context_id,
+            span_type,
             status,
             attrs.get("a2a.duration_ms", "?"),
         )

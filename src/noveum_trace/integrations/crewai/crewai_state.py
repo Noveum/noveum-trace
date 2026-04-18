@@ -104,8 +104,9 @@ class _CrewAIObserverState:
     #: (``span``, ``start_t``)
     _guardrail_spans: dict[str, Any]
 
-    #: a2a_context_id → Span for an agent-to-agent (A2A) interaction context
-    _a2a_spans: dict[str, Any]
+    #: (context_id, span_type) → open A2A span entry; span_type is
+    #: ``"delegation"`` or ``"conversation"`` so both may coexist per context.
+    _a2a_spans: dict[tuple[str, str], Any]
 
     #: mcp_key → Span for an MCP (Multi-agent Control Protocol) operation.
     #: Keys are typically ``f"{crew_id}:{tool_name}"`` or a UUID assigned at
@@ -167,14 +168,18 @@ class _CrewAIObserverState:
     #: memory_op_id → monotonic timestamp of memory op start
     _memory_op_start_times: dict[str, float]
 
-    #: a2a_context_id → monotonic timestamp of A2A delegation/conversation start
-    _a2a_start_times: dict[str, float]
+    #: (context_id, span_type) → monotonic timestamp of A2A span start
+    _a2a_start_times: dict[tuple[str, str], float]
 
     # =========================================================================
     # A2A streaming buffers
     # =========================================================================
-    #: context_id → ordered list of messages / streaming chunks for A2A conversation
-    _a2a_stream_buffers: dict[str, list[Any]]
+    #: (context_id, span_type) → ordered list of message dicts (sent/received);
+    #: ``span_type="conversation"``. Raw streaming strings use ``_a2a_streaming_chunks``.
+    _a2a_stream_buffers: dict[tuple[str, str], list[Any]]
+
+    #: (context_id, span_type) → raw streaming text chunks (``list[str]``).
+    _a2a_streaming_chunks: dict[tuple[str, str], list[str]]
 
     # =========================================================================
     # Token tracking (monkey-patch buffer)

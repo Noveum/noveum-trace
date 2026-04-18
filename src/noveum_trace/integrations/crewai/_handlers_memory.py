@@ -137,8 +137,9 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-            # memory.limit — max results requested
-            limit = safe_getattr(event, "limit") or safe_getattr(event, "top_k")
+            # memory.limit — max results requested (0 is valid; do not use ``or``)
+            limit_raw = safe_getattr(event, "limit")
+            limit = limit_raw if limit_raw is not None else safe_getattr(event, "top_k")
             if limit is not None:
                 try:
                     attrs["memory.limit"] = int(limit)
@@ -146,11 +147,11 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                     pass
 
             # memory.score_threshold — minimum relevance score requested
-            score_threshold = (
-                safe_getattr(event, "score_threshold")
-                or safe_getattr(event, "threshold")
-                or safe_getattr(event, "min_score")
-            )
+            score_threshold = safe_getattr(event, "score_threshold")
+            if score_threshold is None:
+                score_threshold = safe_getattr(event, "threshold")
+            if score_threshold is None:
+                score_threshold = safe_getattr(event, "min_score")
             if score_threshold is not None:
                 try:
                     attrs["memory.score_threshold"] = float(score_threshold)
@@ -181,7 +182,12 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             op_id = _resolve_op_id(event, source)
             extra: dict[str, Any] = {}
 
-            results = safe_getattr(event, "results") or safe_getattr(event, "memories")
+            results_raw = safe_getattr(event, "results")
+            results = (
+                results_raw
+                if results_raw is not None
+                else safe_getattr(event, "memories")
+            )
             if results is not None:
                 try:
                     count = len(results) if hasattr(results, "__len__") else None

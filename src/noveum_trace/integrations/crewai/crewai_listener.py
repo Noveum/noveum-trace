@@ -192,7 +192,7 @@ class NoveumCrewAIListener(
         self._reasoning_spans: dict[str, Any] = {}
         self._observation_spans: dict[str, Any] = {}
         self._guardrail_spans: dict[str, Any] = {}
-        self._a2a_spans: dict[str, Any] = {}
+        self._a2a_spans: dict[tuple[str, str], Any] = {}
         self._mcp_spans: dict[str, Any] = {}
 
         # =====================================================================
@@ -220,7 +220,8 @@ class NoveumCrewAIListener(
         # A2A streaming buffers
         # =====================================================================
 
-        self._a2a_stream_buffers: dict[str, list[Any]] = {}
+        self._a2a_stream_buffers: dict[tuple[str, str], list[Any]] = {}
+        self._a2a_streaming_chunks: dict[tuple[str, str], list[str]] = {}
 
         # =====================================================================
         # Pending metadata stash
@@ -238,7 +239,7 @@ class NoveumCrewAIListener(
         self._tool_start_times: dict[str, float] = {}
         self._flow_start_times: dict[str, float] = {}
         self._memory_op_start_times: dict[str, float] = {}
-        self._a2a_start_times: dict[str, float] = {}
+        self._a2a_start_times: dict[tuple[str, str], float] = {}
 
         # =====================================================================
         # Register with class-level listener set and apply token patch
@@ -398,12 +399,24 @@ class NoveumCrewAIListener(
             self._a2a_spans.clear()
             self._mcp_spans.clear()
 
+            self._total_tokens_by_crew.clear()
+            self._total_cost_by_crew.clear()
+
             self._llm_stream_chunks.clear()
             self._llm_thinking_chunks.clear()
             self._a2a_stream_buffers.clear()
+            self._a2a_streaming_chunks.clear()
             self._token_buffer.clear()
             self._llm_usage_by_call_id.clear()
             self._pending_llm_metadata.clear()
+
+            self._task_start_times.clear()
+            self._agent_start_times.clear()
+            self._llm_call_start_times.clear()
+            self._tool_start_times.clear()
+            self._flow_start_times.clear()
+            self._memory_op_start_times.clear()
+            self._a2a_start_times.clear()
 
             logger.info("NoveumCrewAIListener shutdown complete")
 
@@ -445,14 +458,18 @@ class NoveumCrewAIListener(
                 )
                 return
 
-            _original_track_token_usage = BaseLLM._track_token_usage_internal
+            original = BaseLLM._track_token_usage_internal
+            _original_track_token_usage = original
 
             def _noveum_track_token_usage(
                 self_llm: Any,
                 usage_data: dict[str, Any],
             ) -> Any:
                 """Intercept token tracking and forward to all active listeners."""
-                result = _original_track_token_usage(self_llm, usage_data)
+                # Call ``original`` (closure), not the module global — the global is
+                # cleared to None during ``_restore_token_tracking`` while CrewAI threads
+                # may still invoke this patched function.
+                result = original(self_llm, usage_data)
                 try:
                     call_id = _get_call_id()
                     if usage_data and call_id:
@@ -517,13 +534,12 @@ class NoveumCrewAIListener(
                     "reasoning_tokens": 0,
                 },
             )
-            agg["prompt_tokens"] += int(
-                usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-            )
-            agg["completion_tokens"] += int(
-                usage.get("completion_tokens") or usage.get("output_tokens") or 0
-            )
-            agg["total_tokens"] += int(usage.get("total_tokens") or 0)
+            pp = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+            cp = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+            agg["prompt_tokens"] += pp
+            agg["completion_tokens"] += cp
+            # When ``total_tokens`` is absent, infer from the same alias fields as above.
+            agg["total_tokens"] += int(usage.get("total_tokens") or (pp + cp))
             agg["cache_read_tokens"] += int(
                 usage.get("cached_tokens")
                 or usage.get("cache_read_tokens")

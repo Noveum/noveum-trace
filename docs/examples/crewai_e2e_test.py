@@ -34,7 +34,8 @@ Prerequisites
 
 Environment
 -----------
-  NOVEUM_API_KEY   — required
+  NOVEUM_API_KEY   — required to *run* the script (checked in ``_init_noveum_trace()`` from
+                     ``main()``; importing this module does not read it or initialise the SDK)
   NOVEUM_PROJECT   — optional (default: crewai-e2e)
 
   NOVEUM_TRACE_A2A_AGENT_CARD_URL or CREWAI_A2A_AGENT_CARD_URL — **optional** (full
@@ -66,23 +67,6 @@ from urllib.parse import urlparse
 # Before any import that loads ``crewai`` (including ``noveum_trace.integrations.crewai``).
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
 
-# ---------------------------------------------------------------------------
-# 0. Require NOVEUM_API_KEY, then initialise tracing before CrewAI imports
-#    (same rule as other examples; ``main()`` repeats the key check).
-# ---------------------------------------------------------------------------
-
-import noveum_trace
-
-# Refuse to initialise the SDK without a key (``main()`` also checks — keep both).
-if not os.environ.get("NOVEUM_API_KEY"):
-    print("NOVEUM_API_KEY is required.", file=sys.stderr)
-    raise SystemExit(1)
-
-noveum_trace.init(
-    api_key=os.environ["NOVEUM_API_KEY"],
-    project=os.environ.get("NOVEUM_PROJECT", "crewai-e2e"),
-)
-
 from crewai import LLM, Agent, Crew, Process, Task
 from crewai.flow.flow import Flow, listen, start
 from crewai.llms.base_llm import BaseLLM
@@ -92,6 +76,7 @@ from crewai.rag.embeddings.factory import build_embedder
 from crewai.tools import BaseTool
 from pydantic import BaseModel
 
+import noveum_trace
 from noveum_trace.core.trace import Trace
 from noveum_trace.integrations.crewai import setup_crewai_tracing
 from noveum_trace.integrations.crewai.crewai_constants import (
@@ -112,6 +97,10 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     SPAN_TASK,
     SPAN_TOOL,
 )
+
+# ``noveum_trace.init()`` is deferred to ``_init_noveum_trace()`` inside ``main()`` so
+# importing this module does not require ``NOVEUM_API_KEY`` or exit the process.
+
 
 # ---------------------------------------------------------------------------
 # 1. Tool resolution (Serper → DuckDuckGo → mock)
@@ -679,10 +668,19 @@ def _pick_trace(traces: list[Trace], predicate: Callable[[Trace], bool]) -> Trac
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def _init_noveum_trace() -> None:
+    """Require ``NOVEUM_API_KEY`` and initialise the Noveum SDK (call from ``main()`` only)."""
     if not os.environ.get("NOVEUM_API_KEY"):
         print("NOVEUM_API_KEY is required.", file=sys.stderr)
-        return 1
+        raise SystemExit(1)
+    noveum_trace.init(
+        api_key=os.environ["NOVEUM_API_KEY"],
+        project=os.environ.get("NOVEUM_PROJECT", "crewai-e2e"),
+    )
+
+
+def main() -> int:
+    _init_noveum_trace()
 
     try:
         import sentence_transformers  # noqa: F401

@@ -313,7 +313,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
         Attributes written
         ------------------
-        - ``flow.paused``                — ``True``
+        - ``flow.pause``                 — ``True``
         - ``flow.pause_message``         — human-readable pause reason
         - ``flow.pause_state``           — JSON snapshot of current state
         - ``flow.pause_possible_outcomes`` — JSON list of valid next steps
@@ -326,11 +326,11 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
 
-            pause_attrs: dict[str, Any] = {"flow.paused": True}
+            pause_attrs: dict[str, Any] = {"flow.pause": True}
 
             message = safe_getattr(event, "message") or safe_getattr(event, "reason")
             if message:
-                pause_attrs["flow.paused_message"] = truncate_str(
+                pause_attrs["flow.pause_message"] = truncate_str(
                     str(message), MAX_DESCRIPTION_LENGTH
                 )
 
@@ -350,11 +350,11 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                         if isinstance(outcomes, (list, tuple))
                         else [str(outcomes)]
                     )
-                    pause_attrs["flow.possible_outcomes"] = safe_json_dumps(
+                    pause_attrs["flow.pause_possible_outcomes"] = safe_json_dumps(
                         outcomes_list
                     )
                 except Exception:
-                    pause_attrs["flow.possible_outcomes"] = str(outcomes)
+                    pause_attrs["flow.pause_possible_outcomes"] = str(outcomes)
 
             _set_span_attributes(span, pause_attrs)
             logger.debug("Flow paused: flow_id=%s", flow_id)
@@ -384,7 +384,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
             prompt = safe_getattr(event, "prompt") or safe_getattr(event, "message")
             if prompt:
-                req_attrs["flow.human_question"] = truncate_str(
+                req_attrs["flow.input_prompt"] = truncate_str(
                     str(prompt), MAX_DESCRIPTION_LENGTH
                 )
 
@@ -425,7 +425,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             value = safe_getattr(event, "value") or safe_getattr(event, "input")
             if value is not None:
                 raw = value if isinstance(value, str) else safe_json_dumps(value)
-                recv_attrs["flow.human_response"] = truncate_str(raw, 1024)
+                recv_attrs["flow.input_value"] = truncate_str(raw, 1024)
 
             field = safe_getattr(event, "field") or safe_getattr(event, "field_name")
             if field:
@@ -485,6 +485,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         ------------------
         - ``flow.feedback_received``   — ``True``
         - ``flow.feedback_text``       — the human's response (truncated)
+        - ``flow.feedback_outcome``    — optional structured outcome / result
         """
         if not self._is_active():
             return
@@ -505,11 +506,11 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                 raw = (
                     feedback if isinstance(feedback, str) else safe_json_dumps(feedback)
                 )
-                recv_attrs["flow.feedback"] = truncate_str(raw, 2048)
+                recv_attrs["flow.feedback_text"] = truncate_str(raw, 2048)
 
             outcome = safe_getattr(event, "outcome") or safe_getattr(event, "result")
             if outcome is not None:
-                recv_attrs["flow.outcome"] = truncate_str(
+                recv_attrs["flow.feedback_outcome"] = truncate_str(
                     outcome if isinstance(outcome, str) else safe_json_dumps(outcome),
                     1024,
                 )

@@ -368,6 +368,8 @@ class TestListenerInit:
             "_observation_spans",
             "_guardrail_spans",
             "_a2a_spans",
+            "_a2a_stream_buffers",
+            "_a2a_streaming_chunks",
             "_mcp_spans",
         ]:
             assert getattr(lnr, attr) == {}, f"{attr} should start empty"
@@ -577,47 +579,112 @@ class TestShutdownIdempotency:
 class TestHandlersNeverRaise:
     """Pass a fully-None MagicMock as both source and event to every handler."""
 
+    # Mirrors ``NoveumCrewAIListener.setup_listeners()`` handler registrations when
+    # default capture_* flags are all True (as in ``_make_listener()``).
     _HANDLER_NAMES = [
+        # Crew
         "on_crew_kickoff_started",
         "on_crew_kickoff_completed",
         "on_crew_kickoff_failed",
+        "on_crew_test_started",
+        "on_crew_test_completed",
+        "on_crew_test_result",
+        "on_crew_train_started",
+        "on_crew_train_completed",
+        "on_crew_train_failed",
+        # Task
         "on_task_started",
         "on_task_completed",
         "on_task_failed",
+        "on_task_evaluation",
+        # Agent (full + lite + evaluation)
         "on_agent_execution_started",
         "on_agent_execution_completed",
         "on_agent_execution_error",
+        "on_lite_agent_started",
+        "on_lite_agent_completed",
+        "on_lite_agent_error",
+        "on_agent_evaluation_started",
+        "on_agent_evaluation_completed",
+        "on_agent_evaluation_error",
+        # LLM
         "on_llm_call_started",
         "on_llm_call_completed",
         "on_llm_call_failed",
         "on_llm_stream_chunk",
         "on_llm_thinking_chunk",
+        # Tool
         "on_tool_usage_started",
         "on_tool_usage_finished",
         "on_tool_usage_error",
+        "on_tool_validate_input_error",
+        "on_tool_selection_error",
+        "on_tool_execution_error",
+        # Memory (query / save / retrieval)
         "on_memory_query_started",
         "on_memory_query_completed",
         "on_memory_query_failed",
         "on_memory_save_started",
         "on_memory_save_completed",
         "on_memory_save_failed",
+        "on_memory_retrieval_started",
+        "on_memory_retrieval_completed",
+        "on_memory_retrieval_failed",
+        # Knowledge
+        "on_knowledge_retrieval_started",
+        "on_knowledge_retrieval_completed",
+        "on_knowledge_query_started",
+        "on_knowledge_query_completed",
+        "on_knowledge_query_failed",
+        "on_knowledge_search_query_failed",
+        # Flow (+ human-in-the-loop)
         "on_flow_started",
         "on_flow_finished",
+        "on_flow_failed",
+        "on_flow_paused",
+        "on_flow_input_requested",
+        "on_flow_input_received",
+        "on_human_feedback_requested",
+        "on_human_feedback_received",
         "on_method_execution_started",
         "on_method_execution_finished",
         "on_method_execution_failed",
-        "on_knowledge_query_started",
-        "on_knowledge_query_completed",
+        # Reasoning + observations + plan annotations
         "on_agent_reasoning_started",
         "on_agent_reasoning_completed",
+        "on_agent_reasoning_failed",
+        "on_step_observation_started",
+        "on_step_observation_completed",
+        "on_step_observation_failed",
+        "on_plan_refinement",
+        "on_plan_replan_triggered",
+        "on_goal_achieved_early",
+        # Guardrails
         "on_llm_guardrail_started",
         "on_llm_guardrail_completed",
+        "on_llm_guardrail_failed",
+        # MCP
         "on_mcp_connection_started",
         "on_mcp_connection_completed",
+        "on_mcp_connection_failed",
         "on_mcp_tool_execution_started",
         "on_mcp_tool_execution_completed",
+        "on_mcp_tool_execution_failed",
+        "on_mcp_config_fetch_failed",
+        # A2A (subset registered in setup_listeners — see crewai_listener)
         "on_a2a_delegation_started",
         "on_a2a_delegation_completed",
+        "on_a2a_delegation_failed",
+        "on_a2a_conversation_started",
+        "on_a2a_conversation_completed",
+        "on_a2a_message_sent",
+        "on_a2a_streaming_started",
+        "on_a2a_streaming_chunk",
+        "on_a2a_polling_started",
+        "on_a2a_polling_status",
+        "on_a2a_artifact_received",
+        "on_a2a_auth_failed",
+        "on_a2a_connection_error",
     ]
 
     @pytest.mark.parametrize("handler_name", _HANDLER_NAMES)
@@ -816,6 +883,79 @@ class TestTaskHandlers:
         lnr.on_task_completed(MagicMock(), _task_event("orphan"))
         lnr.shutdown()
 
+    def test_task_started_omits_input_payload_when_capture_inputs_false(self):
+        """Description, expected output, context, output_file omitted when capture_inputs=False."""
+        lnr = _make_rich_listener(capture_inputs=False)
+        crew_src = _crew_source("crew-priv-in")
+        lnr.on_crew_kickoff_started(crew_src, _crew_event("crew-priv-in"))
+
+        upstream = MagicMock()
+        upstream.description = "Secret upstream"
+        upstream.id = "up-1"
+        src = MagicMock()
+        src.id = "task-priv-in"
+        src.crew_id = "crew-priv-in"
+        src.name = "named-task"
+        src.description = "Secret description"
+        src.expected_output = "Secret expected"
+        src.agent = MagicMock()
+        src.agent.role = "Researcher"
+        src.human_input = False
+        src.async_execution = True
+        src.output_file = "/tmp/out.txt"
+        src.context = [upstream]
+
+        ev = _task_event("task-priv-in")
+        ev.task_id = "task-priv-in"
+        ev.task.id = "task-priv-in"
+        ev.crew_id = "crew-priv-in"
+
+        lnr.on_task_started(src, ev)
+        with lnr._lock:
+            span = lnr._task_spans.get("task-priv-in")
+        assert span is not None
+        a = span.attributes
+        assert a.get("task.id") == "task-priv-in"
+        assert a.get("task.name") == "named-task"
+        assert a.get("task.agent_role") == "Researcher"
+        assert "task.description" not in a
+        assert "task.expected_output" not in a
+        assert "task.context_tasks" not in a
+        assert "task.output_file" not in a
+        lnr.shutdown()
+
+    def test_task_completed_omits_output_when_capture_outputs_false(self):
+        """task.output is not written when capture_outputs=False."""
+        from noveum_trace.integrations.crewai.crewai_constants import ATTR_TASK_OUTPUT
+
+        lnr = _make_rich_listener(capture_outputs=False)
+        crew_src = _crew_source("crew-priv-out")
+        lnr.on_crew_kickoff_started(crew_src, _crew_event("crew-priv-out"))
+
+        src = MagicMock()
+        src.id = "task-priv-out"
+        src.crew_id = "crew-priv-out"
+        src.name = None
+        src.description = None
+        src.expected_output = None
+        src.agent = None
+        src.human_input = None
+        src.async_execution = None
+        src.output_file = None
+        src.context = None
+
+        ev = _task_event("task-priv-out")
+        ev.task_id = "task-priv-out"
+        ev.task.id = "task-priv-out"
+        ev.crew_id = "crew-priv-out"
+
+        lnr.on_task_started(src, ev)
+        with lnr._lock:
+            span = lnr._task_spans["task-priv-out"]
+        lnr.on_task_completed(MagicMock(), ev)
+        assert ATTR_TASK_OUTPUT not in span.attributes
+        lnr.shutdown()
+
 
 # ===========================================================================
 # 8. Agent handler path
@@ -874,6 +1014,42 @@ class TestAgentHandlers:
         assert span.attributes["agent.available_tools.names"] == ["calculator"]
         assert span.attributes["agent.available_tools.descriptions"] == ["Do math"]
         assert "calculator" in span.attributes["agent.available_tools.schemas"]
+        lnr.shutdown()
+
+    def test_agent_started_respects_capture_tool_schemas_false(self):
+        """With capture_tool_schemas=False, agent.available_tools.* is not written."""
+        lnr = _make_listener(capture_tool_schemas=False)
+        span = _make_span(span_id="task-span", trace_id="trace-a")
+        trace = _make_trace("trace-a")
+        lnr._client._active_traces["trace-a"] = trace
+        lnr._task_spans["task-a"] = span
+
+        ev = _agent_event("agt-no-schema")
+        ev.task_id = "task-a"
+        t = MagicMock()
+        t.name = "calculator"
+        t.description = "Do math"
+        src = MagicMock()
+        src.tools = [t]
+        lnr.on_agent_execution_started(src, ev)
+        ag = lnr._agent_spans["agt-no-schema"]
+        assert "agent.available_tools.count" not in ag.attributes
+        assert "agent.tool_names" in ag.attributes  # still listed under capture_inputs
+        lnr.shutdown()
+
+    def test_agent_started_omits_task_prompt_when_capture_inputs_false(self):
+        lnr = _make_listener(capture_inputs=False)
+        span = _make_span(span_id="task-span", trace_id="trace-a")
+        trace = _make_trace("trace-a")
+        lnr._client._active_traces["trace-a"] = trace
+        lnr._task_spans["task-a"] = span
+
+        ev = _agent_event("agt-no-in")
+        ev.task_id = "task-a"
+        ev.task_prompt = "Secret system prompt"
+        lnr.on_agent_execution_started(MagicMock(), ev)
+        ag = lnr._agent_spans["agt-no-in"]
+        assert "agent.task_prompt" not in ag.attributes
         lnr.shutdown()
 
 

@@ -89,7 +89,12 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
         - ``task.async_execution``  — bool: runs asynchronously?
         - ``task.output_file``      — output file path when configured
         - ``task.context_tasks``    — JSON list of upstream task descriptions
-                                      (the RAG / context chain fed into this task)
+                                      (the RAG / context chain fed into this task);
+                                      only when ``capture_inputs`` is enabled
+
+        When ``capture_inputs`` is false, description, expected output, output
+        file path, and context chain are omitted; structural fields (ids, name,
+        agent role, flags) are still recorded.
         """
         if not self._is_active():
             return
@@ -97,7 +102,9 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
             task_id = _resolve_task_id(source, event)
             crew_id = _resolve_crew_id(source, event)
 
-            attrs = _build_task_attributes(source, event)
+            attrs = _build_task_attributes(
+                source, event, capture_inputs=self.capture_inputs
+            )
             start_t = monotonic_now()
 
             # Locate the parent crew span (may be None when crew span creation
@@ -133,7 +140,8 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
 
         Attributes written
         ------------------
-        - ``task.output``       — final task output text (≤ MAX_TEXT_LENGTH)
+        - ``task.output``       — final task output text (≤ MAX_TEXT_LENGTH);
+                                only when ``capture_outputs`` is enabled
         - ``task.status``       — ``"success"``
         - ``task.duration_ms``  — wall-clock duration since ``on_task_started``
         """
@@ -276,8 +284,8 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
         if start_t is not None:
             attrs[ATTR_TASK_DURATION_MS] = duration_ms_monotonic(start_t)
 
-        # Task output
-        if output is not None:
+        # Task output (privacy: respect capture_outputs)
+        if output is not None and getattr(self, "capture_outputs", True):
             raw = _extract_task_output_text(output)
             if raw:
                 attrs[ATTR_TASK_OUTPUT] = truncate_str(raw, MAX_TEXT_LENGTH)
@@ -340,12 +348,18 @@ def _resolve_crew_id(source: Any, event: Any) -> Optional[str]:
     return str(raw) if raw is not None else None
 
 
-def _build_task_attributes(source: Any, event: Any) -> dict[str, Any]:
+def _build_task_attributes(
+    source: Any, event: Any, *, capture_inputs: bool = True
+) -> dict[str, Any]:
     """
     Collect span attributes for the opening ``crewai.task`` span.
 
     Probes both *source* (the ``Task`` object) and *event* (the event payload)
     so the handler works regardless of which object CrewAI populates.
+
+    When *capture_inputs* is false, task prompt-style fields (description,
+    expected output, output file path, upstream context chain) are omitted so
+    listener privacy settings are respected.
     """
     attrs: dict[str, Any] = {}
 
@@ -362,21 +376,22 @@ def _build_task_attributes(source: Any, event: Any) -> dict[str, Any]:
     if name:
         attrs[ATTR_TASK_NAME] = str(name)
 
-    description = safe_getattr(event, "description") or safe_getattr(
-        source, "description"
-    )
-    if description:
-        attrs[ATTR_TASK_DESCRIPTION] = truncate_str(
-            str(description), MAX_DESCRIPTION_LENGTH
+    if capture_inputs:
+        description = safe_getattr(event, "description") or safe_getattr(
+            source, "description"
         )
+        if description:
+            attrs[ATTR_TASK_DESCRIPTION] = truncate_str(
+                str(description), MAX_DESCRIPTION_LENGTH
+            )
 
-    expected_output = safe_getattr(event, "expected_output") or safe_getattr(
-        source, "expected_output"
-    )
-    if expected_output:
-        attrs[ATTR_TASK_EXPECTED_OUTPUT] = truncate_str(
-            str(expected_output), MAX_DESCRIPTION_LENGTH
+        expected_output = safe_getattr(event, "expected_output") or safe_getattr(
+            source, "expected_output"
         )
+        if expected_output:
+            attrs[ATTR_TASK_EXPECTED_OUTPUT] = truncate_str(
+                str(expected_output), MAX_DESCRIPTION_LENGTH
+            )
 
     # Assigned agent role
     agent = safe_getattr(source, "agent") or safe_getattr(event, "agent")
@@ -396,20 +411,21 @@ def _build_task_attributes(source: Any, event: Any) -> dict[str, Any]:
         if val is not None:
             attrs[span_key] = bool(val)
 
-    output_file = safe_getattr(source, "output_file")
-    if output_file:
-        attrs[ATTR_TASK_OUTPUT_FILE] = str(output_file)
+    if capture_inputs:
+        output_file = safe_getattr(source, "output_file")
+        if output_file:
+            attrs[ATTR_TASK_OUTPUT_FILE] = str(output_file)
 
-    # Context chain (RAG chain): list of upstream tasks whose outputs are
-    # fed as context into this task.  We serialise each upstream task as its
-    # description so the attribute is human-readable without the full Task object.
-    # Read only from source (the Task object) — BaseEvent may also expose a
-    # `context` attribute with unrelated data, so we deliberately skip event here.
-    context_tasks = safe_getattr(source, "context")
-    if context_tasks:
-        context_descriptions = _extract_context_chain(context_tasks)
-        if context_descriptions:
-            attrs[ATTR_TASK_CONTEXT] = safe_json_dumps(context_descriptions)
+        # Context chain (RAG chain): list of upstream tasks whose outputs are
+        # fed as context into this task.  We serialise each upstream task as its
+        # description so the attribute is human-readable without the full Task object.
+        # Read only from source (the Task object) — BaseEvent may also expose a
+        # `context` attribute with unrelated data, so we deliberately skip event here.
+        context_tasks = safe_getattr(source, "context")
+        if context_tasks:
+            context_descriptions = _extract_context_chain(context_tasks)
+            if context_descriptions:
+                attrs[ATTR_TASK_CONTEXT] = safe_json_dumps(context_descriptions)
 
     return attrs
 

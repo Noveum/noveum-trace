@@ -357,10 +357,17 @@ def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
 
 def _get_retry_count(event: Any) -> Optional[int]:
     """Extract retry_count from the event as an int, or ``None``."""
-    val = (
-        safe_getattr(event, "retry_count")
-        or safe_getattr(event, "attempt")
-        or safe_getattr(event, "retries")
+    val = next(
+        (
+            v
+            for v in (
+                safe_getattr(event, "retry_count"),
+                safe_getattr(event, "attempt"),
+                safe_getattr(event, "retries"),
+            )
+            if v is not None
+        ),
+        None,
     )
     if val is None:
         return None

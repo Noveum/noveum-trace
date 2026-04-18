@@ -100,6 +100,107 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Canonical keys merged onto LLM token_usage dicts in :meth:`_finish_llm_span`.
+_TOKEN_USAGE_FIELD_KEYS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_tokens",
+    "cache_creation_tokens",
+    "reasoning_tokens",
+)
+
+
+def _first_non_none_llm(*values: Any) -> Any:
+    """Return the first argument that is not ``None`` (preserves ``0`` and ``False``)."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
+def _merge_missing_token_usage(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Copy *source* into *target* only for keys that are still ``None`` in *target*."""
+    for key in _TOKEN_USAGE_FIELD_KEYS:
+        val = source.get(key)
+        if val is None:
+            continue
+        if target.get(key) is None:
+            target[key] = val
+
+
+def _token_usage_from_event_usage_dict(event_usage: dict[str, Any]) -> dict[str, Any]:
+    """Normalize ``event.usage`` to canonical token_usage keys."""
+    return {
+        "input_tokens": _first_non_none_llm(
+            event_usage.get("input_tokens"),
+            event_usage.get("prompt_tokens"),
+            event_usage.get("prompt_token_count"),
+        ),
+        "output_tokens": _first_non_none_llm(
+            event_usage.get("output_tokens"),
+            event_usage.get("completion_tokens"),
+            event_usage.get("candidates_token_count"),
+        ),
+        "total_tokens": _first_non_none_llm(
+            event_usage.get("total_tokens"),
+            event_usage.get("total_token_count"),
+        ),
+        "cache_read_tokens": _first_non_none_llm(
+            event_usage.get("cached_tokens"),
+            event_usage.get("cached_prompt_tokens"),
+            event_usage.get("cache_read_input_tokens"),
+            event_usage.get("cache_read_tokens"),
+        ),
+        "cache_creation_tokens": _first_non_none_llm(
+            event_usage.get("cache_creation_input_tokens"),
+            event_usage.get("cache_creation_tokens"),
+        ),
+        "reasoning_tokens": event_usage.get("reasoning_tokens"),
+    }
+
+
+def _token_usage_from_monkey_dict(monkey: dict[str, Any]) -> dict[str, Any]:
+    """Normalize monkey-patch buffer dict to canonical token_usage keys."""
+    return {
+        "input_tokens": _first_non_none_llm(
+            monkey.get("input_tokens"),
+            monkey.get("prompt_tokens"),
+        ),
+        "output_tokens": _first_non_none_llm(
+            monkey.get("output_tokens"),
+            monkey.get("completion_tokens"),
+        ),
+        "total_tokens": monkey.get("total_tokens"),
+        "cache_read_tokens": _first_non_none_llm(
+            monkey.get("cache_read_tokens"),
+            monkey.get("cache_read_input_tokens"),
+        ),
+        "cache_creation_tokens": _first_non_none_llm(
+            monkey.get("cache_creation_tokens"),
+            monkey.get("cache_creation_input_tokens"),
+        ),
+        "reasoning_tokens": monkey.get("reasoning_tokens"),
+    }
+
+
+def _token_usage_from_event_top_level(event: Any) -> dict[str, Any]:
+    """Fallback token fields read directly from the event object."""
+    return {
+        "input_tokens": _first_non_none_llm(
+            safe_getattr(event, "prompt_tokens"),
+            safe_getattr(event, "input_tokens"),
+        ),
+        "output_tokens": _first_non_none_llm(
+            safe_getattr(event, "completion_tokens"),
+            safe_getattr(event, "output_tokens"),
+        ),
+        "total_tokens": safe_getattr(event, "total_tokens"),
+        "cache_read_tokens": None,
+        "cache_creation_tokens": None,
+        "reasoning_tokens": None,
+    }
+
 
 class _LLMHandlersMixin(_CrewAIObserverMixinBase):
     """
@@ -448,67 +549,42 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         # --- Token counts ----------------------------------------------------
-        # Priority order (first non-None wins):
-        #   1. event.response object usage fields  (LiteLLM ModelResponse / ChatCompletion)
-        #   2. event.usage dict                    (CrewAI passes usage= on LLMCallCompletedEvent)
-        #   3. monkey-patch buffer                 (_track_token_usage_internal intercept)
-        #   4. direct top-level event fields       (fallback for edge-case event shapes)
-        token_usage = extract_token_usage(response_obj)
+        # Layered merge (each source fills only keys still ``None`` in *token_usage*):
+        #   1. ``event.response`` usage           (:func:`extract_token_usage`)
+        #   2. ``event.usage`` dict               (CrewAI ``LLMCallCompletedEvent``)
+        #   3. monkey-patch buffer                (``pop`` above — always drained)
+        #   4. top-level event fields             (edge-case event shapes)
+        # ``0`` is treated as a real value, not "missing". ``total_tokens == 0`` is
+        # recomputed from input+output when both are known (APIs sometimes emit 0).
+        tu0 = extract_token_usage(response_obj)
+        token_usage: dict[str, Any] = {
+            "input_tokens": tu0.get("input_tokens"),
+            "output_tokens": tu0.get("output_tokens"),
+            "total_tokens": tu0.get("total_tokens"),
+            "cache_read_tokens": None,
+            "cache_creation_tokens": None,
+            "reasoning_tokens": None,
+        }
 
-        if token_usage.get("input_tokens") is None:
-            # Try event.usage dict (CrewAI 1.x sets this on LLMCallCompletedEvent)
-            event_usage = safe_getattr(event, "usage")
-            if isinstance(event_usage, dict) and event_usage:
-                token_usage = {
-                    "input_tokens": event_usage.get("input_tokens")
-                    or event_usage.get("prompt_tokens")
-                    or event_usage.get("prompt_token_count"),
-                    "output_tokens": event_usage.get("output_tokens")
-                    or event_usage.get("completion_tokens")
-                    or event_usage.get("candidates_token_count"),
-                    "total_tokens": event_usage.get("total_tokens")
-                    or event_usage.get("total_token_count"),
-                    "cache_read_tokens": event_usage.get("cached_tokens")
-                    or event_usage.get("cached_prompt_tokens")
-                    or event_usage.get("cache_read_input_tokens"),
-                    "cache_creation_tokens": event_usage.get(
-                        "cache_creation_input_tokens"
-                    ),
-                    "reasoning_tokens": event_usage.get("reasoning_tokens"),
-                }
-            elif monkey_usage:
-                # Monkey-patch buffer (_track_token_usage_internal intercept)
-                token_usage = {
-                    "input_tokens": monkey_usage.get("input_tokens")
-                    or monkey_usage.get("prompt_tokens"),
-                    "output_tokens": monkey_usage.get("output_tokens")
-                    or monkey_usage.get("completion_tokens"),
-                    "total_tokens": monkey_usage.get("total_tokens"),
-                    "cache_read_tokens": monkey_usage.get("cache_read_tokens"),
-                    "cache_creation_tokens": monkey_usage.get("cache_creation_tokens"),
-                    "reasoning_tokens": monkey_usage.get("reasoning_tokens"),
-                }
-            else:
-                # Last resort: top-level event fields
-                token_usage = {
-                    "input_tokens": safe_getattr(event, "prompt_tokens")
-                    or safe_getattr(event, "input_tokens"),
-                    "output_tokens": safe_getattr(event, "completion_tokens")
-                    or safe_getattr(event, "output_tokens"),
-                    "total_tokens": safe_getattr(event, "total_tokens"),
-                }
+        event_usage = safe_getattr(event, "usage")
+        if isinstance(event_usage, dict) and event_usage:
+            _merge_missing_token_usage(
+                token_usage, _token_usage_from_event_usage_dict(event_usage)
+            )
 
-        # Also drain monkey-patch buffer even when event.usage already provided
-        # (ensures the buffer doesn't grow unbounded)
-        if monkey_usage and token_usage.get("input_tokens") is not None:
-            pass  # already consumed via pop() above
+        _merge_missing_token_usage(
+            token_usage, _token_usage_from_monkey_dict(monkey_usage)
+        )
+        _merge_missing_token_usage(
+            token_usage, _token_usage_from_event_top_level(event)
+        )
 
         input_tokens: Optional[int] = _to_int(token_usage.get("input_tokens"))
         output_tokens: Optional[int] = _to_int(token_usage.get("output_tokens"))
         total_tokens: Optional[int] = _to_int(token_usage.get("total_tokens"))
 
         if (
-            total_tokens is None
+            (total_tokens is None or total_tokens == 0)
             and input_tokens is not None
             and output_tokens is not None
         ):
@@ -931,32 +1007,32 @@ def _extract_provider_token_extras(
         safe_getattr(response_obj, "usage") if response_obj is not None else None
     )
 
-    cache_read = (
-        token_usage.get("cache_read_tokens")
-        or token_usage.get("cache_read_input_tokens")
-        or monkey_usage.get("cache_read_tokens")
-        or monkey_usage.get("cache_read_input_tokens")
-        or (
+    cache_read = _first_non_none_llm(
+        token_usage.get("cache_read_tokens"),
+        token_usage.get("cache_read_input_tokens"),
+        monkey_usage.get("cache_read_tokens"),
+        monkey_usage.get("cache_read_input_tokens"),
+        (
             safe_getattr(_resp_usage, "cache_read_input_tokens")
             if _resp_usage is not None
             else None
-        )
+        ),
     )
     if cache_read is not None:
         val = _to_int(cache_read)
         if val is not None:
             attrs[ATTR_LLM_CACHE_READ_TOKENS] = val
 
-    cache_creation = (
-        token_usage.get("cache_creation_tokens")
-        or token_usage.get("cache_creation_input_tokens")
-        or monkey_usage.get("cache_creation_tokens")
-        or monkey_usage.get("cache_creation_input_tokens")
-        or (
+    cache_creation = _first_non_none_llm(
+        token_usage.get("cache_creation_tokens"),
+        token_usage.get("cache_creation_input_tokens"),
+        monkey_usage.get("cache_creation_tokens"),
+        monkey_usage.get("cache_creation_input_tokens"),
+        (
             safe_getattr(_resp_usage, "cache_creation_input_tokens")
             if _resp_usage is not None
             else None
-        )
+        ),
     )
     if cache_creation is not None:
         val = _to_int(cache_creation)
@@ -964,8 +1040,9 @@ def _extract_provider_token_extras(
             attrs[ATTR_LLM_CACHE_CREATION_TOKENS] = val
 
     # --- OpenAI reasoning tokens (o1 / o3 series) ------------------------
-    reasoning = token_usage.get("reasoning_tokens") or monkey_usage.get(
-        "reasoning_tokens"
+    reasoning = _first_non_none_llm(
+        token_usage.get("reasoning_tokens"),
+        monkey_usage.get("reasoning_tokens"),
     )
     if reasoning is None and response_obj is not None:
         # OpenAI: response.usage.completion_tokens_details.reasoning_tokens

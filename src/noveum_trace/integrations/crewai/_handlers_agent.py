@@ -103,14 +103,24 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
         - ``agent.max_rpm``          — max requests per minute
         - ``agent.type``             — ``"full"``
         - ``agent.task_prompt``      — compiled prompt the agent received
-                                       (≤ MAX_TEXT_LENGTH)
+                                       (≤ MAX_TEXT_LENGTH; only when ``capture_inputs``)
+        - ``agent.goal`` / ``backstory`` — only when ``capture_agent_snapshot``
+        - Tool name / description / schema attrs — gated by ``capture_inputs`` /
+          ``capture_tool_schemas`` (see listener docs)
         """
         if not self._is_active():
             return
         try:
             agent_id = _resolve_agent_id(source, event)
             task_id = _resolve_task_id(source, event)
-            attrs = _build_agent_attributes(source, event, agent_type="full")
+            attrs = _build_agent_attributes(
+                source,
+                event,
+                agent_type="full",
+                capture_inputs=self.capture_inputs,
+                capture_tool_schemas=self.capture_tool_schemas,
+                capture_agent_snapshot=self.capture_agent_snapshot,
+            )
             self._open_agent_span(agent_id, task_id, attrs)
         except Exception:
             logger.debug(
@@ -204,7 +214,14 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
         try:
             agent_id = _resolve_agent_id(source, event)
             task_id = _resolve_task_id(source, event)
-            attrs = _build_agent_attributes(source, event, agent_type="lite")
+            attrs = _build_agent_attributes(
+                source,
+                event,
+                agent_type="lite",
+                capture_inputs=self.capture_inputs,
+                capture_tool_schemas=self.capture_tool_schemas,
+                capture_agent_snapshot=self.capture_agent_snapshot,
+            )
             self._open_agent_span(agent_id, task_id, attrs)
         except Exception:
             logger.debug("on_lite_agent_started error:\n%s", traceback.format_exc())
@@ -269,17 +286,18 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
             if model:
                 eval_attrs["agent.evaluation.model"] = str(model)
 
-            criteria = safe_getattr(event, "criteria")
-            if criteria:
-                try:
-                    if isinstance(criteria, (list, tuple)):
-                        eval_attrs["agent.evaluation.criteria"] = safe_json_dumps(
-                            list(criteria)
-                        )
-                    else:
-                        eval_attrs["agent.evaluation.criteria"] = str(criteria)
-                except Exception:
-                    pass
+            if self.capture_inputs:
+                criteria = safe_getattr(event, "criteria")
+                if criteria:
+                    try:
+                        if isinstance(criteria, (list, tuple)):
+                            eval_attrs["agent.evaluation.criteria"] = safe_json_dumps(
+                                list(criteria)
+                            )
+                        else:
+                            eval_attrs["agent.evaluation.criteria"] = str(criteria)
+                    except Exception:
+                        pass
 
             _set_span_attributes(span, eval_attrs)
         except Exception:
@@ -313,7 +331,9 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
 
-            eval_attrs = _extract_agent_evaluation_attributes(event)
+            eval_attrs = _extract_agent_evaluation_attributes(
+                event, capture_outputs=self.capture_outputs
+            )
             _set_span_attributes(span, eval_attrs)
         except Exception:
             logger.debug(
@@ -505,7 +525,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
         if start_t is not None:
             attrs[ATTR_AGENT_DURATION_MS] = duration_ms_monotonic(start_t)
 
-        if output is not None:
+        if output is not None and getattr(self, "capture_outputs", True):
             raw = _extract_output_text(output)
             if raw:
                 attrs["agent.output"] = truncate_str(raw, MAX_TEXT_LENGTH)
@@ -574,13 +594,22 @@ def _resolve_task_id(source: Any, event: Any) -> Optional[str]:
 
 
 def _build_agent_attributes(
-    source: Any, event: Any, agent_type: str = "full"
+    source: Any,
+    event: Any,
+    agent_type: str = "full",
+    *,
+    capture_inputs: bool = True,
+    capture_tool_schemas: bool = True,
+    capture_agent_snapshot: bool = True,
 ) -> dict[str, Any]:
     """
     Collect span attributes for the opening ``crewai.agent`` span.
 
     Probes both *source* (the Agent object) and *event* (payload) so the
     handler works regardless of which CrewAI version populates which object.
+
+    ``capture_*`` mirror :class:`NoveumCrewAIListener` flags so prompts, tool
+    payloads, and agent profile text respect privacy settings.
     """
     attrs: dict[str, Any] = {"agent.type": agent_type}
 
@@ -594,14 +623,19 @@ def _build_agent_attributes(
     if agent_id:
         attrs[ATTR_AGENT_ID] = agent_id
 
-    for attr_name, span_key, max_len in (
-        ("role", ATTR_AGENT_ROLE, 256),
-        ("goal", ATTR_AGENT_GOAL, MAX_DESCRIPTION_LENGTH),
-        ("backstory", ATTR_AGENT_BACKSTORY, MAX_DESCRIPTION_LENGTH),
-    ):
-        val = safe_getattr(event, attr_name) or safe_getattr(source, attr_name)
-        if val:
-            attrs[span_key] = truncate_str(str(val), max_len)
+    # Role is structural correlation metadata (always when present).
+    role_val = safe_getattr(event, "role") or safe_getattr(source, "role")
+    if role_val:
+        attrs[ATTR_AGENT_ROLE] = truncate_str(str(role_val), 256)
+
+    if capture_agent_snapshot:
+        for attr_name, span_key, max_len in (
+            ("goal", ATTR_AGENT_GOAL, MAX_DESCRIPTION_LENGTH),
+            ("backstory", ATTR_AGENT_BACKSTORY, MAX_DESCRIPTION_LENGTH),
+        ):
+            val = safe_getattr(event, attr_name) or safe_getattr(source, attr_name)
+            if val:
+                attrs[span_key] = truncate_str(str(val), max_len)
 
     # LLM model
     model = safe_getattr(event, "llm_model") or extract_llm_model_from_agent(source)
@@ -622,23 +656,35 @@ def _build_agent_attributes(
 
     # Task prompt: the compiled prompt that was passed into the agent.
     # CrewAI stores this on the event as ``task_prompt`` or ``prompt``.
-    task_prompt = (
-        safe_getattr(event, "task_prompt")
-        or safe_getattr(event, "prompt")
-        or safe_getattr(event, "input")
-    )
-    if task_prompt:
-        attrs["agent.task_prompt"] = truncate_str(str(task_prompt), MAX_TEXT_LENGTH)
+    if capture_inputs:
+        task_prompt = (
+            safe_getattr(event, "task_prompt")
+            or safe_getattr(event, "prompt")
+            or safe_getattr(event, "input")
+        )
+        if task_prompt:
+            attrs["agent.task_prompt"] = truncate_str(str(task_prompt), MAX_TEXT_LENGTH)
 
     # Tools
     tools = safe_getattr(source, "tools") or safe_getattr(event, "tools")
-    if tools:
-        _attach_tool_attributes(attrs, tools)
+    if tools and (capture_inputs or capture_tool_schemas):
+        _attach_tool_attributes(
+            attrs,
+            tools,
+            capture_inputs=capture_inputs,
+            capture_tool_schemas=capture_tool_schemas,
+        )
 
     return attrs
 
 
-def _attach_tool_attributes(attrs: dict[str, Any], tools: Any) -> None:
+def _attach_tool_attributes(
+    attrs: dict[str, Any],
+    tools: Any,
+    *,
+    capture_inputs: bool,
+    capture_tool_schemas: bool,
+) -> None:
     """
     Serialize agent tools into span attributes:
 
@@ -649,36 +695,42 @@ def _attach_tool_attributes(attrs: dict[str, Any], tools: Any) -> None:
     try:
         tool_list = tools if isinstance(tools, (list, tuple)) else [tools]
 
-        # Compact name list
-        names = [str(safe_getattr(t, "name") or t) for t in tool_list if t is not None]
-        if names:
-            attrs[ATTR_AGENT_TOOL_NAMES] = safe_json_dumps(names)
+        if capture_inputs:
+            # Compact name list
+            names = [
+                str(safe_getattr(t, "name") or t) for t in tool_list if t is not None
+            ]
+            if names:
+                attrs[ATTR_AGENT_TOOL_NAMES] = safe_json_dumps(names)
 
-        # Detailed schema (name + description, no args_schema to keep it lean)
-        detailed = []
-        for tool in tool_list:
-            if tool is None:
-                continue
-            entry: dict[str, Any] = {}
-            name = safe_getattr(tool, "name")
-            if name:
-                entry["name"] = str(name)
-            desc = safe_getattr(tool, "description")
-            if desc:
-                entry["description"] = truncate_str(str(desc), 512)
-            if entry:
-                detailed.append(entry)
+            # Detailed listing (name + description, no args_schema to keep it lean)
+            detailed = []
+            for tool in tool_list:
+                if tool is None:
+                    continue
+                entry: dict[str, Any] = {}
+                name = safe_getattr(tool, "name")
+                if name:
+                    entry["name"] = str(name)
+                desc = safe_getattr(tool, "description")
+                if desc:
+                    entry["description"] = truncate_str(str(desc), 512)
+                if entry:
+                    detailed.append(entry)
 
-        if detailed:
-            attrs["agent.tools"] = safe_json_dumps(detailed)
+            if detailed:
+                attrs["agent.tools"] = safe_json_dumps(detailed)
 
-        merge_available_tools_attributes(attrs, tools, "agent")
+        if capture_tool_schemas:
+            merge_available_tools_attributes(attrs, tools, "agent")
 
     except Exception as exc:
         logger.debug("_attach_tool_attributes failed: %s", exc)
 
 
-def _extract_agent_evaluation_attributes(event: Any) -> dict[str, Any]:
+def _extract_agent_evaluation_attributes(
+    event: Any, *, capture_outputs: bool = True
+) -> dict[str, Any]:
     """Extract evaluation score + feedback from an agent evaluation event."""
     attrs: dict[str, Any] = {}
 
@@ -689,9 +741,10 @@ def _extract_agent_evaluation_attributes(event: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             attrs["agent.evaluation.score"] = str(score)
 
-    feedback = safe_getattr(event, "feedback") or safe_getattr(event, "suggestion")
-    if feedback:
-        attrs["agent.evaluation.feedback"] = truncate_str(str(feedback), 2048)
+    if capture_outputs:
+        feedback = safe_getattr(event, "feedback") or safe_getattr(event, "suggestion")
+        if feedback:
+            attrs["agent.evaluation.feedback"] = truncate_str(str(feedback), 2048)
 
     passed = safe_getattr(event, "passed")
     if passed is not None:
@@ -710,11 +763,12 @@ def _extract_agent_evaluation_attributes(event: Any) -> dict[str, Any]:
                 attrs["agent.evaluation.score"] = float(nested_score)
             except (TypeError, ValueError):
                 pass
-        nested_feedback = safe_getattr(result_obj, "feedback")
-        if nested_feedback and "agent.evaluation.feedback" not in attrs:
-            attrs["agent.evaluation.feedback"] = truncate_str(
-                str(nested_feedback), 2048
-            )
+        if capture_outputs:
+            nested_feedback = safe_getattr(result_obj, "feedback")
+            if nested_feedback and "agent.evaluation.feedback" not in attrs:
+                attrs["agent.evaluation.feedback"] = truncate_str(
+                    str(nested_feedback), 2048
+                )
 
     return attrs
 

@@ -73,6 +73,14 @@ _SPAN_REASONING = "crewai.reasoning"
 _SPAN_STEP_OBSERVATION = "crewai.step_observation"
 
 
+def _first_non_none(*values: Any) -> Any:
+    """Return the first argument that is not ``None`` (preserves ``0`` and ``False``)."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
     """
     Handler methods for CrewAI agent reasoning (ReAct loop) events.
@@ -160,10 +168,10 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             reasoning_id = _resolve_reasoning_id(event, source)
             extra: dict[str, Any] = {}
 
-            final_plan = (
-                safe_getattr(event, "plan")
-                or safe_getattr(event, "thought")
-                or safe_getattr(event, "output")
+            final_plan = _first_non_none(
+                safe_getattr(event, "plan"),
+                safe_getattr(event, "thought"),
+                safe_getattr(event, "output"),
             )
             if final_plan:
                 extra["reasoning.final_plan"] = truncate_str(
@@ -266,10 +274,10 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             obs_id = _resolve_obs_id(event, source)
             extra: dict[str, Any] = {}
 
-            observation = (
-                safe_getattr(event, "observation")
-                or safe_getattr(event, "result")
-                or safe_getattr(event, "output")
+            observation = _first_non_none(
+                safe_getattr(event, "observation"),
+                safe_getattr(event, "result"),
+                safe_getattr(event, "output"),
             )
             if observation is not None:
                 raw = (
@@ -328,10 +336,10 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
 
             attrs: dict[str, Any] = {}
 
-            refined_steps = (
-                safe_getattr(event, "refined_steps")
-                or safe_getattr(event, "steps")
-                or safe_getattr(event, "plan")
+            refined_steps = _first_non_none(
+                safe_getattr(event, "refined_steps"),
+                safe_getattr(event, "steps"),
+                safe_getattr(event, "plan"),
             )
             if refined_steps is not None:
                 if isinstance(refined_steps, (list, tuple)):
@@ -343,8 +351,9 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                         str(refined_steps), MAX_TEXT_LENGTH
                     )
 
-            refinements = safe_getattr(event, "refinements") or safe_getattr(
-                event, "refinement_count"
+            refinements = _first_non_none(
+                safe_getattr(event, "refinements"),
+                safe_getattr(event, "refinement_count"),
             )
             if refinements is not None:
                 try:
@@ -352,7 +361,9 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            reason = safe_getattr(event, "reason") or safe_getattr(event, "message")
+            reason = _first_non_none(
+                safe_getattr(event, "reason"), safe_getattr(event, "message")
+            )
             if reason:
                 attrs["reasoning.refinement_reason"] = truncate_str(
                     str(reason), MAX_DESCRIPTION_LENGTH
@@ -390,33 +401,37 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
 
-            attrs: dict[str, Any] = {"plan.replan_triggered": True}
+            attrs: dict[str, Any] = {"reasoning.replan_triggered": True}
 
-            reason = safe_getattr(event, "reason") or safe_getattr(event, "message")
+            reason = _first_non_none(
+                safe_getattr(event, "reason"), safe_getattr(event, "message")
+            )
             if reason:
-                attrs["plan.replan_reason"] = truncate_str(
+                attrs["reasoning.replan_reason"] = truncate_str(
                     str(reason), MAX_DESCRIPTION_LENGTH
                 )
 
-            replan_count = safe_getattr(event, "replan_count") or safe_getattr(
-                event, "replans"
+            replan_count = _first_non_none(
+                safe_getattr(event, "replan_count"),
+                safe_getattr(event, "replans"),
             )
             if replan_count is not None:
                 try:
-                    attrs["plan.replan_count"] = int(replan_count)
+                    attrs["reasoning.replan_count"] = int(replan_count)
                 except (TypeError, ValueError):
                     pass
 
-            completed = safe_getattr(event, "completed_steps") or safe_getattr(
-                event, "steps_done"
+            completed = _first_non_none(
+                safe_getattr(event, "completed_steps"),
+                safe_getattr(event, "steps_done"),
             )
             if completed is not None:
                 if isinstance(completed, (list, tuple)):
-                    attrs["plan.completed_steps"] = truncate_str(
+                    attrs["reasoning.completed_steps"] = truncate_str(
                         safe_json_dumps(list(completed)), MAX_TEXT_LENGTH
                     )
                 else:
-                    attrs["plan.completed_steps"] = truncate_str(
+                    attrs["reasoning.completed_steps"] = truncate_str(
                         str(completed), MAX_TEXT_LENGTH
                     )
 
@@ -457,8 +472,9 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
 
             attrs: dict[str, Any] = {"reasoning.goal_achieved_early": True}
 
-            steps_remaining = safe_getattr(event, "steps_remaining") or safe_getattr(
-                event, "remaining_steps"
+            steps_remaining = _first_non_none(
+                safe_getattr(event, "steps_remaining"),
+                safe_getattr(event, "remaining_steps"),
             )
             if steps_remaining is not None:
                 try:
@@ -466,8 +482,9 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            current_step = safe_getattr(event, "step") or safe_getattr(
-                event, "current_step"
+            current_step = _first_non_none(
+                safe_getattr(event, "step"),
+                safe_getattr(event, "current_step"),
             )
             if current_step is not None:
                 try:
@@ -475,10 +492,10 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            reason = (
-                safe_getattr(event, "reason")
-                or safe_getattr(event, "answer")
-                or safe_getattr(event, "message")
+            reason = _first_non_none(
+                safe_getattr(event, "reason"),
+                safe_getattr(event, "answer"),
+                safe_getattr(event, "message"),
             )
             if reason:
                 attrs["reasoning.early_exit_reason"] = truncate_str(
@@ -721,26 +738,27 @@ def _build_reasoning_start_attributes(
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-    task_id = safe_getattr(event, "task_id") or safe_getattr(
-        safe_getattr(source, "task"), "id"
+    task_id = _first_non_none(
+        safe_getattr(event, "task_id"),
+        safe_getattr(safe_getattr(source, "task"), "id"),
     )
     if task_id:
         attrs[ATTR_TASK_ID] = str(task_id)
 
     # Current plan / thought text
-    plan = (
-        safe_getattr(event, "plan")
-        or safe_getattr(event, "thought")
-        or safe_getattr(event, "reasoning")
+    plan = _first_non_none(
+        safe_getattr(event, "plan"),
+        safe_getattr(event, "thought"),
+        safe_getattr(event, "reasoning"),
     )
     if plan:
         attrs["reasoning.plan"] = truncate_str(str(plan), MAX_TEXT_LENGTH)
 
     # Iteration attempt number
-    attempt = (
-        safe_getattr(event, "attempt")
-        or safe_getattr(event, "iteration")
-        or safe_getattr(event, "step")
+    attempt = _first_non_none(
+        safe_getattr(event, "attempt"),
+        safe_getattr(event, "iteration"),
+        safe_getattr(event, "step"),
     )
     if attempt is not None:
         try:
@@ -754,14 +772,16 @@ def _build_reasoning_start_attributes(
         attrs["reasoning.is_ready"] = bool(is_ready)
 
     # Planned action (when the thought already includes a tool decision)
-    tool_name = safe_getattr(event, "tool_name") or safe_getattr(event, "action")
+    tool_name = _first_non_none(
+        safe_getattr(event, "tool_name"), safe_getattr(event, "action")
+    )
     if tool_name:
         attrs["reasoning.tool_name"] = truncate_str(str(tool_name), 256)
 
-    tool_input = (
-        safe_getattr(event, "tool_input")
-        or safe_getattr(event, "action_input")
-        or safe_getattr(event, "arguments")
+    tool_input = _first_non_none(
+        safe_getattr(event, "tool_input"),
+        safe_getattr(event, "action_input"),
+        safe_getattr(event, "arguments"),
     )
     if tool_input is not None:
         raw = tool_input if isinstance(tool_input, str) else safe_json_dumps(tool_input)
@@ -777,17 +797,19 @@ def _build_observation_start_attributes(
     attrs: dict[str, Any] = {"step.obs_id": obs_id}
 
     # step.number — 1-based (spec); step.index — 0-based alias for convenience
-    step_number = safe_getattr(event, "step_number") or safe_getattr(event, "number")
+    step_number = _first_non_none(
+        safe_getattr(event, "step_number"), safe_getattr(event, "number")
+    )
     if step_number is not None:
         try:
             attrs["step.number"] = int(step_number)
         except (TypeError, ValueError):
             pass
 
-    step_index = (
-        safe_getattr(event, "step")
-        or safe_getattr(event, "step_index")
-        or safe_getattr(event, "index")
+    step_index = _first_non_none(
+        safe_getattr(event, "step"),
+        safe_getattr(event, "step_index"),
+        safe_getattr(event, "index"),
     )
     if step_index is not None:
         try:
@@ -799,25 +821,27 @@ def _build_observation_start_attributes(
             pass
 
     # step.description — human-readable description of this step
-    description = safe_getattr(event, "description") or safe_getattr(event, "step_name")
+    description = _first_non_none(
+        safe_getattr(event, "description"), safe_getattr(event, "step_name")
+    )
     if description:
         attrs["step.description"] = truncate_str(str(description), 512)
 
     # Action name (matches tool name in most cases)
-    action = (
-        safe_getattr(event, "action")
-        or safe_getattr(event, "tool_name")
-        or safe_getattr(event, "function_name")
+    action = _first_non_none(
+        safe_getattr(event, "action"),
+        safe_getattr(event, "tool_name"),
+        safe_getattr(event, "function_name"),
     )
     if action:
         attrs["step.action"] = truncate_str(str(action), 256)
         attrs["step.tool"] = attrs["step.action"]
 
     # Action input
-    action_input = (
-        safe_getattr(event, "action_input")
-        or safe_getattr(event, "tool_input")
-        or safe_getattr(event, "arguments")
+    action_input = _first_non_none(
+        safe_getattr(event, "action_input"),
+        safe_getattr(event, "tool_input"),
+        safe_getattr(event, "arguments"),
     )
     if action_input is not None:
         raw = (
@@ -828,7 +852,9 @@ def _build_observation_start_attributes(
         attrs["step.action_input"] = truncate_str(raw, MAX_DESCRIPTION_LENGTH)
 
     # Completion and plan validity flags
-    completed_ok = safe_getattr(event, "completed_ok") or safe_getattr(event, "success")
+    completed_ok = _first_non_none(
+        safe_getattr(event, "completed_ok"), safe_getattr(event, "success")
+    )
     if completed_ok is not None:
         attrs["step.completed_ok"] = bool(completed_ok)
 
@@ -841,7 +867,9 @@ def _build_observation_start_attributes(
         attrs["step.needs_replan"] = bool(needs_replan)
 
     # Key info extracted from this step's result (summary / insight)
-    key_info = safe_getattr(event, "key_info") or safe_getattr(event, "insight")
+    key_info = _first_non_none(
+        safe_getattr(event, "key_info"), safe_getattr(event, "insight")
+    )
     if key_info:
         attrs["step.key_info"] = truncate_str(str(key_info), 512)
 
