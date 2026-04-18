@@ -62,18 +62,18 @@ SPAN_MCP = SPAN_MCP_CONNECTION
 
 ATTR_CREW_ID = "crew.id"
 ATTR_CREW_NAME = "crew.name"
-ATTR_CREW_PROCESS = "crew.process"          # "sequential" | "hierarchical"
+ATTR_CREW_PROCESS = "crew.process"  # "sequential" | "hierarchical"
 ATTR_CREW_AGENT_COUNT = "crew.agent_count"
 ATTR_CREW_TASK_COUNT = "crew.task_count"
 ATTR_CREW_AGENT_ROLES = "crew.agent_roles"  # JSON list of role strings
-ATTR_CREW_MEMORY = "crew.memory"            # bool
-ATTR_CREW_VERBOSE = "crew.verbose"          # bool
+ATTR_CREW_MEMORY = "crew.memory"  # bool
+ATTR_CREW_VERBOSE = "crew.verbose"  # bool
 ATTR_CREW_MAX_RPM = "crew.max_rpm"
-ATTR_CREW_OUTPUT = "crew.output"            # final crew result (truncated)
+ATTR_CREW_OUTPUT = "crew.output"  # final crew result (truncated)
 ATTR_CREW_TOTAL_TOKENS = "crew.total_tokens"
 ATTR_CREW_TOTAL_COST = "crew.total_cost"
 ATTR_CREW_DURATION_MS = "crew.duration_ms"
-ATTR_CREW_STATUS = "crew.status"            # "success" | "error"
+ATTR_CREW_STATUS = "crew.status"  # "success" | "error"
 
 # ---------------------------------------------------------------------------
 # Task-level attribute keys   (prefix: task.*)
@@ -84,13 +84,15 @@ ATTR_TASK_NAME = "task.name"
 ATTR_TASK_DESCRIPTION = "task.description"
 ATTR_TASK_EXPECTED_OUTPUT = "task.expected_output"
 ATTR_TASK_AGENT_ROLE = "task.agent_role"
-ATTR_TASK_OUTPUT = "task.output"            # final task result (truncated)
+ATTR_TASK_OUTPUT = "task.output"  # final task result (truncated)
 ATTR_TASK_OUTPUT_FILE = "task.output_file"
 ATTR_TASK_HUMAN_INPUT = "task.human_input"  # bool
-ATTR_TASK_ASYNC = "task.async_execution"    # bool
+ATTR_TASK_ASYNC = "task.async_execution"  # bool
 ATTR_TASK_DURATION_MS = "task.duration_ms"
-ATTR_TASK_STATUS = "task.status"            # "success" | "error"
-ATTR_TASK_CONTEXT = "task.context_tasks"    # JSON list of upstream task descriptions (RAG chain)
+ATTR_TASK_STATUS = "task.status"  # "success" | "error"
+ATTR_TASK_CONTEXT = (
+    "task.context_tasks"  # JSON list of upstream task descriptions (RAG chain)
+)
 
 # ---------------------------------------------------------------------------
 # Agent-level attribute keys  (prefix: agent.*)
@@ -105,9 +107,9 @@ ATTR_AGENT_TOOL_NAMES = "agent.tool_names"  # JSON list
 ATTR_AGENT_ALLOW_DELEGATION = "agent.allow_delegation"  # bool
 ATTR_AGENT_MAX_ITER = "agent.max_iter"
 ATTR_AGENT_MAX_RPM = "agent.max_rpm"
-ATTR_AGENT_STEP = "agent.step"              # current reasoning iteration
+ATTR_AGENT_STEP = "agent.step"  # current reasoning iteration
 ATTR_AGENT_DURATION_MS = "agent.duration_ms"
-ATTR_AGENT_STATUS = "agent.status"          # "success" | "error"
+ATTR_AGENT_STATUS = "agent.status"  # "success" | "error"
 
 # ---------------------------------------------------------------------------
 # LLM-call attribute keys     (prefix: llm.*)
@@ -124,21 +126,21 @@ ATTR_LLM_COST_TOTAL = "llm.cost.total"
 ATTR_LLM_COST_CURRENCY = "llm.cost.currency"
 ATTR_LLM_FINISH_REASON = "llm.finish_reason"
 ATTR_LLM_SYSTEM_PROMPT = "llm.system_prompt"
-ATTR_LLM_INPUT_MESSAGES = "llm.input_messages"   # JSON
-ATTR_LLM_OUTPUT_TEXT = "llm.response"              # spec key
-ATTR_LLM_THINKING_TEXT = "llm.thinking"           # chain-of-thought / extended thinking
+ATTR_LLM_INPUT_MESSAGES = "llm.input_messages"  # JSON
+ATTR_LLM_OUTPUT_TEXT = "llm.response"  # spec key
+ATTR_LLM_THINKING_TEXT = "llm.thinking"  # chain-of-thought / extended thinking
 # Provider-specific token extras
 ATTR_LLM_CACHE_READ_TOKENS = "llm.cache_read_tokens"
 ATTR_LLM_CACHE_CREATION_TOKENS = "llm.cache_creation_tokens"
 ATTR_LLM_REASONING_TOKENS = "llm.reasoning_tokens"
-ATTR_LLM_TOOLS = "llm.tools"                     # JSON tool schema
+ATTR_LLM_TOOLS = "llm.tools"  # JSON tool schema
 ATTR_LLM_TEMPERATURE = "llm.temperature"
 ATTR_LLM_MAX_TOKENS = "llm.max_tokens"
 ATTR_LLM_TOP_P = "llm.top_p"
 ATTR_LLM_SEED = "llm.seed"
 ATTR_LLM_DURATION_MS = "llm.duration_ms"
-ATTR_LLM_STREAMING = "llm.streaming"             # bool
-ATTR_LLM_CALL_ID = "llm.call_id"                 # internal correlation id
+ATTR_LLM_STREAMING = "llm.streaming"  # bool
+ATTR_LLM_CALL_ID = "llm.call_id"  # internal correlation id
 
 # ---------------------------------------------------------------------------
 # Tool-call attribute keys    (prefix: tool.*)
@@ -146,12 +148,12 @@ ATTR_LLM_CALL_ID = "llm.call_id"                 # internal correlation id
 
 ATTR_TOOL_NAME = "tool.name"
 ATTR_TOOL_DESCRIPTION = "tool.description"
-ATTR_TOOL_INPUT = "tool.input"                # JSON / str
-ATTR_TOOL_OUTPUT = "tool.output"              # JSON / str (truncated)
+ATTR_TOOL_INPUT = "tool.input"  # JSON / str
+ATTR_TOOL_OUTPUT = "tool.output"  # JSON / str (truncated)
 ATTR_TOOL_RUN_ID = "tool.run_id"
 ATTR_TOOL_DURATION_MS = "tool.duration_ms"
-ATTR_TOOL_STATUS = "tool.status"              # "success" | "error"
-ATTR_TOOL_ERROR = "tool.error"                # error message on failure
+ATTR_TOOL_STATUS = "tool.status"  # "success" | "error"
+ATTR_TOOL_ERROR = "tool.error"  # error message on failure
 
 # ---------------------------------------------------------------------------
 # Flow attribute keys         (prefix: flow.*)
@@ -159,14 +161,14 @@ ATTR_TOOL_ERROR = "tool.error"                # error message on failure
 
 ATTR_FLOW_ID = "flow.id"
 ATTR_FLOW_NAME = "flow.name"
-ATTR_FLOW_STATE = "flow.state"               # JSON snapshot of Flow state
+ATTR_FLOW_STATE = "flow.state"  # JSON snapshot of Flow state
 ATTR_FLOW_DURATION_MS = "flow.duration_ms"
-ATTR_FLOW_STATUS = "flow.status"             # "success" | "error"
+ATTR_FLOW_STATUS = "flow.status"  # "success" | "error"
 
 # Flow method (@start / @listen decorated method)
 ATTR_FLOW_METHOD_NAME = "flow.method.name"
 ATTR_FLOW_METHOD_ID = "flow.method.id"
-ATTR_FLOW_METHOD_TRIGGER = "flow.method.trigger"   # triggering event / method name
+ATTR_FLOW_METHOD_TRIGGER = "flow.method.trigger"  # triggering event / method name
 ATTR_FLOW_METHOD_DURATION_MS = "flow.method.duration_ms"
 ATTR_FLOW_METHOD_STATUS = "flow.method.status"
 
@@ -175,9 +177,9 @@ ATTR_FLOW_METHOD_STATUS = "flow.method.status"
 # ---------------------------------------------------------------------------
 
 ATTR_MEMORY_OP_ID = "memory.op_id"
-ATTR_MEMORY_TYPE = "memory.type"             # "short_term" | "long_term" | "entity"
-ATTR_MEMORY_OPERATION = "memory.operation"   # "read" | "write" | "search" | "reset"
-ATTR_MEMORY_QUERY = "memory.query"           # search query (truncated)
+ATTR_MEMORY_TYPE = "memory.type"  # "short_term" | "long_term" | "entity"
+ATTR_MEMORY_OPERATION = "memory.operation"  # "read" | "write" | "search" | "reset"
+ATTR_MEMORY_QUERY = "memory.query"  # search query (truncated)
 ATTR_MEMORY_RESULT_COUNT = "memory.result_count"
 ATTR_MEMORY_DURATION_MS = "memory.duration_ms"
 ATTR_MEMORY_STATUS = "memory.status"
@@ -187,10 +189,10 @@ ATTR_MEMORY_STATUS = "memory.status"
 # ---------------------------------------------------------------------------
 
 ATTR_A2A_CONTEXT_ID = "a2a.context_id"
-ATTR_A2A_DELEGATING_AGENT = "a2a.delegating_agent"   # role of the delegator
-ATTR_A2A_RECEIVING_AGENT = "a2a.receiving_agent"     # role of the receiver
-ATTR_A2A_TASK_DESCRIPTION = "a2a.task_description"   # delegated task (truncated)
-ATTR_A2A_RESULT = "a2a.result"                        # delegated task result
+ATTR_A2A_DELEGATING_AGENT = "a2a.delegating_agent"  # role of the delegator
+ATTR_A2A_RECEIVING_AGENT = "a2a.receiving_agent"  # role of the receiver
+ATTR_A2A_TASK_DESCRIPTION = "a2a.task_description"  # delegated task (truncated)
+ATTR_A2A_RESULT = "a2a.result"  # delegated task result
 ATTR_A2A_DURATION_MS = "a2a.duration_ms"
 ATTR_A2A_STATUS = "a2a.status"
 
@@ -199,10 +201,10 @@ ATTR_A2A_STATUS = "a2a.status"
 # ---------------------------------------------------------------------------
 
 ATTR_MCP_KEY = "mcp.key"
-ATTR_MCP_SERVER = "mcp.server_name"         # server/transport identifier
+ATTR_MCP_SERVER = "mcp.server_name"  # server/transport identifier
 ATTR_MCP_TOOL_NAME = "mcp.tool_name"
-ATTR_MCP_INPUT = "mcp.arguments"           # JSON
-ATTR_MCP_OUTPUT = "mcp.result"             # JSON (truncated)
+ATTR_MCP_INPUT = "mcp.arguments"  # JSON
+ATTR_MCP_OUTPUT = "mcp.result"  # JSON (truncated)
 ATTR_MCP_DURATION_MS = "mcp.duration_ms"
 ATTR_MCP_STATUS = "mcp.status"
 
@@ -214,7 +216,7 @@ ATTR_ERROR_TYPE = "error.type"
 ATTR_ERROR_MESSAGE = "error.message"
 ATTR_ERROR_STACKTRACE = "error.stacktrace"
 
-ATTR_STATUS_SUCCESS = "ok"        # spec value — used as status attribute value
+ATTR_STATUS_SUCCESS = "ok"  # spec value — used as status attribute value
 ATTR_STATUS_ERROR = "error"
 
 # ---------------------------------------------------------------------------
@@ -227,8 +229,8 @@ ATTR_STATUS_ERROR = "error"
 
 LLM_SETTINGS_ATTRIBUTE_MAP: dict[str, str] = {
     # Model identity
-    "model_name": ATTR_LLM_MODEL,       # LangChain ChatOpenAI et al.
-    "model": ATTR_LLM_MODEL,            # LiteLLM / most providers
+    "model_name": ATTR_LLM_MODEL,  # LangChain ChatOpenAI et al.
+    "model": ATTR_LLM_MODEL,  # LiteLLM / most providers
     # Sampling parameters
     "temperature": ATTR_LLM_TEMPERATURE,
     "max_tokens": ATTR_LLM_MAX_TOKENS,
@@ -241,9 +243,9 @@ LLM_SETTINGS_ATTRIBUTE_MAP: dict[str, str] = {
 # Text / string limits
 # ---------------------------------------------------------------------------
 
-MAX_TEXT_LENGTH = 8_192           # default truncation for text outputs in spans
-MAX_DESCRIPTION_LENGTH = 1_024    # task description, goal, backstory, etc.
-MAX_TOOL_OUTPUT_LENGTH = 4_096    # tool result before truncation
+MAX_TEXT_LENGTH = 8_192  # default truncation for text outputs in spans
+MAX_DESCRIPTION_LENGTH = 1_024  # task description, goal, backstory, etc.
+MAX_TOOL_OUTPUT_LENGTH = 4_096  # tool result before truncation
 MAX_SYSTEM_PROMPT_LENGTH = 4_096  # system prompt stored in span attribute
 
 # ---------------------------------------------------------------------------

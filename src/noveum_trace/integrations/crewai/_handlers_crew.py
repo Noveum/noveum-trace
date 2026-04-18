@@ -31,21 +31,12 @@ import traceback
 from typing import Any, Optional
 
 from noveum_trace.integrations.crewai.crewai_constants import (
-    ATTR_AGENT_ALLOW_DELEGATION,
-    ATTR_AGENT_BACKSTORY,
-    ATTR_AGENT_GOAL,
-    ATTR_AGENT_ID,
-    ATTR_AGENT_LLM_MODEL,
-    ATTR_AGENT_MAX_ITER,
-    ATTR_AGENT_MAX_RPM,
-    ATTR_AGENT_ROLE,
-    ATTR_AGENT_TOOL_NAMES,
     ATTR_CREW_AGENT_COUNT,
     ATTR_CREW_AGENT_ROLES,
     ATTR_CREW_DURATION_MS,
     ATTR_CREW_ID,
-    ATTR_CREW_MEMORY,
     ATTR_CREW_MAX_RPM,
+    ATTR_CREW_MEMORY,
     ATTR_CREW_NAME,
     ATTR_CREW_OUTPUT,
     ATTR_CREW_PROCESS,
@@ -59,14 +50,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_ERROR_TYPE,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
-    ATTR_TASK_AGENT_ROLE,
-    ATTR_TASK_ASYNC,
-    ATTR_TASK_DESCRIPTION,
-    ATTR_TASK_EXPECTED_OUTPUT,
-    ATTR_TASK_HUMAN_INPUT,
-    ATTR_TASK_ID,
-    ATTR_TASK_NAME,
-    ATTR_TASK_OUTPUT_FILE,
     MAX_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
     SPAN_CREW,
@@ -78,11 +61,13 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     monotonic_now,
     safe_getattr,
     safe_json_dumps,
-    safe_serialize,
     truncate_str,
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for ``_finish_crew_span(..., finish_trace_client=...)`` default only.
+_FINISH_TRACE_CLIENT_UNSPECIFIED = object()
 
 
 class _CrewHandlersMixin(_CrewAIObserverMixinBase):
@@ -106,7 +91,8 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
         """
         Open the root Noveum trace and ``crewai.crew`` span.
 
-        Captures a full snapshot of the Crew at kickoff time:
+        Captures a full snapshot of the Crew at kickoff time (subject to
+        ``capture_inputs``, ``capture_agent_snapshot``, and ``capture_crew_snapshot``):
         - Crew identity: ``name``, ``id``, ``process``, ``memory``, ``verbose``
         - Agent roster: roles, goals, backstories, tool names, LLM model, delegation
         - Task list: descriptions, expected outputs, assigned agent roles
@@ -129,14 +115,21 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 return
 
             # Gather span attributes from the Crew object
-            attrs = _build_crew_attributes(source, event)
+            attrs = _build_crew_attributes(
+                source,
+                event,
+                capture_inputs=self.capture_inputs,
+                capture_agent_snapshot=self.capture_agent_snapshot,
+                capture_crew_snapshot=self.capture_crew_snapshot,
+            )
 
             # start_time for duration calculation
             start_t = monotonic_now()
 
             # Create a root trace and the crew span
             crew_name = attrs.get(ATTR_CREW_NAME) or "crew"
-            trace_name = f"crewai.{crew_name}.kickoff"
+            prefix = (self.trace_name_prefix or "").strip().rstrip(".") or "crewai"
+            trace_name = f"{prefix}.{crew_name}.kickoff"
 
             # set_as_current=False avoids polluting thread-local trace context;
             # CrewAI uses threads and each crew must own its own context.
@@ -169,9 +162,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_crew_kickoff_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_kickoff_started error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Crew kickoff — completed (success)
@@ -203,9 +194,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 error=None,
             )
         except Exception:
-            logger.debug(
-                "on_crew_kickoff_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_kickoff_completed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Crew kickoff — failed (error)
@@ -238,9 +227,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 error=error,
             )
         except Exception:
-            logger.debug(
-                "on_crew_kickoff_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_kickoff_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Test handlers
@@ -272,9 +259,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             if eval_llm:
                 span.set_attribute("crew.test.eval_llm", str(eval_llm))
         except Exception:
-            logger.debug(
-                "on_crew_test_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_test_started error:\n%s", traceback.format_exc())
 
     def on_crew_test_completed(self, source: Any, event: Any) -> None:
         """``CrewTestCompletedEvent``: close the crew span as SUCCESS.
@@ -298,9 +283,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 extra_attrs={"crew.mode": "test"},
             )
         except Exception:
-            logger.debug(
-                "on_crew_test_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_test_completed error:\n%s", traceback.format_exc())
 
     def on_crew_test_result(self, source: Any, event: Any) -> None:
         """``CrewTestResultEvent``: write quality score and eval model to the span.
@@ -333,16 +316,16 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             exec_dur = safe_getattr(event, "execution_duration")
             if exec_dur is not None:
                 try:
-                    span.set_attribute("crew.test.execution_duration_s", float(exec_dur))
+                    span.set_attribute(
+                        "crew.test.execution_duration_s", float(exec_dur)
+                    )
                 except (TypeError, ValueError):
                     pass
             model = safe_getattr(event, "model")
             if model:
                 span.set_attribute("crew.test_model", str(model))
         except Exception:
-            logger.debug(
-                "on_crew_test_result error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_test_result error:\n%s", traceback.format_exc())
 
     def on_crew_test_iteration_started(self, source: Any, event: Any) -> None:
         """Record the current test iteration number."""
@@ -417,9 +400,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             if filename:
                 span.set_attribute("crew.train.filename", str(filename))
         except Exception:
-            logger.debug(
-                "on_crew_train_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_train_started error:\n%s", traceback.format_exc())
 
     def on_crew_train_completed(self, source: Any, event: Any) -> None:
         """``CrewTrainCompleted``: close the crew span as SUCCESS."""
@@ -439,9 +420,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 extra_attrs={"crew.mode": "train"},
             )
         except Exception:
-            logger.debug(
-                "on_crew_train_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_train_completed error:\n%s", traceback.format_exc())
 
     def on_crew_train_failed(self, source: Any, event: Any) -> None:
         """``CrewTrainFailed``: close the crew span as ERROR."""
@@ -462,9 +441,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 extra_attrs={"crew.mode": "train"},
             )
         except Exception:
-            logger.debug(
-                "on_crew_train_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_crew_train_failed error:\n%s", traceback.format_exc())
 
     def on_crew_train_iteration_started(self, source: Any, event: Any) -> None:
         """Record current training iteration number."""
@@ -527,6 +504,8 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
         output: Any,
         error: Any,
         extra_attrs: Optional[dict[str, Any]] = None,
+        *,
+        finish_trace_client: Any = _FINISH_TRACE_CLIENT_UNSPECIFIED,
     ) -> None:
         """
         Finish the crew span + root trace for *crew_id*.
@@ -534,6 +513,9 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
         Writes aggregated token/cost totals, duration, output, and status onto
         the span before closing it and the trace.  The span and trace entries
         are removed from the state dicts atomically under the lock.
+
+        Pass ``finish_trace_client`` when ``_get_client()`` would return ``None``
+        but a client is still required (e.g. listener shutdown force-close).
         """
         with self._lock:
             entry = self._crew_spans.pop(crew_id, None)
@@ -547,9 +529,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 self._task_to_crew_id.pop(tid, None)
 
         if entry is None:
-            logger.debug(
-                "_finish_crew_span: no open span for crew_id=%s", crew_id
-            )
+            logger.debug("_finish_crew_span: no open span for crew_id=%s", crew_id)
             return
 
         span = entry["span"]
@@ -569,7 +549,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             attrs[ATTR_CREW_TOTAL_COST] = round(total_cost, 8)
 
         # Crew output
-        if output is not None:
+        if output is not None and getattr(self, "capture_outputs", True):
             raw = _extract_crew_output_text(output)
             if raw:
                 attrs[ATTR_CREW_OUTPUT] = truncate_str(raw, MAX_TEXT_LENGTH)
@@ -583,9 +563,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 attrs["crew.error"] = msg
                 tb = getattr(error, "__traceback__", None)
                 if tb is not None:
-                    attrs[ATTR_ERROR_STACKTRACE] = "".join(
-                        traceback.format_tb(tb)
-                    )
+                    attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
             else:
                 # CrewAI sometimes emits ``event.error`` as a plain string (no
                 # exception object), which would otherwise record error.type="str".
@@ -632,7 +610,10 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
 
         # Close the root trace
         try:
-            client = self._get_client()
+            if finish_trace_client is not _FINISH_TRACE_CLIENT_UNSPECIFIED:
+                client = finish_trace_client
+            else:
+                client = self._get_client()
             if client and trace is not None and hasattr(client, "finish_trace"):
                 client.finish_trace(trace)
         except Exception:
@@ -679,21 +660,27 @@ def _crew_memory_enabled(crew: Any) -> bool:
         return False
 
 
-def _build_crew_attributes(source: Any, event: Any) -> dict[str, Any]:
+def _build_crew_attributes(
+    source: Any,
+    event: Any,
+    *,
+    capture_inputs: bool = True,
+    capture_agent_snapshot: bool = True,
+    capture_crew_snapshot: bool = True,
+) -> dict[str, Any]:
     """
     Collect all span attributes for the root ``crewai.crew`` span.
 
     Snapshots the Crew at kickoff time so attribute values reflect the
     configured state, not post-run mutations.
+
+    ``capture_*`` mirror :class:`NoveumCrewAIListener` flags so users can omit
+    sensitive or bulky inputs, agent/task JSON snapshots, etc.
     """
     attrs: dict[str, Any] = {}
 
     # --- Crew identity -------------------------------------------------------
-    crew_id = str(
-        safe_getattr(event, "crew_id")
-        or safe_getattr(source, "id")
-        or ""
-    )
+    crew_id = str(safe_getattr(event, "crew_id") or safe_getattr(source, "id") or "")
     if crew_id:
         attrs[ATTR_CREW_ID] = crew_id
 
@@ -703,14 +690,15 @@ def _build_crew_attributes(source: Any, event: Any) -> dict[str, Any]:
 
     process = safe_getattr(source, "process")
     if process is not None:
-        attrs[ATTR_CREW_PROCESS] = str(
-            safe_getattr(process, "value") or process
-        )
+        attrs[ATTR_CREW_PROCESS] = str(safe_getattr(process, "value") or process)
 
     # --- Kickoff inputs --------------------------------------------------
-    inputs = safe_getattr(event, "inputs") or safe_getattr(source, "inputs")
-    if inputs is not None:
-        attrs["crew.inputs"] = truncate_str(safe_json_dumps(inputs), MAX_TEXT_LENGTH)
+    if capture_inputs:
+        inputs = safe_getattr(event, "inputs") or safe_getattr(source, "inputs")
+        if inputs is not None:
+            attrs["crew.inputs"] = truncate_str(
+                safe_json_dumps(inputs), MAX_TEXT_LENGTH
+            )
 
     attrs[ATTR_CREW_MEMORY] = _crew_memory_enabled(source)
 
@@ -723,95 +711,98 @@ def _build_crew_attributes(source: Any, event: Any) -> dict[str, Any]:
             attrs[span_key] = val
 
     # --- Agent roster — crew.agents_snapshot JSON array -------------------
-    agents = safe_getattr(source, "agents") or []
-    if agents:
-        attrs[ATTR_CREW_AGENT_COUNT] = len(agents)
-        agents_snapshot = []
-        roles = []
-        for agent in agents:
-            role = safe_getattr(agent, "role")
-            entry: dict[str, Any] = {}
-            if safe_getattr(agent, "id") is not None:
-                entry["id"] = str(safe_getattr(agent, "id"))
-            if role:
-                entry["role"] = str(role)
-                roles.append(str(role))
-            for sub_attr in ("goal", "backstory"):
-                val = safe_getattr(agent, sub_attr)
-                if val:
-                    entry[sub_attr] = truncate_str(str(val), MAX_DESCRIPTION_LENGTH)
-            for sub_attr in ("allow_delegation", "max_iter"):
-                val = safe_getattr(agent, sub_attr)
-                if val is not None:
-                    entry[sub_attr] = val
-            model = extract_llm_model_from_agent(agent)
-            if model:
-                entry["llm_model"] = model
-            tools = safe_getattr(agent, "tools") or []
-            entry["tools_names"] = [
-                str(safe_getattr(t, "name") or t) for t in tools if t is not None
-            ]
-            agents_snapshot.append(entry)
-        if agents_snapshot:
-            attrs["crew.agents_snapshot"] = truncate_str(
-                safe_json_dumps(agents_snapshot), MAX_TEXT_LENGTH
-            )
-        if roles:
-            attrs[ATTR_CREW_AGENT_ROLES] = safe_json_dumps(roles)
+    if capture_agent_snapshot:
+        agents = safe_getattr(source, "agents") or []
+        if agents:
+            attrs[ATTR_CREW_AGENT_COUNT] = len(agents)
+            agents_snapshot = []
+            roles = []
+            for agent in agents:
+                role = safe_getattr(agent, "role")
+                entry: dict[str, Any] = {}
+                if safe_getattr(agent, "id") is not None:
+                    entry["id"] = str(safe_getattr(agent, "id"))
+                if role:
+                    entry["role"] = str(role)
+                    roles.append(str(role))
+                for sub_attr in ("goal", "backstory"):
+                    val = safe_getattr(agent, sub_attr)
+                    if val:
+                        entry[sub_attr] = truncate_str(str(val), MAX_DESCRIPTION_LENGTH)
+                for sub_attr in ("allow_delegation", "max_iter"):
+                    val = safe_getattr(agent, sub_attr)
+                    if val is not None:
+                        entry[sub_attr] = val
+                model = extract_llm_model_from_agent(agent)
+                if model:
+                    entry["llm_model"] = model
+                tools = safe_getattr(agent, "tools") or []
+                entry["tools_names"] = [
+                    str(safe_getattr(t, "name") or t) for t in tools if t is not None
+                ]
+                agents_snapshot.append(entry)
+            if agents_snapshot:
+                attrs["crew.agents_snapshot"] = truncate_str(
+                    safe_json_dumps(agents_snapshot), MAX_TEXT_LENGTH
+                )
+            if roles:
+                attrs[ATTR_CREW_AGENT_ROLES] = safe_json_dumps(roles)
 
     # --- Task list — crew.tasks_snapshot JSON array -----------------------
-    tasks = safe_getattr(source, "tasks") or []
-    if tasks:
-        attrs[ATTR_CREW_TASK_COUNT] = len(tasks)
-        tasks_snapshot = []
-        for task in tasks:
-            t_entry: dict[str, Any] = {}
-            task_id = safe_getattr(task, "id")
-            if task_id:
-                t_entry["id"] = str(task_id)
-            task_name = safe_getattr(task, "name")
-            if task_name:
-                t_entry["name"] = str(task_name)
-            description = safe_getattr(task, "description")
-            if description:
-                t_entry["description"] = truncate_str(
-                    str(description), MAX_DESCRIPTION_LENGTH
+    if capture_crew_snapshot:
+        tasks = safe_getattr(source, "tasks") or []
+        if tasks:
+            attrs[ATTR_CREW_TASK_COUNT] = len(tasks)
+            tasks_snapshot = []
+            for task in tasks:
+                t_entry: dict[str, Any] = {}
+                task_id = safe_getattr(task, "id")
+                if task_id:
+                    t_entry["id"] = str(task_id)
+                task_name = safe_getattr(task, "name")
+                if task_name:
+                    t_entry["name"] = str(task_name)
+                description = safe_getattr(task, "description")
+                if description:
+                    t_entry["description"] = truncate_str(
+                        str(description), MAX_DESCRIPTION_LENGTH
+                    )
+                expected_output = safe_getattr(task, "expected_output")
+                if expected_output:
+                    t_entry["expected_output"] = truncate_str(
+                        str(expected_output), MAX_DESCRIPTION_LENGTH
+                    )
+                agent = safe_getattr(task, "agent")
+                if agent is not None:
+                    agent_role = safe_getattr(agent, "role")
+                    if agent_role:
+                        t_entry["agent_role"] = str(agent_role)
+                for flag_attr in ("human_input", "async_execution"):
+                    val = safe_getattr(task, flag_attr)
+                    if val is not None:
+                        t_entry[flag_attr] = val
+                t_tools = safe_getattr(task, "tools") or []
+                t_entry["tools_names"] = [
+                    str(safe_getattr(tt, "name") or tt)
+                    for tt in t_tools
+                    if tt is not None
+                ]
+                context = safe_getattr(task, "context") or []
+                if context:
+                    try:
+                        ctx_descs = []
+                        for ctx_task in context:
+                            desc = safe_getattr(ctx_task, "description")
+                            if desc:
+                                ctx_descs.append(str(desc))
+                        t_entry["context_tasks"] = ctx_descs
+                    except Exception:
+                        pass
+                tasks_snapshot.append(t_entry)
+            if tasks_snapshot:
+                attrs["crew.tasks_snapshot"] = truncate_str(
+                    safe_json_dumps(tasks_snapshot), MAX_TEXT_LENGTH
                 )
-            expected_output = safe_getattr(task, "expected_output")
-            if expected_output:
-                t_entry["expected_output"] = truncate_str(
-                    str(expected_output), MAX_DESCRIPTION_LENGTH
-                )
-            agent = safe_getattr(task, "agent")
-            if agent is not None:
-                agent_role = safe_getattr(agent, "role")
-                if agent_role:
-                    t_entry["agent_role"] = str(agent_role)
-            for flag_attr in ("human_input", "async_execution"):
-                val = safe_getattr(task, flag_attr)
-                if val is not None:
-                    t_entry[flag_attr] = val
-            t_tools = safe_getattr(task, "tools") or []
-            t_entry["tools_names"] = [
-                str(safe_getattr(tt, "name") or tt)
-                for tt in t_tools if tt is not None
-            ]
-            context = safe_getattr(task, "context") or []
-            if context:
-                try:
-                    ctx_descs = []
-                    for ctx_task in context:
-                        desc = safe_getattr(ctx_task, "description")
-                        if desc:
-                            ctx_descs.append(str(desc))
-                    t_entry["context_tasks"] = ctx_descs
-                except Exception:
-                    pass
-            tasks_snapshot.append(t_entry)
-        if tasks_snapshot:
-            attrs["crew.tasks_snapshot"] = truncate_str(
-                safe_json_dumps(tasks_snapshot), MAX_TEXT_LENGTH
-            )
 
     return attrs
 
@@ -849,6 +840,7 @@ def _extract_crew_output_text(output: Any) -> Optional[str]:
     if isinstance(json_dict, dict):
         try:
             import json
+
             return json.dumps(json_dict, default=str)
         except Exception:
             pass

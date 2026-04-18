@@ -67,15 +67,30 @@ from urllib.parse import urlparse
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
 
 # ---------------------------------------------------------------------------
-# 0. Tracing must initialise before CrewAI imports (same rule as other examples)
+# 0. Require NOVEUM_API_KEY, then initialise tracing before CrewAI imports
+#    (same rule as other examples; ``main()`` repeats the key check).
 # ---------------------------------------------------------------------------
 
 import noveum_trace
 
+# Refuse to initialise the SDK without a key (``main()`` also checks — keep both).
+if not os.environ.get("NOVEUM_API_KEY"):
+    print("NOVEUM_API_KEY is required.", file=sys.stderr)
+    raise SystemExit(1)
+
 noveum_trace.init(
-    api_key=os.environ.get("NOVEUM_API_KEY", ""),
+    api_key=os.environ["NOVEUM_API_KEY"],
     project=os.environ.get("NOVEUM_PROJECT", "crewai-e2e"),
 )
+
+from crewai import LLM, Agent, Crew, Process, Task
+from crewai.flow.flow import Flow, listen, start
+from crewai.llms.base_llm import BaseLLM
+from crewai.memory.unified_memory import Memory
+from crewai.memory.utils import sanitize_scope_name
+from crewai.rag.embeddings.factory import build_embedder
+from crewai.tools import BaseTool
+from pydantic import BaseModel
 
 from noveum_trace.core.trace import Trace
 from noveum_trace.integrations.crewai import setup_crewai_tracing
@@ -85,8 +100,8 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_CREW_MEMORY,
     ATTR_CREW_STATUS,
     ATTR_STATUS_SUCCESS,
-    SPAN_AGENT,
     SPAN_A2A_DELEGATION,
+    SPAN_AGENT,
     SPAN_CREW,
     SPAN_FLOW,
     SPAN_FLOW_METHOD,
@@ -98,15 +113,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     SPAN_TOOL,
 )
 
-from crewai import Agent, Crew, LLM, Process, Task
-from crewai.flow.flow import Flow, listen, start
-from crewai.llms.base_llm import BaseLLM
-from crewai.memory.unified_memory import Memory
-from crewai.memory.utils import sanitize_scope_name
-from crewai.rag.embeddings.factory import build_embedder
-from crewai.tools import BaseTool
-from pydantic import BaseModel
-
 # ---------------------------------------------------------------------------
 # 1. Tool resolution (Serper → DuckDuckGo → mock)
 # ---------------------------------------------------------------------------
@@ -117,7 +123,9 @@ try:
     _search_tool: Any = SerperDevTool()
 except ImportError:
     try:
-        from langchain_community.tools import DuckDuckGoSearchRun  # type: ignore[import]
+        from langchain_community.tools import (
+            DuckDuckGoSearchRun,  # type: ignore[import]
+        )
 
         _ddg_backend = DuckDuckGoSearchRun()
 
@@ -147,7 +155,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# 2. LLM factory 
+# 2. LLM factory
 # ---------------------------------------------------------------------------
 
 
@@ -327,9 +335,7 @@ def run_a2a_remote_delegation_crew(agent_card_url: str) -> str:
     try:
         from crewai.a2a import A2AClientConfig  # type: ignore[import]
     except ImportError as exc:
-        raise RuntimeError(
-            "A2A step requires: pip install 'crewai[a2a]'"
-        ) from exc
+        raise RuntimeError("A2A step requires: pip install 'crewai[a2a]'") from exc
 
     briefing_llm = _build_default_llm()
     coordinator_llm = _build_default_llm()
@@ -346,10 +352,12 @@ def run_a2a_remote_delegation_crew(agent_card_url: str) -> str:
     a2a_coordinator = Agent(
         role="E2E A2A Coordinator",
         goal="Delegate specialist work through the configured remote A2A connection.",
-        backstory=textwrap.dedent("""\
+        backstory=textwrap.dedent(
+            """\
             When the task requires A2A delegation, use your remote A2A agent
             (agent card). Return the remote agent's substantive reply.
-        """),
+        """
+        ),
         tools=[],
         llm=coordinator_llm,
         a2a=A2AClientConfig(
@@ -659,9 +667,7 @@ def assert_flow_trace(trace: Trace) -> None:
         raise AssertionError(f"Missing {SPAN_FLOW_METHOD}: {counts}")
 
 
-def _pick_trace(
-    traces: list[Trace], predicate: Callable[[Trace], bool]
-) -> Trace:
+def _pick_trace(traces: list[Trace], predicate: Callable[[Trace], bool]) -> Trace:
     for t in reversed(traces):
         if predicate(t):
             return t
@@ -707,7 +713,10 @@ def main() -> int:
         out = run_memory_multi_agent_crew()
         print(f"      kickoff ok, output chars={len(out)}")
     except Exception as exc:
-        print(f"[FAIL] Memory crew raised: {exc}\n{traceback.format_exc()}", file=sys.stderr)
+        print(
+            f"[FAIL] Memory crew raised: {exc}\n{traceback.format_exc()}",
+            file=sys.stderr,
+        )
         listener.shutdown()
         return 1
 

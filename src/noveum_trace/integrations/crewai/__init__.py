@@ -5,7 +5,7 @@ Provides tracing for CrewAI agents, tasks, tools, and LLM calls.
 
 Installation
 ------------
->>> pip install noveum-trace crewai
+>>> pip install "noveum-trace[crewai]"
 
 Setup
 -----
@@ -13,7 +13,7 @@ Setup
 >>> from noveum_trace.integrations.crewai import NoveumCrewAIListener, setup_crewai_tracing
 >>>
 >>> # Option 1: Using setup factory
->>> init(workspace="my-workspace", api_key="...")
+>>> init(project="my-project", api_key="...")
 >>> listener = setup_crewai_tracing()
 >>> crew.callback_function = listener
 >>> crew.kickoff()

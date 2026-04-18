@@ -43,8 +43,8 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_ERROR_STACKTRACE,
     ATTR_ERROR_TYPE,
     ATTR_MEMORY_DURATION_MS,
-    ATTR_MEMORY_OPERATION,
     ATTR_MEMORY_OP_ID,
+    ATTR_MEMORY_OPERATION,
     ATTR_MEMORY_QUERY,
     ATTR_MEMORY_RESULT_COUNT,
     ATTR_MEMORY_STATUS,
@@ -52,10 +52,9 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     MAX_DESCRIPTION_LENGTH,
-    MAX_TEXT_LENGTH,
     SPAN_MEMORY_QUERY,
-    SPAN_MEMORY_SAVE,
     SPAN_MEMORY_RETRIEVAL,
+    SPAN_MEMORY_SAVE,
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
@@ -88,6 +87,8 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
 
     ``source`` is typically the memory object or the Agent; ``event`` carries
     the per-operation payload.  Every method is fully exception-shielded.
+
+    All handlers no-op when ``capture_memory`` is ``False`` on the listener.
     """
 
     # =========================================================================
@@ -107,7 +108,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.query``     — search query text (≤ MAX_DESCRIPTION_LENGTH)
         - ``agent.role``       — role of the querying agent (correlation)
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
@@ -130,9 +131,8 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                     str(query), MAX_DESCRIPTION_LENGTH
                 )
 
-            agent_role = (
-                safe_getattr(event, "agent_role")
-                or safe_getattr(source, "role")
+            agent_role = safe_getattr(event, "agent_role") or safe_getattr(
+                source, "role"
             )
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
@@ -162,9 +162,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 "Memory query span opened: op_id=%s type=%s", op_id, memory_type
             )
         except Exception:
-            logger.debug(
-                "on_memory_query_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_query_started error:\n%s", traceback.format_exc())
 
     def on_memory_query_completed(self, source: Any, event: Any) -> None:
         """
@@ -177,16 +175,13 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.status``          — ``"success"``
         - ``memory.duration_ms``     — wall-clock duration
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
             extra: dict[str, Any] = {}
 
-            results = (
-                safe_getattr(event, "results")
-                or safe_getattr(event, "memories")
-            )
+            results = safe_getattr(event, "results") or safe_getattr(event, "memories")
             if results is not None:
                 try:
                     count = len(results) if hasattr(results, "__len__") else None
@@ -202,22 +197,18 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
 
             self._finish_memory_span(op_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
-            logger.debug(
-                "on_memory_query_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_query_completed error:\n%s", traceback.format_exc())
 
     def on_memory_query_failed(self, source: Any, event: Any) -> None:
         """Close the memory query span as ERROR."""
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_memory_span(op_id, ATTR_STATUS_ERROR, error)
         except Exception:
-            logger.debug(
-                "on_memory_query_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_query_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # SAVE — started / completed / failed
@@ -236,7 +227,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.metadata``     — JSON of associated metadata when available
         - ``agent.role``          — role of the saving agent (correlation)
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
@@ -264,18 +255,12 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                         safe_json_dumps(value), _MEMORY_VALUE_PREVIEW_LEN
                     )
 
-            metadata = (
-                safe_getattr(event, "metadata")
-                or safe_getattr(event, "meta")
-            )
+            metadata = safe_getattr(event, "metadata") or safe_getattr(event, "meta")
             if metadata is not None:
-                attrs["memory.metadata"] = truncate_str(
-                    safe_json_dumps(metadata), 512
-                )
+                attrs["memory.metadata"] = truncate_str(safe_json_dumps(metadata), 512)
 
-            agent_role = (
-                safe_getattr(event, "agent_role")
-                or safe_getattr(source, "role")
+            agent_role = safe_getattr(event, "agent_role") or safe_getattr(
+                source, "role"
             )
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
@@ -285,34 +270,28 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 "Memory save span opened: op_id=%s type=%s", op_id, memory_type
             )
         except Exception:
-            logger.debug(
-                "on_memory_save_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_save_started error:\n%s", traceback.format_exc())
 
     def on_memory_save_completed(self, source: Any, event: Any) -> None:
         """Close the memory save span as SUCCESS."""
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
             self._finish_memory_span(op_id, ATTR_STATUS_SUCCESS, None)
         except Exception:
-            logger.debug(
-                "on_memory_save_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_save_completed error:\n%s", traceback.format_exc())
 
     def on_memory_save_failed(self, source: Any, event: Any) -> None:
         """Close the memory save span as ERROR."""
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_memory_span(op_id, ATTR_STATUS_ERROR, error)
         except Exception:
-            logger.debug(
-                "on_memory_save_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_memory_save_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # RETRIEVAL — started / completed / failed
@@ -334,7 +313,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``task.id``             — id of the requesting task (correlation)
         - ``agent.role``          — role of the agent context being hydrated
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
@@ -354,16 +333,17 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             )
             if task_id:
                 attrs["task.id"] = str(task_id)
-                attrs["memory.task_id"] = str(task_id)   # spec key
+                attrs["memory.task_id"] = str(task_id)  # spec key
 
-            agent_role = (
-                safe_getattr(event, "agent_role")
-                or safe_getattr(source, "role")
+            agent_role = safe_getattr(event, "agent_role") or safe_getattr(
+                source, "role"
             )
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-            self._open_memory_span(op_id, agent_id, attrs, span_name=SPAN_MEMORY_RETRIEVAL)
+            self._open_memory_span(
+                op_id, agent_id, attrs, span_name=SPAN_MEMORY_RETRIEVAL
+            )
             logger.debug(
                 "Memory retrieval span opened: op_id=%s type=%s", op_id, memory_type
             )
@@ -383,7 +363,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.status``          — ``"success"``
         - ``memory.duration_ms``     — wall-clock duration
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
@@ -423,7 +403,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_memory_retrieval_failed(self, source: Any, event: Any) -> None:
         """Close the memory retrieval span as ERROR."""
-        if not self._is_active():
+        if not self._is_active() or not self.capture_memory:
             return
         try:
             op_id = _resolve_op_id(event, source)
@@ -488,9 +468,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             start_t = self._memory_op_start_times.pop(op_id, None)
 
         if span is None:
-            logger.debug(
-                "_finish_memory_span: no open span for op_id=%s", op_id
-            )
+            logger.debug("_finish_memory_span: no open span for op_id=%s", op_id)
             return
 
         attrs: dict[str, Any] = {ATTR_MEMORY_STATUS: status}
@@ -517,6 +495,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
                 try:
                     from noveum_trace.core.span import SpanStatus
+
                     span.set_status(SpanStatus.ERROR, str(error) if error else "")
                 except Exception:
                     pass
@@ -529,9 +508,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "Memory op span closed: op_id=%s status=%s", op_id, status
-        )
+        logger.debug("Memory op span closed: op_id=%s status=%s", op_id, status)
 
 
 # =============================================================================
@@ -573,9 +550,7 @@ def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
     return str(raw) if raw is not None else None
 
 
-def _resolve_memory_type(
-    source: Any, event: Any, default: str = "unknown"
-) -> str:
+def _resolve_memory_type(source: Any, event: Any, default: str = "unknown") -> str:
     """
     Resolve the memory subsystem type from event, source class name, or default.
 

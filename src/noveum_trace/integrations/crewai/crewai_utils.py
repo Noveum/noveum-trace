@@ -185,27 +185,27 @@ def truncate_str(text: str, max_len: int = 8192) -> str:
 # Ordered candidate attribute paths for extracting token counts from whatever
 # LLM response object CrewAI hands back (OpenAI, Anthropic, Google, Litellm …).
 _INPUT_TOKEN_PATHS: tuple[tuple[str, ...], ...] = (
-    ("usage", "input_tokens"),          # Anthropic
-    ("usage", "prompt_tokens"),         # OpenAI / LiteLLM
-    ("usage", "prompt_token_count"),    # Vertex AI
-    ("usage", "inputTokenCount"),       # Bedrock
-    ("usage", "input_token_count"),     # Watsonx
+    ("usage", "input_tokens"),  # Anthropic
+    ("usage", "prompt_tokens"),  # OpenAI / LiteLLM
+    ("usage", "prompt_token_count"),  # Vertex AI
+    ("usage", "inputTokenCount"),  # Bedrock
+    ("usage", "input_token_count"),  # Watsonx
     ("usage_metadata", "prompt_token_count"),  # Google genai SDK
-    ("prompt_token_count",),            # Gemini legacy
-    ("input_tokens",),                  # Anthropic top-level (some wrappers)
-    ("prompt_tokens",),                 # OpenAI top-level
+    ("prompt_token_count",),  # Gemini legacy
+    ("input_tokens",),  # Anthropic top-level (some wrappers)
+    ("prompt_tokens",),  # OpenAI top-level
 )
 
 _OUTPUT_TOKEN_PATHS: tuple[tuple[str, ...], ...] = (
-    ("usage", "output_tokens"),         # Anthropic
-    ("usage", "completion_tokens"),     # OpenAI / LiteLLM
-    ("usage", "candidates_token_count"),# Vertex AI
-    ("usage", "outputTokenCount"),      # Bedrock
-    ("usage", "generated_token_count"), # Watsonx
+    ("usage", "output_tokens"),  # Anthropic
+    ("usage", "completion_tokens"),  # OpenAI / LiteLLM
+    ("usage", "candidates_token_count"),  # Vertex AI
+    ("usage", "outputTokenCount"),  # Bedrock
+    ("usage", "generated_token_count"),  # Watsonx
     ("usage_metadata", "candidates_token_count"),  # Google genai SDK
-    ("candidates_token_count",),        # Gemini legacy
-    ("output_tokens",),                 # Anthropic top-level
-    ("completion_tokens",),             # OpenAI top-level
+    ("candidates_token_count",),  # Gemini legacy
+    ("output_tokens",),  # Anthropic top-level
+    ("completion_tokens",),  # OpenAI top-level
 )
 
 _TOTAL_TOKEN_PATHS: tuple[tuple[str, ...], ...] = (
@@ -510,9 +510,7 @@ def merge_available_tools_attributes(
         logger.debug("merge_available_tools_attributes count/names failed: %s", exc)
         return
     try:
-        attrs[f"{prefix}.available_tools.schemas"] = json.dumps(
-            serialised, default=str
-        )
+        attrs[f"{prefix}.available_tools.schemas"] = json.dumps(serialised, default=str)
     except Exception as exc:
         logger.debug("merge_available_tools_attributes schemas failed: %s", exc)
 
@@ -568,7 +566,7 @@ def _serialise_single_tool(tool: Any) -> dict[str, Any]:
 
     # Fallback: capture remaining public attrs not already captured
     if not result:
-        result = safe_serialize(tool)  # type: ignore[assignment]
+        result = safe_serialize(tool)
 
     return result or {"repr": str(tool)}
 
@@ -688,9 +686,7 @@ def extract_agent_info(agent: Any) -> dict[str, Any]:
     tools = safe_getattr(agent, "tools")
     if tools:
         try:
-            info["tool_names"] = [
-                str(safe_getattr(t, "name") or t) for t in tools
-            ]
+            info["tool_names"] = [str(safe_getattr(t, "name") or t) for t in tools]
         except Exception:
             pass
 
@@ -757,9 +753,7 @@ def extract_crew_info(crew: Any) -> dict[str, Any]:
     agents = safe_getattr(crew, "agents") or []
     if agents:
         try:
-            info["agent_roles"] = [
-                str(safe_getattr(a, "role") or a) for a in agents
-            ]
+            info["agent_roles"] = [str(safe_getattr(a, "role") or a) for a in agents]
             info["agent_count"] = len(agents)
         except Exception:
             pass
@@ -771,9 +765,7 @@ def extract_crew_info(crew: Any) -> dict[str, Any]:
     process = safe_getattr(crew, "process")
     if process is not None:
         # CrewAI Process enum has a .value attribute
-        info["process"] = str(
-            safe_getattr(process, "value") or process
-        )
+        info["process"] = str(safe_getattr(process, "value") or process)
 
     for attr in ("memory", "verbose", "max_rpm"):
         val = safe_getattr(crew, attr)

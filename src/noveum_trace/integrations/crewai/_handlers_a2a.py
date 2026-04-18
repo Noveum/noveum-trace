@@ -54,9 +54,8 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_A2A_CONTEXT_ID,
     ATTR_A2A_DELEGATING_AGENT,
     ATTR_A2A_RECEIVING_AGENT,
-    ATTR_A2A_DURATION_MS,
-    ATTR_A2A_STATUS,
     ATTR_A2A_RESULT,
+    ATTR_A2A_STATUS,
     ATTR_ERROR_MESSAGE,
     ATTR_ERROR_STACKTRACE,
     ATTR_ERROR_TYPE,
@@ -64,8 +63,8 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_SUCCESS,
     MAX_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
-    SPAN_A2A_DELEGATION,
     SPAN_A2A_CONVERSATION,
+    SPAN_A2A_DELEGATION,
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
@@ -149,9 +148,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_delegation_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_delegation_started error:\n%s", traceback.format_exc())
 
     def on_a2a_delegation_completed(self, source: Any, event: Any) -> None:
         """
@@ -184,7 +181,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
             self._finish_a2a_span(
                 context_id=context_id,
-                status=ATTR_STATUS_SUCCESS,
+                status=status,
                 error=None,
                 extra_attrs=extra,
             )
@@ -216,9 +213,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 error=error,
             )
         except Exception:
-            logger.debug(
-                "on_a2a_delegation_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_delegation_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # CONVERSATION — started / completed / failed
@@ -265,9 +260,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 self._a2a_stream_buffers.setdefault(context_id, [])
                 self._a2a_start_times[context_id] = start_t
 
-            logger.debug(
-                "A2A conversation span opened: context_id=%s", context_id
-            )
+            logger.debug("A2A conversation span opened: context_id=%s", context_id)
 
         except Exception:
             logger.debug(
@@ -343,7 +336,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             msg_entry = {
                 "type": "sent",
                 "turn_number": turn_number,
-                "content": truncate_str(str(message), MAX_TEXT_LENGTH) if message else "",
+                "content": (
+                    truncate_str(str(message), MAX_TEXT_LENGTH) if message else ""
+                ),
                 "sender": str(sender) if sender else "unknown",
             }
 
@@ -360,9 +355,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_message_sent error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_message_sent error:\n%s", traceback.format_exc())
 
     def on_a2a_message_received(self, source: Any, event: Any) -> None:
         """
@@ -381,7 +374,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             msg_entry = {
                 "type": "received",
                 "turn_number": turn_number,
-                "content": truncate_str(str(message), MAX_TEXT_LENGTH) if message else "",
+                "content": (
+                    truncate_str(str(message), MAX_TEXT_LENGTH) if message else ""
+                ),
                 "sender": str(sender) if sender else "unknown",
             }
 
@@ -398,9 +393,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_message_received error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_message_received error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # STREAMING — started / chunk / completed
@@ -415,13 +408,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             with self._lock:
                 if context_id not in self._a2a_stream_buffers:
                     self._a2a_stream_buffers[context_id] = []
-            logger.debug(
-                "A2A streaming started: context_id=%s", context_id
-            )
+            logger.debug("A2A streaming started: context_id=%s", context_id)
         except Exception:
-            logger.debug(
-                "on_a2a_streaming_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_streaming_started error:\n%s", traceback.format_exc())
 
     def on_a2a_streaming_chunk(self, source: Any, event: Any) -> None:
         """
@@ -458,14 +447,10 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     self._a2a_stream_buffers[context_id] = buf
 
             if is_final:
-                logger.debug(
-                    "A2A streaming final chunk: context_id=%s", context_id
-                )
+                logger.debug("A2A streaming final chunk: context_id=%s", context_id)
 
         except Exception:
-            logger.debug(
-                "on_a2a_streaming_chunk error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_streaming_chunk error:\n%s", traceback.format_exc())
 
     def on_a2a_streaming_completed(self, source: Any, event: Any) -> None:
         """Write accumulated streaming chunks to the span."""
@@ -537,14 +522,10 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 except Exception:
                     pass
 
-            logger.debug(
-                "A2A polling started: context_id=%s", context_id
-            )
+            logger.debug("A2A polling started: context_id=%s", context_id)
 
         except Exception:
-            logger.debug(
-                "on_a2a_polling_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_polling_started error:\n%s", traceback.format_exc())
 
     def on_a2a_polling_status(self, source: Any, event: Any) -> None:
         """
@@ -600,9 +581,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     span.attributes.update(attrs)
 
         except Exception:
-            logger.debug(
-                "on_a2a_polling_status error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_polling_status error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # ARTIFACTS — received
@@ -640,7 +619,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             mime_type = safe_getattr(event, "mime_type") or safe_getattr(
                 event, "content_type"
             )
-            size_bytes = safe_getattr(event, "size_bytes") or safe_getattr(event, "size")
+            size_bytes = safe_getattr(event, "size_bytes") or safe_getattr(
+                event, "size"
+            )
             artifact_id = safe_getattr(event, "artifact_id") or safe_getattr(
                 event, "id"
             )
@@ -676,9 +657,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_artifact_received error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_artifact_received error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # SERVER TASK — MCP server-side task within A2A context
@@ -712,9 +691,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
             task_name = safe_getattr(event, "task_name") or safe_getattr(event, "name")
             task_input = safe_getattr(event, "input")
-            task_result = safe_getattr(event, "result") or safe_getattr(
-                event, "output"
-            )
+            task_result = safe_getattr(event, "result") or safe_getattr(event, "output")
             task_status = safe_getattr(event, "status") or "unknown"
 
             attrs: dict[str, Any] = {}
@@ -741,9 +718,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     span.attributes.update(attrs)
 
         except Exception:
-            logger.debug(
-                "on_a2a_server_task error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_server_task error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # CONTEXT — updated / shared
@@ -790,9 +765,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     span.attributes.update(attrs)
 
         except Exception:
-            logger.debug(
-                "on_a2a_context_updated error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_context_updated error:\n%s", traceback.format_exc())
 
     def on_a2a_context_shared(self, source: Any, event: Any) -> None:
         """Record context shared between agents."""
@@ -833,9 +806,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     span.attributes.update(attrs)
 
         except Exception:
-            logger.debug(
-                "on_a2a_context_shared error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_context_shared error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # ERROR HANDLING — authentication / connection
@@ -876,7 +847,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
             attrs: dict[str, Any] = {}
             if error_msg:
-                attrs["a2a.auth_error"] = truncate_str(str(error_msg), MAX_DESCRIPTION_LENGTH)
+                attrs["a2a.auth_error"] = truncate_str(
+                    str(error_msg), MAX_DESCRIPTION_LENGTH
+                )
             if auth_method:
                 attrs["a2a.auth_method"] = str(auth_method)
             if auth_server:
@@ -901,9 +874,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_auth_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_auth_failed error:\n%s", traceback.format_exc())
 
     def on_a2a_connection_error(self, source: Any, event: Any) -> None:
         """
@@ -971,9 +942,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
         except Exception:
-            logger.debug(
-                "on_a2a_connection_error error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_a2a_connection_error error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Internal helpers
@@ -1001,7 +970,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             buf = self._a2a_stream_buffers.pop(context_id, None)
 
         if entry is None:
-            logger.debug("_finish_a2a_span: no open entry for context_id=%s", context_id)
+            logger.debug(
+                "_finish_a2a_span: no open entry for context_id=%s", context_id
+            )
             return
 
         span = entry.get("span")
@@ -1018,12 +989,30 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         if extra_attrs:
             attrs.update(extra_attrs)
 
+        # Persist any buffered message / streaming chunks (see on_a2a_message_*,
+        # on_a2a_streaming_chunk). Buffer is cleared under the lock above.
+        if buf:
+            attrs["a2a.messages"] = truncate_str(
+                safe_json_dumps(buf),
+                MAX_TEXT_LENGTH,
+            )
+            streaming_content = "".join(
+                item if isinstance(item, str) else str(item.get("content", ""))
+                for item in buf
+            )
+            if streaming_content:
+                attrs["a2a.streaming_content"] = truncate_str(
+                    streaming_content,
+                    MAX_TEXT_LENGTH,
+                )
+
         # Error details
         if status == ATTR_STATUS_ERROR and error:
             attrs[ATTR_ERROR_TYPE] = type(error).__name__
             attrs[ATTR_ERROR_MESSAGE] = truncate_str(str(error), MAX_DESCRIPTION_LENGTH)
             if hasattr(error, "__traceback__"):
                 import traceback as tb_module
+
                 attrs[ATTR_ERROR_STACKTRACE] = truncate_str(
                     "".join(tb_module.format_tb(error.__traceback__)),
                     MAX_TEXT_LENGTH,
@@ -1086,10 +1075,7 @@ def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
 
 def _resolve_task_id(source: Any, event: Any) -> Optional[str]:
     """Extract task ID from context."""
-    task_id = (
-        safe_getattr(event, "task_id")
-        or safe_getattr(source, "task_id")
-    )
+    task_id = safe_getattr(event, "task_id") or safe_getattr(source, "task_id")
     return str(task_id) if task_id else None
 
 
@@ -1101,9 +1087,7 @@ def _build_a2a_delegation_start_attributes(
         ATTR_A2A_CONTEXT_ID: context_id,
     }
 
-    delegating = safe_getattr(event, "delegating_agent") or safe_getattr(
-        source, "role"
-    )
+    delegating = safe_getattr(event, "delegating_agent") or safe_getattr(source, "role")
     if delegating:
         attrs[ATTR_A2A_DELEGATING_AGENT] = str(delegating)
 
@@ -1117,9 +1101,7 @@ def _build_a2a_delegation_start_attributes(
     if endpoint:
         attrs["a2a.endpoint"] = str(endpoint)
 
-    task_desc = safe_getattr(event, "task_description") or safe_getattr(
-        event, "task"
-    )
+    task_desc = safe_getattr(event, "task_description") or safe_getattr(event, "task")
     if task_desc:
         attrs["a2a.task_description"] = truncate_str(
             str(task_desc), MAX_DESCRIPTION_LENGTH
@@ -1160,4 +1142,3 @@ def _build_a2a_conversation_start_attributes(
             pass
 
     return attrs
- 

@@ -49,8 +49,8 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_ERROR_STACKTRACE,
     ATTR_ERROR_TYPE,
     ATTR_MEMORY_DURATION_MS,
-    ATTR_MEMORY_OPERATION,
     ATTR_MEMORY_OP_ID,
+    ATTR_MEMORY_OPERATION,
     ATTR_MEMORY_QUERY,
     ATTR_MEMORY_RESULT_COUNT,
     ATTR_MEMORY_STATUS,
@@ -58,7 +58,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     MAX_DESCRIPTION_LENGTH,
-    MAX_TEXT_LENGTH,
     SPAN_MEMORY_OP,
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
@@ -130,16 +129,14 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 ATTR_MEMORY_OPERATION: _OP_RETRIEVAL,
             }
 
-            agent_role = (
-                safe_getattr(event, "agent_role")
-                or safe_getattr(source, "role")
+            agent_role = safe_getattr(event, "agent_role") or safe_getattr(
+                source, "role"
             )
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-            task_id = (
-                safe_getattr(event, "task_id")
-                or safe_getattr(safe_getattr(source, "task"), "id")
+            task_id = safe_getattr(event, "task_id") or safe_getattr(
+                safe_getattr(source, "task"), "id"
             )
             if task_id:
                 attrs["task.id"] = str(task_id)
@@ -157,7 +154,8 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             self._open_knowledge_span(op_id, agent_id, attrs)
             logger.debug(
                 "Knowledge retrieval span opened: op_id=%s agent_id=%s",
-                op_id, agent_id,
+                op_id,
+                agent_id,
             )
         except Exception:
             logger.debug(
@@ -190,9 +188,8 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             if results is not None:
                 _enrich_results(extra, results)
 
-            sources_used = (
-                safe_getattr(event, "sources_used")
-                or safe_getattr(event, "matched_sources")
+            sources_used = safe_getattr(event, "sources_used") or safe_getattr(
+                event, "matched_sources"
             )
             if sources_used is not None:
                 extra["knowledge.sources_used"] = truncate_str(
@@ -250,9 +247,8 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                     str(query), MAX_DESCRIPTION_LENGTH
                 )
 
-            sources = (
-                safe_getattr(event, "sources")
-                or safe_getattr(event, "knowledge_sources")
+            sources = safe_getattr(event, "sources") or safe_getattr(
+                event, "knowledge_sources"
             )
             if sources is not None:
                 attrs["knowledge.sources"] = truncate_str(
@@ -266,17 +262,14 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            agent_role = (
-                safe_getattr(event, "agent_role")
-                or safe_getattr(source, "role")
+            agent_role = safe_getattr(event, "agent_role") or safe_getattr(
+                source, "role"
             )
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
             self._open_knowledge_span(op_id, agent_id, attrs)
-            logger.debug(
-                "Knowledge query span opened: op_id=%s", op_id
-            )
+            logger.debug("Knowledge query span opened: op_id=%s", op_id)
         except Exception:
             logger.debug(
                 "on_knowledge_query_started error:\n%s", traceback.format_exc()
@@ -325,9 +318,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_knowledge_span(op_id, ATTR_STATUS_ERROR, error)
         except Exception:
-            logger.debug(
-                "on_knowledge_query_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_knowledge_query_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Search-query failure (search-layer variant)
@@ -360,20 +351,19 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 logger.debug(
                     "on_knowledge_search_query_failed: no open span "
                     "for op_id=%s agent_id=%s — error dropped",
-                    op_id, agent_id,
+                    op_id,
+                    agent_id,
                 )
                 return
 
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
-            error_str = str(error) if error else str(
-                safe_getattr(event, "message") or ""
+            error_str = (
+                str(error) if error else str(safe_getattr(event, "message") or "")
             )
 
             search_attrs: dict[str, Any] = {}
             if error_str:
-                search_attrs["knowledge.search_error"] = truncate_str(
-                    error_str, 1024
-                )
+                search_attrs["knowledge.search_error"] = truncate_str(error_str, 1024)
             if error is not None:
                 search_attrs["knowledge.search_error.type"] = type(error).__name__
                 tb = getattr(error, "__traceback__", None)
@@ -382,10 +372,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                         traceback.format_tb(tb)
                     )
 
-            query = (
-                safe_getattr(event, "query")
-                or safe_getattr(event, "search_query")
-            )
+            query = safe_getattr(event, "query") or safe_getattr(event, "search_query")
             if query:
                 search_attrs["knowledge.search_query"] = truncate_str(
                     str(query), MAX_DESCRIPTION_LENGTH
@@ -394,7 +381,8 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             _set_span_attributes(span, search_attrs)
             logger.debug(
                 "knowledge.search_error attached: op_id=%s agent_id=%s",
-                op_id, agent_id,
+                op_id,
+                agent_id,
             )
         except Exception:
             logger.debug(
@@ -441,9 +429,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 return span
         return None
 
-    def _get_knowledge_or_agent_span(
-        self, op_id: str, agent_id: Optional[str]
-    ) -> Any:
+    def _get_knowledge_or_agent_span(self, op_id: str, agent_id: Optional[str]) -> Any:
         """Return open knowledge span for *op_id*, else agent span."""
         with self._lock:
             span = self._memory_op_spans.get(op_id)
@@ -466,9 +452,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             start_t = self._memory_op_start_times.pop(op_id, None)
 
         if span is None:
-            logger.debug(
-                "_finish_knowledge_span: no open span for op_id=%s", op_id
-            )
+            logger.debug("_finish_knowledge_span: no open span for op_id=%s", op_id)
             return
 
         attrs: dict[str, Any] = {ATTR_MEMORY_STATUS: status}
@@ -495,6 +479,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
                 try:
                     from noveum_trace.core.span import SpanStatus
+
                     span.set_status(SpanStatus.ERROR, str(error) if error else "")
                 except Exception:
                     pass
@@ -507,9 +492,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "Knowledge span closed: op_id=%s status=%s", op_id, status
-        )
+        logger.debug("Knowledge span closed: op_id=%s status=%s", op_id, status)
 
 
 # =============================================================================
@@ -587,9 +570,8 @@ def _enrich_scores(attrs: dict[str, Any], results: Any) -> None:
             return
         scores = []
         for item in results:
-            score = (
-                safe_getattr(item, "score")
-                or (item.get("score") if isinstance(item, dict) else None)
+            score = safe_getattr(item, "score") or (
+                item.get("score") if isinstance(item, dict) else None
             )
             if score is not None:
                 try:

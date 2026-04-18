@@ -8,7 +8,7 @@ decorators; they can pause for human input and resume.
 Span hierarchy::
 
     crewai.flow                   ← one per Flow.kickoff() call
-      crewai.flow_method          ← one per @start / @listen / @router method
+      crewai.flow.method          ← one per @start / @listen / @router method
 
 Event families handled:
 
@@ -19,7 +19,7 @@ Event families handled:
   - ``on_flow_failed``                 → close as ERROR
 
   Method execution (per decorated method):
-  - ``on_method_execution_started``    → open ``crewai.flow_method`` child span;
+  - ``on_method_execution_started``    → open ``crewai.flow.method`` child span;
                                           capture method_name, flow_name,
                                           method_type (start/listen/router), params
   - ``on_method_execution_finished``   → close method span as SUCCESS; write output
@@ -35,8 +35,7 @@ Event families handled:
 
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown,
-    _flow_spans, _flow_method_spans,
-    _flow_start_times, _flow_method_spans (reuses _flow_method_spans key)
+    _flow_spans, _flow_method_spans, _flow_start_times
 """
 
 from __future__ import annotations
@@ -76,6 +75,8 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FINISH_TRACE_CLIENT_UNSPECIFIED = object()
 
 # Key used in _flow_method_spans: "{flow_id}::{method_name}::{method_id}"
 _METHOD_KEY_SEP = "::"
@@ -117,9 +118,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
             client = self._get_client()
             if client is None:
-                logger.debug(
-                    "NoveumCrewAIListener: no client — skipping flow trace"
-                )
+                logger.debug("NoveumCrewAIListener: no client — skipping flow trace")
                 return
 
             # Flows may run inside a Crew (nested) or standalone.
@@ -220,7 +219,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_method_execution_started(self, source: Any, event: Any) -> None:
         """
-        Open a ``crewai.flow_method`` child span for a single method execution.
+        Open a ``crewai.flow.method`` child span for a single method execution.
 
         Attributes set at span open
         ---------------------------
@@ -268,7 +267,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_method_execution_finished(self, source: Any, event: Any) -> None:
         """
-        Close the ``crewai.flow_method`` span as SUCCESS.
+        Close the ``crewai.flow.method`` span as SUCCESS.
 
         Attributes written
         ------------------
@@ -283,16 +282,14 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             method_id = _resolve_method_id(event)
             method_key = _make_method_key(flow_id, method_id)
             output = safe_getattr(event, "output") or safe_getattr(event, "result")
-            self._finish_method_span(
-                method_key, ATTR_STATUS_SUCCESS, output, None
-            )
+            self._finish_method_span(method_key, ATTR_STATUS_SUCCESS, output, None)
         except Exception:
             logger.debug(
                 "on_method_execution_finished error:\n%s", traceback.format_exc()
             )
 
     def on_method_execution_failed(self, source: Any, event: Any) -> None:
-        """Close the ``crewai.flow_method`` span as ERROR."""
+        """Close the ``crewai.flow.method`` span as ERROR."""
         if not self._is_active():
             return
         try:
@@ -403,9 +400,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
             _set_span_attributes(span, req_attrs)
         except Exception:
-            logger.debug(
-                "on_flow_input_requested error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_flow_input_requested error:\n%s", traceback.format_exc())
 
     def on_flow_input_received(self, source: Any, event: Any) -> None:
         """
@@ -438,9 +433,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
             _set_span_attributes(span, recv_attrs)
         except Exception:
-            logger.debug(
-                "on_flow_input_received error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_flow_input_received error:\n%s", traceback.format_exc())
 
     def on_human_feedback_requested(self, source: Any, event: Any) -> None:
         """
@@ -510,9 +503,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             recv_attrs: dict[str, Any] = {"flow.feedback_received": True}
             if feedback is not None:
                 raw = (
-                    feedback
-                    if isinstance(feedback, str)
-                    else safe_json_dumps(feedback)
+                    feedback if isinstance(feedback, str) else safe_json_dumps(feedback)
                 )
                 recv_attrs["flow.feedback"] = truncate_str(raw, 2048)
 
@@ -562,15 +553,19 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         status: str,
         error: Any,
         extra_attrs: Optional[dict[str, Any]] = None,
+        *,
+        finish_trace_client: Any = _FINISH_TRACE_CLIENT_UNSPECIFIED,
     ) -> None:
-        """Write final attributes onto the flow span and close it (+trace)."""
+        """Write final attributes onto the flow span and close it (+trace).
+
+        ``finish_trace_client`` overrides ``_get_client()`` for ``finish_trace``
+        (e.g. shutdown force-close when ``_is_shutdown`` is already true).
+        """
         with self._lock:
             entry = self._flow_spans.pop(flow_id, None)
 
         if entry is None:
-            logger.debug(
-                "_finish_flow_span: no open entry for flow_id=%s", flow_id
-            )
+            logger.debug("_finish_flow_span: no open entry for flow_id=%s", flow_id)
             return
 
         span = entry["span"]
@@ -594,6 +589,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
                 from noveum_trace.core.span import SpanStatus
+
                 span.set_status(SpanStatus.ERROR, str(error) if error else "")
             except Exception:
                 pass
@@ -610,7 +606,10 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         # Close standalone trace (nested flows share the crew trace)
         if trace is not None:
             try:
-                client = self._get_client()
+                if finish_trace_client is not _FINISH_TRACE_CLIENT_UNSPECIFIED:
+                    client = finish_trace_client
+                else:
+                    client = self._get_client()
                 if client and hasattr(client, "finish_trace"):
                     client.finish_trace(trace)
             except Exception:
@@ -619,9 +618,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                     traceback.format_exc(),
                 )
 
-        logger.debug(
-            "Flow span closed: flow_id=%s status=%s", flow_id, status
-        )
+        logger.debug("Flow span closed: flow_id=%s status=%s", flow_id, status)
 
     def _finish_method_span(
         self,
@@ -635,9 +632,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             entry = self._flow_method_spans.pop(method_key, None)
 
         if entry is None:
-            logger.debug(
-                "_finish_method_span: no open entry for key=%s", method_key
-            )
+            logger.debug("_finish_method_span: no open entry for key=%s", method_key)
             return
 
         span = entry["span"]
@@ -663,6 +658,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
                 from noveum_trace.core.span import SpanStatus
+
                 span.set_status(SpanStatus.ERROR, str(error) if error else "")
             except Exception:
                 pass
@@ -676,9 +672,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "Flow method span closed: key=%s status=%s", method_key, status
-        )
+        logger.debug("Flow method span closed: key=%s status=%s", method_key, status)
 
 
 # =============================================================================
@@ -754,7 +748,7 @@ def _build_flow_start_attributes(
 def _build_method_start_attributes(
     source: Any, event: Any, method_id: str
 ) -> dict[str, Any]:
-    """Collect span attributes for a ``crewai.flow_method`` span."""
+    """Collect span attributes for a ``crewai.flow.method`` span."""
     attrs: dict[str, Any] = {ATTR_FLOW_METHOD_ID: method_id}
 
     method_name = (

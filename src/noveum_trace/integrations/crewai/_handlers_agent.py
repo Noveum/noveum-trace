@@ -44,7 +44,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_AGENT_MAX_RPM,
     ATTR_AGENT_ROLE,
     ATTR_AGENT_STATUS,
-    ATTR_AGENT_STEP,
     ATTR_AGENT_TOOL_NAMES,
     ATTR_ERROR_MESSAGE,
     ATTR_ERROR_STACKTRACE,
@@ -63,7 +62,6 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     monotonic_now,
     safe_getattr,
     safe_json_dumps,
-    serialize_tool_schema,
     truncate_str,
 )
 
@@ -188,9 +186,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                 error=error,
             )
         except Exception:
-            logger.debug(
-                "on_agent_execution_error error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_agent_execution_error error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # LiteAgent — started / completed / error
@@ -227,9 +223,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                 error=None,
             )
         except Exception:
-            logger.debug(
-                "on_lite_agent_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_lite_agent_completed error:\n%s", traceback.format_exc())
 
     def on_lite_agent_error(self, source: Any, event: Any) -> None:
         """Close the LiteAgent span as ERROR."""
@@ -312,7 +306,9 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                 # May have already closed; best-effort attach to task/crew span
                 task_id = _resolve_task_id(source, event)
                 with self._lock:
-                    span = self._task_spans.get(task_id)
+                    span = (
+                        self._task_spans.get(task_id) if task_id is not None else None
+                    )
 
             if span is None:
                 return
@@ -344,9 +340,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                     },
                 )
         except Exception:
-            logger.debug(
-                "on_agent_evaluation_error error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_agent_evaluation_error error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Internal helpers
@@ -380,12 +374,12 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
             self._agent_spans[agent_id] = span
             self._agent_start_times[agent_id] = start_t
 
-        logger.debug(
-            "Agent span opened: agent_id=%s task_id=%s", agent_id, task_id
-        )
+        logger.debug("Agent span opened: agent_id=%s task_id=%s", agent_id, task_id)
 
-    def _get_agent_span(self, agent_id: str) -> Any:
+    def _get_agent_span(self, agent_id: Optional[str]) -> Any:
         """Return the open span for *agent_id*, or ``None``."""
+        if not agent_id:
+            return None
         with self._lock:
             return self._agent_spans.get(agent_id)
 
@@ -495,15 +489,15 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
         # Force-close any tool spans that never received a ToolUsageFinishedEvent
         # (common when the LLM issues multiple parallel tool calls in one batch).
         self._close_orphan_tool_spans(agent_id, status)
+        self._close_orphan_observation_spans(agent_id, status, error)
+        self._close_orphan_reasoning_spans(agent_id, status, error)
 
         with self._lock:
             span = self._agent_spans.pop(agent_id, None)
             start_t = self._agent_start_times.pop(agent_id, None)
 
         if span is None:
-            logger.debug(
-                "_finish_agent_span: no open span for agent_id=%s", agent_id
-            )
+            logger.debug("_finish_agent_span: no open span for agent_id=%s", agent_id)
             return
 
         attrs: dict[str, Any] = {ATTR_AGENT_STATUS: status}
@@ -545,9 +539,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "Agent span closed: agent_id=%s status=%s", agent_id, status
-        )
+        logger.debug("Agent span closed: agent_id=%s status=%s", agent_id, status)
 
 
 # =============================================================================
@@ -603,30 +595,24 @@ def _build_agent_attributes(
         attrs[ATTR_AGENT_ID] = agent_id
 
     for attr_name, span_key, max_len in (
-        ("role",      ATTR_AGENT_ROLE,      256),
-        ("goal",      ATTR_AGENT_GOAL,      MAX_DESCRIPTION_LENGTH),
+        ("role", ATTR_AGENT_ROLE, 256),
+        ("goal", ATTR_AGENT_GOAL, MAX_DESCRIPTION_LENGTH),
         ("backstory", ATTR_AGENT_BACKSTORY, MAX_DESCRIPTION_LENGTH),
     ):
-        val = (
-            safe_getattr(event, attr_name)
-            or safe_getattr(source, attr_name)
-        )
+        val = safe_getattr(event, attr_name) or safe_getattr(source, attr_name)
         if val:
             attrs[span_key] = truncate_str(str(val), max_len)
 
     # LLM model
-    model = (
-        safe_getattr(event, "llm_model")
-        or extract_llm_model_from_agent(source)
-    )
+    model = safe_getattr(event, "llm_model") or extract_llm_model_from_agent(source)
     if model:
         attrs[ATTR_AGENT_LLM_MODEL] = str(model)
 
     # Numeric / bool config
     for attr_name, span_key in (
         ("allow_delegation", ATTR_AGENT_ALLOW_DELEGATION),
-        ("max_iter",         ATTR_AGENT_MAX_ITER),
-        ("max_rpm",          ATTR_AGENT_MAX_RPM),
+        ("max_iter", ATTR_AGENT_MAX_ITER),
+        ("max_rpm", ATTR_AGENT_MAX_RPM),
     ):
         val = safe_getattr(source, attr_name)
         if val is None:
@@ -664,11 +650,7 @@ def _attach_tool_attributes(attrs: dict[str, Any], tools: Any) -> None:
         tool_list = tools if isinstance(tools, (list, tuple)) else [tools]
 
         # Compact name list
-        names = [
-            str(safe_getattr(t, "name") or t)
-            for t in tool_list
-            if t is not None
-        ]
+        names = [str(safe_getattr(t, "name") or t) for t in tool_list if t is not None]
         if names:
             attrs[ATTR_AGENT_TOOL_NAMES] = safe_json_dumps(names)
 

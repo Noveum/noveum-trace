@@ -30,8 +30,7 @@ the span falls back to the agent span as its parent so data is never lost.
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown,
     _llm_call_spans, _agent_spans,
-    _guardrail_spans (stored in _memory_op_spans under "grail::{guardrail_id}" keys),
-    _memory_op_start_times (reused for timing)
+    _guardrail_spans (``guardrail_id`` → ``{span, start_t}``)
 """
 
 from __future__ import annotations
@@ -64,9 +63,6 @@ logger = logging.getLogger(__name__)
 
 # Span name (internal — not in crewai_constants to keep public API lean)
 _SPAN_GUARDRAIL = "crewai.guardrail"
-
-# Namespace prefix for reusing _memory_op_spans dict
-_GRAIL_PREFIX = "grail::"
 
 
 class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
@@ -121,10 +117,8 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
                 attributes=attrs,
             )
 
-            key = _GRAIL_PREFIX + guardrail_id
             with self._lock:
-                self._memory_op_spans[key] = span
-                self._memory_op_start_times[key] = start_t
+                self._guardrail_spans[guardrail_id] = {"span": span, "start_t": start_t}
 
             logger.debug(
                 "Guardrail span opened: guardrail_id=%s call_id=%s retry=%s",
@@ -133,9 +127,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
                 attrs.get("guardrail.retry_count", 0),
             )
         except Exception:
-            logger.debug(
-                "on_llm_guardrail_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_llm_guardrail_started error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Guardrail completed (validation ran — may pass or fail validation)
@@ -168,12 +160,12 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
 
             validation_success = safe_getattr(event, "validation_success")
             if validation_success is None:
-                # Infer from 'passed', 'accepted', 'valid' variants
-                validation_success = (
-                    safe_getattr(event, "passed")
-                    or safe_getattr(event, "accepted")
-                    or safe_getattr(event, "valid")
-                )
+                # First non-None among legacy flags (``or`` would skip explicit False).
+                for alt_attr in ("passed", "accepted", "valid"):
+                    alt_val = safe_getattr(event, alt_attr)
+                    if alt_val is not None:
+                        validation_success = alt_val
+                        break
             if validation_success is not None:
                 extra["guardrail.validation_success"] = bool(validation_success)
 
@@ -181,9 +173,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
             if retry_count is not None:
                 extra["guardrail.retry_count"] = retry_count
 
-            results = safe_getattr(event, "results") or safe_getattr(
-                event, "checks"
-            )
+            results = safe_getattr(event, "results") or safe_getattr(event, "checks")
             if results is not None:
                 extra["guardrail.results"] = truncate_str(
                     safe_json_dumps(results), MAX_TEXT_LENGTH
@@ -203,13 +193,9 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
                 or safe_getattr(event, "accepted_output")
             )
             if output:
-                extra["guardrail.output"] = truncate_str(
-                    str(output), MAX_TEXT_LENGTH
-                )
+                extra["guardrail.output"] = truncate_str(str(output), MAX_TEXT_LENGTH)
 
-            self._finish_guardrail_span(
-                guardrail_id, ATTR_STATUS_SUCCESS, None, extra
-            )
+            self._finish_guardrail_span(guardrail_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
             logger.debug(
                 "on_llm_guardrail_completed error:\n%s", traceback.format_exc()
@@ -249,9 +235,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
 
             self._finish_guardrail_span(guardrail_id, ATTR_STATUS_ERROR, error, extra)
         except Exception:
-            logger.debug(
-                "on_llm_guardrail_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_llm_guardrail_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Internal helpers
@@ -278,10 +262,10 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
         extra_attrs: Optional[dict[str, Any]] = None,
     ) -> None:
         """Write final attributes onto the guardrail span and close it."""
-        key = _GRAIL_PREFIX + guardrail_id
         with self._lock:
-            span = self._memory_op_spans.pop(key, None)
-            start_t = self._memory_op_start_times.pop(key, None)
+            entry = self._guardrail_spans.pop(guardrail_id, None)
+        span = entry.get("span") if entry else None
+        start_t = entry.get("start_t") if entry else None
 
         if span is None:
             logger.debug(
@@ -314,6 +298,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
             if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
                 try:
                     from noveum_trace.core.span import SpanStatus
+
                     span.set_status(SpanStatus.ERROR, str(error) if error else "")
                 except Exception:
                     pass
@@ -330,7 +315,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
             "Guardrail span closed: guardrail_id=%s status=%s validation=%s",
             guardrail_id,
             status,
-            extra_attrs.get("guardrail.validation_success", "?") if extra_attrs else "?",
+            attrs.get("guardrail.validation_success", "?"),
         )
 
 
@@ -412,9 +397,8 @@ def _build_guardrail_start_attributes(
     if gtype:
         attrs["guardrail.type"] = str(gtype)
 
-    description = (
-        safe_getattr(event, "description")
-        or safe_getattr(source, "description")
+    description = safe_getattr(event, "description") or safe_getattr(
+        source, "description"
     )
     if description:
         attrs["guardrail.description"] = truncate_str(
@@ -424,7 +408,7 @@ def _build_guardrail_start_attributes(
     # The LLM output being validated
     input_text = (
         safe_getattr(event, "input")
-        or safe_getattr(event, "output")          # CrewAI names it 'output' from LLM POV
+        or safe_getattr(event, "output")  # CrewAI names it 'output' from LLM POV
         or safe_getattr(event, "llm_output")
         or safe_getattr(event, "text")
     )
@@ -456,10 +440,7 @@ def _build_guardrail_start_attributes(
         attrs[ATTR_LLM_CALL_ID] = call_id
 
     # Agent correlation
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 

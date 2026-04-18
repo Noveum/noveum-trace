@@ -78,7 +78,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     DEFAULT_LLM_MODEL,
-    DEFAULT_LLM_PROVIDER,
     MAX_SYSTEM_PROMPT_LENGTH,
     MAX_TEXT_LENGTH,
     SPAN_LLM,
@@ -120,7 +119,11 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_llm_call_started(self, source: Any, event: Any) -> None:
         """
-        Open a ``crewai.llm`` child span under the owning agent span.
+        Open a ``crewai.llm`` child span under the owning agent or task span.
+
+        Parent resolution prefers agent → task → explicit crew (via ``task_id`` /
+        ``_task_to_crew_id`` and :meth:`_create_child_span` hints), not dict order
+        of open crews.
 
         Attributes set at span open
         ---------------------------
@@ -136,6 +139,10 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         - ``task.name``              — name/description of the current task
         - ``llm.streaming``          — bool, True when streaming mode detected
 
+        Message / tool payload on the span respects ``capture_llm_messages`` and
+        ``capture_tool_schemas``. Stream and thinking buffers are only allocated
+        when ``capture_streaming`` / ``capture_thinking`` are enabled.
+
         Note: ``llm.call_type`` is intentionally NOT set here — it is only
         available on the completed event and is written there instead.
         """
@@ -145,24 +152,36 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             call_id = _resolve_call_id(event)
             agent_id = _resolve_agent_id(source, event)
             crew_id = _resolve_crew_id(source, event)
+            task_id = _resolve_task_id(source, event)
 
-            # CrewAI events carry no crew_id — fall back to the active crew when
-            # there is exactly one, or the most-recently started one otherwise.
-            if not crew_id:
+            # Prefer task→crew mapping (populated at kickoff) over guessing from
+            # dict iteration order when multiple crews overlap.
+            if not crew_id and task_id:
                 with self._lock:
-                    if self._crew_spans:
-                        crew_id = next(reversed(self._crew_spans))
+                    mapped = self._task_to_crew_id.get(str(task_id))
+                if mapped:
+                    crew_id = mapped
 
-            attrs = _build_llm_start_attributes(source, event, call_id)
+            attrs = _build_llm_start_attributes(
+                source,
+                event,
+                call_id,
+                capture_llm_messages=self.capture_llm_messages,
+                capture_tool_schemas=self.capture_tool_schemas,
+            )
             start_t = monotonic_now()
 
-            # Parent: agent span (most common), else crew span, else None
-            parent_span = self._get_agent_or_crew_span(agent_id, crew_id)
+            # Parent: agent span, else task span, else crew root (never "most recent")
+            parent_span = self._get_agent_or_task_span(agent_id, task_id)
+            if parent_span is None and crew_id:
+                parent_span = self._get_crew_span(crew_id)
 
             span = self._create_child_span(
                 SPAN_LLM,
                 parent_span=parent_span,
                 attributes=attrs,
+                crew_id=crew_id,
+                task_id=task_id,
             )
 
             with self._lock:
@@ -170,15 +189,16 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
                     "span": span,
                     "crew_id": crew_id,
                     "agent_id": agent_id,
+                    "task_id": task_id,
                 }
                 self._llm_call_start_times[call_id] = start_t
-                # Pre-initialise stream / thinking buffers
-                self._llm_stream_chunks.setdefault(call_id, [])
-                self._llm_thinking_chunks.setdefault(call_id, [])
+                # Pre-initialise buffers only when the corresponding capture flag is on
+                if self.capture_streaming:
+                    self._llm_stream_chunks.setdefault(call_id, [])
+                if self.capture_thinking:
+                    self._llm_thinking_chunks.setdefault(call_id, [])
 
-            logger.debug(
-                "LLM span opened: call_id=%s agent_id=%s", call_id, agent_id
-            )
+            logger.debug("LLM span opened: call_id=%s agent_id=%s", call_id, agent_id)
 
         except Exception:
             logger.debug("on_llm_call_started error:\n%s", traceback.format_exc())
@@ -194,8 +214,12 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         The buffer is joined and written to ``llm.streaming_response`` when the
         call completes.  Buffering is bounded by MAX_TEXT_LENGTH total chars;
         excess chunks are silently dropped to prevent unbounded memory growth.
+
+        No-op when ``capture_streaming`` is ``False``.
         """
         if not self._is_active():
+            return
+        if not self.capture_streaming:
             return
         try:
             call_id = _resolve_call_id(event)
@@ -230,8 +254,12 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         Supports Anthropic Claude extended thinking, o1-series reasoning tokens,
         and any provider that emits thinking tokens separately from the response.
         The accumulated buffer is written to ``llm.thinking_text`` on completion.
+
+        No-op when ``capture_thinking`` is ``False``.
         """
         if not self._is_active():
+            return
+        if not self.capture_thinking:
             return
         try:
             call_id = _resolve_call_id(event)
@@ -252,9 +280,7 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
                     buf.append(chunk_str)
 
         except Exception:
-            logger.debug(
-                "on_llm_thinking_chunk error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_llm_thinking_chunk error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # LLM call completed
@@ -295,9 +321,7 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
                 error=None,
             )
         except Exception:
-            logger.debug(
-                "on_llm_call_completed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_llm_call_completed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # LLM call failed
@@ -333,8 +357,8 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
     # =========================================================================
 
     def _get_agent_or_crew_span(
-        self, agent_id: Optional[str], crew_id: Optional[str]
-    ) -> Any:
+        self, agent_id: Optional[str], crew_id: Optional[str] = None
+    ) -> Optional[Any]:
         """Return the best available parent span: agent → crew → None."""
         with self._lock:
             if agent_id and agent_id in self._agent_spans:
@@ -368,13 +392,16 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             ).pop(call_id, {})
 
         if entry is None:
-            logger.debug(
-                "_finish_llm_span: no open entry for call_id=%s", call_id
-            )
+            logger.debug("_finish_llm_span: no open entry for call_id=%s", call_id)
             return
 
         span = entry["span"]
         crew_id: Optional[str] = entry.get("crew_id")
+        if not crew_id:
+            task_id_fin = entry.get("task_id")
+            if task_id_fin:
+                with self._lock:
+                    crew_id = self._task_to_crew_id.get(str(task_id_fin))
 
         attrs: dict[str, Any] = {}
 
@@ -387,7 +414,11 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         if call_type:
             # Use .name to get bare "TOOL_CALL" / "LLM_CALL" instead of
             # the full enum repr "LLMCallType.TOOL_CALL".
-            ct_str = getattr(call_type, "name", None) or getattr(call_type, "value", None) or str(call_type)
+            ct_str = (
+                getattr(call_type, "name", None)
+                or getattr(call_type, "value", None)
+                or str(call_type)
+            )
             attrs["llm.call_type"] = ct_str
 
         # --- Response text ---------------------------------------------------
@@ -397,22 +428,21 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             if resp_text:
                 attrs[ATTR_LLM_OUTPUT_TEXT] = truncate_str(resp_text, MAX_TEXT_LENGTH)
 
-        finish_reason = (
-            safe_getattr(event, "finish_reason")
-            or _extract_finish_reason_from_response(response_obj)
-        )
+        finish_reason = safe_getattr(
+            event, "finish_reason"
+        ) or _extract_finish_reason_from_response(response_obj)
         if finish_reason:
             attrs[ATTR_LLM_FINISH_REASON] = str(finish_reason)
 
         # --- Streaming text --------------------------------------------------
-        if stream_chunks:
+        if stream_chunks and self.capture_streaming:
             attrs["llm.streaming_response"] = truncate_str(
                 "".join(stream_chunks), MAX_TEXT_LENGTH
             )
             attrs[ATTR_LLM_STREAMING] = True
 
         # --- Thinking text ---------------------------------------------------
-        if thinking_chunks:
+        if thinking_chunks and self.capture_thinking:
             attrs[ATTR_LLM_THINKING_TEXT] = truncate_str(
                 "".join(thinking_chunks), MAX_TEXT_LENGTH
             )
@@ -431,26 +461,28 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             if isinstance(event_usage, dict) and event_usage:
                 token_usage = {
                     "input_tokens": event_usage.get("input_tokens")
-                        or event_usage.get("prompt_tokens")
-                        or event_usage.get("prompt_token_count"),
+                    or event_usage.get("prompt_tokens")
+                    or event_usage.get("prompt_token_count"),
                     "output_tokens": event_usage.get("output_tokens")
-                        or event_usage.get("completion_tokens")
-                        or event_usage.get("candidates_token_count"),
+                    or event_usage.get("completion_tokens")
+                    or event_usage.get("candidates_token_count"),
                     "total_tokens": event_usage.get("total_tokens")
-                        or event_usage.get("total_token_count"),
+                    or event_usage.get("total_token_count"),
                     "cache_read_tokens": event_usage.get("cached_tokens")
-                        or event_usage.get("cached_prompt_tokens")
-                        or event_usage.get("cache_read_input_tokens"),
-                    "cache_creation_tokens": event_usage.get("cache_creation_input_tokens"),
+                    or event_usage.get("cached_prompt_tokens")
+                    or event_usage.get("cache_read_input_tokens"),
+                    "cache_creation_tokens": event_usage.get(
+                        "cache_creation_input_tokens"
+                    ),
                     "reasoning_tokens": event_usage.get("reasoning_tokens"),
                 }
             elif monkey_usage:
                 # Monkey-patch buffer (_track_token_usage_internal intercept)
                 token_usage = {
                     "input_tokens": monkey_usage.get("input_tokens")
-                        or monkey_usage.get("prompt_tokens"),
+                    or monkey_usage.get("prompt_tokens"),
                     "output_tokens": monkey_usage.get("output_tokens")
-                        or monkey_usage.get("completion_tokens"),
+                    or monkey_usage.get("completion_tokens"),
                     "total_tokens": monkey_usage.get("total_tokens"),
                     "cache_read_tokens": monkey_usage.get("cache_read_tokens"),
                     "cache_creation_tokens": monkey_usage.get("cache_creation_tokens"),
@@ -460,9 +492,9 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
                 # Last resort: top-level event fields
                 token_usage = {
                     "input_tokens": safe_getattr(event, "prompt_tokens")
-                        or safe_getattr(event, "input_tokens"),
+                    or safe_getattr(event, "input_tokens"),
                     "output_tokens": safe_getattr(event, "completion_tokens")
-                        or safe_getattr(event, "output_tokens"),
+                    or safe_getattr(event, "output_tokens"),
                     "total_tokens": safe_getattr(event, "total_tokens"),
                 }
 
@@ -475,7 +507,11 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         output_tokens: Optional[int] = _to_int(token_usage.get("output_tokens"))
         total_tokens: Optional[int] = _to_int(token_usage.get("total_tokens"))
 
-        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        if (
+            total_tokens is None
+            and input_tokens is not None
+            and output_tokens is not None
+        ):
             total_tokens = input_tokens + output_tokens
 
         if input_tokens is not None:
@@ -486,19 +522,18 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             attrs[ATTR_LLM_TOTAL_TOKENS] = total_tokens
 
         # --- Provider token extras (Anthropic cache, OpenAI reasoning) --------
-        _extract_provider_token_extras(attrs, token_usage, response_obj,
-                                       monkey_usage)
+        _extract_provider_token_extras(attrs, token_usage, response_obj, monkey_usage)
 
         # --- Cost ------------------------------------------------------------
         _span_attrs = getattr(span, "attributes", None) or {}
         model = (
-            _span_attrs.get(ATTR_LLM_MODEL) if isinstance(_span_attrs, dict) else None
-        ) or safe_getattr(event, "model") or DEFAULT_LLM_MODEL
+            (_span_attrs.get(ATTR_LLM_MODEL) if isinstance(_span_attrs, dict) else None)
+            or safe_getattr(event, "model")
+            or DEFAULT_LLM_MODEL
+        )
         cost_info: dict[str, Any] = {}
         if model and (input_tokens or output_tokens):
-            cost_info = calculate_llm_cost(
-                str(model), input_tokens, output_tokens
-            )
+            cost_info = calculate_llm_cost(str(model), input_tokens, output_tokens)
         if cost_info:
             attrs[ATTR_LLM_COST_INPUT] = cost_info.get("input", 0.0)
             attrs[ATTR_LLM_COST_OUTPUT] = cost_info.get("output", 0.0)
@@ -523,6 +558,7 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
                 from noveum_trace.core.span import SpanStatus
+
                 span.set_status(SpanStatus.ERROR, str(error) if error else "")
             except Exception:
                 pass
@@ -583,14 +619,38 @@ def _resolve_crew_id(source: Any, event: Any) -> Optional[str]:
     return str(raw) if raw is not None else None
 
 
+def _resolve_task_id(source: Any, event: Any) -> Optional[str]:
+    """Return the task_id for this LLM event, or ``None``.
+
+    Aligns with :func:`noveum_trace.integrations.crewai._handlers_agent._resolve_task_id`
+    so LLM calls opened from an agent still resolve ``event.task.id`` when
+    ``event.task_id`` is unset.
+    """
+    raw = (
+        safe_getattr(event, "task_id")
+        or safe_getattr(safe_getattr(event, "task"), "id")
+        or safe_getattr(source, "task_id")
+        or safe_getattr(safe_getattr(source, "task"), "id")
+    )
+    return str(raw) if raw is not None else None
+
+
 def _build_llm_start_attributes(
-    source: Any, event: Any, call_id: str
+    source: Any,
+    event: Any,
+    call_id: str,
+    *,
+    capture_llm_messages: bool = True,
+    capture_tool_schemas: bool = True,
 ) -> dict[str, Any]:
     """
     Build the full set of span attributes for an LLM call start event.
 
     Note: ``call_type`` is intentionally absent — it is not available until
     the completed event fires.
+
+    ``capture_llm_messages`` / ``capture_tool_schemas`` mirror listener flags so
+    prompts, message bodies, and tool definitions can be omitted when disabled.
     """
     attrs: dict[str, Any] = {ATTR_LLM_CALL_ID: call_id}
 
@@ -607,63 +667,64 @@ def _build_llm_start_attributes(
     if provider:
         attrs[ATTR_LLM_PROVIDER] = provider
 
-    # --- Messages -----------------------------------------------------------
     _event_inputs = safe_getattr(event, "inputs")
-    messages = (
-        safe_getattr(event, "messages")
-        or (_event_inputs.get("messages") if isinstance(_event_inputs, dict) else None)
-    )
 
-    if messages:
-        # System prompt — extracted separately for discoverability
-        system_prompt = extract_system_prompt(messages)
-        if system_prompt:
-            attrs[ATTR_LLM_SYSTEM_PROMPT] = truncate_str(
-                system_prompt, MAX_SYSTEM_PROMPT_LENGTH
-            )
+    # --- Messages -----------------------------------------------------------
+    if capture_llm_messages:
+        messages = safe_getattr(event, "messages") or (
+            _event_inputs.get("messages") if isinstance(_event_inputs, dict) else None
+        )
 
-        # Full messages serialized to JSON
-        msgs_json = messages_to_json(messages)
-        if msgs_json:
-            attrs[ATTR_LLM_INPUT_MESSAGES] = msgs_json
+        if messages:
+            # System prompt — extracted separately for discoverability
+            system_prompt = extract_system_prompt(messages)
+            if system_prompt:
+                attrs[ATTR_LLM_SYSTEM_PROMPT] = truncate_str(
+                    system_prompt, MAX_SYSTEM_PROMPT_LENGTH
+                )
+
+            # Full messages serialized to JSON
+            msgs_json = messages_to_json(messages)
+            if msgs_json:
+                attrs[ATTR_LLM_INPUT_MESSAGES] = msgs_json
 
     # --- Tools / functions --------------------------------------------------
-    # CrewAI often puts ``tools`` on ``event.inputs`` when ``source`` is the LLM
-    # object (no ``.tools``), matching how ``messages`` may appear only in inputs.
-    tools = safe_getattr(event, "tools") or safe_getattr(source, "tools")
-    if not tools and isinstance(_event_inputs, dict):
-        tools = _event_inputs.get("tools")
-    if tools:
-        tool_json = serialize_tool_schema(tools)
-        if tool_json:
-            attrs[ATTR_LLM_TOOLS] = tool_json
-        merge_available_tools_attributes(attrs, tools, "llm")
+    if capture_tool_schemas:
+        # CrewAI often puts ``tools`` on ``event.inputs`` when ``source`` is the LLM
+        # object (no ``.tools``), matching how ``messages`` may appear only in inputs.
+        tools = safe_getattr(event, "tools") or safe_getattr(source, "tools")
+        if not tools and isinstance(_event_inputs, dict):
+            tools = _event_inputs.get("tools")
+        if tools:
+            tool_json = serialize_tool_schema(tools)
+            if tool_json:
+                attrs[ATTR_LLM_TOOLS] = tool_json
+            merge_available_tools_attributes(attrs, tools, "llm")
 
-    available_functions = safe_getattr(event, "available_functions") or safe_getattr(
-        event, "functions"
-    )
-    if not available_functions and isinstance(_event_inputs, dict):
-        available_functions = _event_inputs.get("available_functions") or _event_inputs.get(
-            "functions"
-        )
-    if available_functions:
-        try:
-            if isinstance(available_functions, (list, tuple)):
-                fn_names = []
-                for fn in available_functions:
-                    name = safe_getattr(fn, "name") or (fn if isinstance(fn, str) else str(fn))
-                    fn_names.append(name)
-                attrs["llm.available_functions"] = safe_json_dumps(fn_names)
-            else:
-                attrs["llm.available_functions"] = str(available_functions)
-        except Exception:
-            pass
+        available_functions = safe_getattr(
+            event, "available_functions"
+        ) or safe_getattr(event, "functions")
+        if not available_functions and isinstance(_event_inputs, dict):
+            available_functions = _event_inputs.get(
+                "available_functions"
+            ) or _event_inputs.get("functions")
+        if available_functions:
+            try:
+                if isinstance(available_functions, (list, tuple)):
+                    fn_names = []
+                    for fn in available_functions:
+                        name = safe_getattr(fn, "name") or (
+                            fn if isinstance(fn, str) else str(fn)
+                        )
+                        fn_names.append(name)
+                    attrs["llm.available_functions"] = safe_json_dumps(fn_names)
+                else:
+                    attrs["llm.available_functions"] = str(available_functions)
+            except Exception:
+                pass
 
     # --- Agent / task correlation -------------------------------------------
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
@@ -709,14 +770,24 @@ def _build_llm_start_attributes(
             val = safe_getattr(source, obj_attr)
         if val is None:
             # Last-resort: some providers store config in a kwargs dict
-            for kw_attr in ("litellm_kwargs", "llm_kwargs", "extra_kwargs", "model_kwargs"):
+            for kw_attr in (
+                "litellm_kwargs",
+                "llm_kwargs",
+                "extra_kwargs",
+                "model_kwargs",
+            ):
                 kw = safe_getattr(llm_obj, kw_attr) or safe_getattr(source, kw_attr)
                 if isinstance(kw, dict) and obj_attr in kw:
                     val = kw[obj_attr]
                     break
         if val is not None:
             attrs[span_attr] = val
-            logger.debug("LLM param captured: %s=%r (source=%s)", span_attr, val, type(source).__name__)
+            logger.debug(
+                "LLM param captured: %s=%r (source=%s)",
+                span_attr,
+                val,
+                type(source).__name__,
+            )
 
     return attrs
 
@@ -856,14 +927,20 @@ def _extract_provider_token_extras(
     - OpenAI o-series reasoning_tokens (inside completion_tokens_details)
     """
     # --- Anthropic cache tokens ------------------------------------------
-    _resp_usage = safe_getattr(response_obj, "usage") if response_obj is not None else None
+    _resp_usage = (
+        safe_getattr(response_obj, "usage") if response_obj is not None else None
+    )
 
     cache_read = (
         token_usage.get("cache_read_tokens")
         or token_usage.get("cache_read_input_tokens")
         or monkey_usage.get("cache_read_tokens")
         or monkey_usage.get("cache_read_input_tokens")
-        or (safe_getattr(_resp_usage, "cache_read_input_tokens") if _resp_usage is not None else None)
+        or (
+            safe_getattr(_resp_usage, "cache_read_input_tokens")
+            if _resp_usage is not None
+            else None
+        )
     )
     if cache_read is not None:
         val = _to_int(cache_read)
@@ -875,7 +952,11 @@ def _extract_provider_token_extras(
         or token_usage.get("cache_creation_input_tokens")
         or monkey_usage.get("cache_creation_tokens")
         or monkey_usage.get("cache_creation_input_tokens")
-        or (safe_getattr(_resp_usage, "cache_creation_input_tokens") if _resp_usage is not None else None)
+        or (
+            safe_getattr(_resp_usage, "cache_creation_input_tokens")
+            if _resp_usage is not None
+            else None
+        )
     )
     if cache_creation is not None:
         val = _to_int(cache_creation)
@@ -883,9 +964,8 @@ def _extract_provider_token_extras(
             attrs[ATTR_LLM_CACHE_CREATION_TOKENS] = val
 
     # --- OpenAI reasoning tokens (o1 / o3 series) ------------------------
-    reasoning = (
-        token_usage.get("reasoning_tokens")
-        or monkey_usage.get("reasoning_tokens")
+    reasoning = token_usage.get("reasoning_tokens") or monkey_usage.get(
+        "reasoning_tokens"
     )
     if reasoning is None and response_obj is not None:
         # OpenAI: response.usage.completion_tokens_details.reasoning_tokens

@@ -23,19 +23,17 @@ Coverage
 
 from __future__ import annotations
 
-import threading
-import time
-from collections import OrderedDict
-from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 # ---------------------------------------------------------------------------
 # Ensure we can import from src/
 # ---------------------------------------------------------------------------
 import sys
+import threading
+import time
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 _src = Path(__file__).parents[3] / "src"
 if str(_src) not in sys.path:
@@ -46,6 +44,7 @@ if str(_src) not in sys.path:
 # Helpers — mock Noveum objects
 # ---------------------------------------------------------------------------
 
+
 def _make_span(span_id: str = "span-1", trace_id: str = "trace-1") -> MagicMock:
     """Return a minimal mock Span."""
     span = MagicMock()
@@ -53,7 +52,9 @@ def _make_span(span_id: str = "span-1", trace_id: str = "trace-1") -> MagicMock:
     span.trace_id = trace_id
     span.attributes = {}
     span.finish = MagicMock()
-    span.set_attribute = MagicMock(side_effect=lambda k, v: span.attributes.update({k: v}))
+    span.set_attribute = MagicMock(
+        side_effect=lambda k, v: span.attributes.update({k: v})
+    )
     return span
 
 
@@ -63,7 +64,9 @@ def _make_trace(trace_id: str = "trace-1") -> MagicMock:
     trace.trace_id = trace_id
     trace.finish = MagicMock()
 
-    def _create_span(name: str, parent_span_id: Any = None, attributes: Any = None, **kw):
+    def _create_span(
+        name: str, parent_span_id: Any = None, attributes: Any = None, **kw
+    ):
         span = _make_span(trace_id=trace_id)
         if attributes:
             span.attributes.update(dict(attributes))
@@ -86,6 +89,7 @@ def _make_client(trace_id: str = "trace-1") -> MagicMock:
 def _make_listener(client: Any = None, **kwargs) -> Any:
     """Instantiate NoveumCrewAIListener with a mocked client."""
     from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+
     return NoveumCrewAIListener(client or _make_client(), **kwargs)
 
 
@@ -94,6 +98,7 @@ def _make_listener(client: Any = None, **kwargs) -> Any:
 # (all fields accessed via safe_getattr so MagicMock defaults are fine;
 #  we only set the fields the handler actually reads to relevant values)
 # ---------------------------------------------------------------------------
+
 
 def _crew_event(crew_id: str = "crew-1", crew_name: str = "TestCrew") -> MagicMock:
     ev = MagicMock()
@@ -168,7 +173,10 @@ def _llm_started_event(call_id: str = "call-1", model: str = "gpt-4o") -> MagicM
     ev = MagicMock()
     ev.call_id = call_id
     ev.model = model
-    ev.messages = [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hi"}]
+    ev.messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
     ev.tools = []
     ev.callbacks = []
     ev.available_functions = {}
@@ -242,7 +250,9 @@ def _memory_event(op_id: str = "mem-op-1") -> MagicMock:
     return ev
 
 
-def _flow_event(flow_name: str = "ContentFlow", flow_id: str | None = None) -> MagicMock:
+def _flow_event(
+    flow_name: str = "ContentFlow", flow_id: str | None = None
+) -> MagicMock:
     ev = MagicMock()
     # _resolve_flow_id() checks event.flow_id first — set it explicitly
     ev.flow_id = flow_id or flow_name
@@ -253,7 +263,9 @@ def _flow_event(flow_name: str = "ContentFlow", flow_id: str | None = None) -> M
     return ev
 
 
-def _method_event(flow_name: str = "ContentFlow", method_name: str = "generate") -> MagicMock:
+def _method_event(
+    flow_name: str = "ContentFlow", method_name: str = "generate"
+) -> MagicMock:
     ev = MagicMock()
     ev.flow_name = flow_name
     ev.method_name = method_name
@@ -267,10 +279,12 @@ def _method_event(flow_name: str = "ContentFlow", method_name: str = "generate")
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _reset_patch_state():
     """Guarantee the module-level patch state is clean before each test."""
     import noveum_trace.integrations.crewai.crewai_listener as m
+
     original = m._original_track_token_usage
     was_applied = m._patch_applied
 
@@ -278,6 +292,7 @@ def _reset_patch_state():
     if was_applied and original is not None:
         try:
             from crewai.llms.base_llm import BaseLLM
+
             BaseLLM._track_token_usage_internal = original
         except Exception:
             pass
@@ -294,6 +309,7 @@ def _reset_patch_state():
     if m._patch_applied and m._original_track_token_usage is not None:
         try:
             from crewai.llms.base_llm import BaseLLM
+
             BaseLLM._track_token_usage_internal = m._original_track_token_usage
         except Exception:
             pass
@@ -307,6 +323,7 @@ def _reset_patch_state():
 # 1. Initialisation
 # ===========================================================================
 
+
 class TestListenerInit:
     def test_registers_handlers_on_construction(self):
         lnr = _make_listener()
@@ -317,9 +334,15 @@ class TestListenerInit:
     def test_capture_flags_default_true(self):
         lnr = _make_listener()
         for flag in [
-            "capture_inputs", "capture_outputs", "capture_llm_messages",
-            "capture_memory", "capture_flow", "capture_reasoning",
-            "capture_a2a", "capture_mcp", "capture_guardrails",
+            "capture_inputs",
+            "capture_outputs",
+            "capture_llm_messages",
+            "capture_memory",
+            "capture_flow",
+            "capture_reasoning",
+            "capture_a2a",
+            "capture_mcp",
+            "capture_guardrails",
         ]:
             assert getattr(lnr, flag) is True, f"{flag} should default to True"
         lnr.shutdown()
@@ -333,9 +356,19 @@ class TestListenerInit:
     def test_span_correlation_dicts_are_empty(self):
         lnr = _make_listener()
         for attr in [
-            "_crew_spans", "_task_spans", "_agent_spans", "_llm_call_spans",
-            "_tool_spans", "_flow_spans", "_flow_method_spans",
-            "_memory_op_spans", "_a2a_spans", "_mcp_spans",
+            "_crew_spans",
+            "_task_spans",
+            "_agent_spans",
+            "_llm_call_spans",
+            "_tool_spans",
+            "_flow_spans",
+            "_flow_method_spans",
+            "_memory_op_spans",
+            "_reasoning_spans",
+            "_observation_spans",
+            "_guardrail_spans",
+            "_a2a_spans",
+            "_mcp_spans",
         ]:
             assert getattr(lnr, attr) == {}, f"{attr} should start empty"
         lnr.shutdown()
@@ -369,9 +402,11 @@ class TestListenerInit:
 # 2. Token patch lifecycle
 # ===========================================================================
 
+
 class TestTokenPatch:
     def test_patch_applied_on_first_listener(self):
         import noveum_trace.integrations.crewai.crewai_listener as m
+
         assert m._patch_applied is False
         lnr = _make_listener()
         assert m._patch_applied is True
@@ -379,7 +414,6 @@ class TestTokenPatch:
 
     def test_patch_applied_only_once_for_two_listeners(self):
         from crewai.llms.base_llm import BaseLLM
-        import noveum_trace.integrations.crewai.crewai_listener as m
 
         lnr1 = _make_listener()
         patched_fn = BaseLLM._track_token_usage_internal
@@ -393,6 +427,7 @@ class TestTokenPatch:
 
     def test_patch_restored_when_last_listener_shuts_down(self):
         from crewai.llms.base_llm import BaseLLM
+
         import noveum_trace.integrations.crewai.crewai_listener as m
 
         original_fn = BaseLLM._track_token_usage_internal
@@ -419,8 +454,12 @@ class TestTokenPatch:
 
     def test_buffer_token_usage_accumulates(self):
         lnr = _make_listener()
-        lnr._buffer_token_usage("call-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
-        lnr._buffer_token_usage("call-1", {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30})
+        lnr._buffer_token_usage(
+            "call-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        )
+        lnr._buffer_token_usage(
+            "call-1", {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
+        )
 
         agg = lnr._llm_usage_by_call_id["call-1"]
         assert agg["prompt_tokens"] == 30
@@ -441,7 +480,10 @@ class TestTokenPatch:
         """_token_buffer LRU eviction drops oldest entries beyond 512."""
         lnr = _make_listener()
         for i in range(515):
-            lnr._buffer_token_usage(f"call-{i}", {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+            lnr._buffer_token_usage(
+                f"call-{i}",
+                {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            )
 
         # Total keys must be capped at 512
         assert len(lnr._llm_usage_by_call_id) <= 512
@@ -478,6 +520,7 @@ class TestTokenPatch:
 # ===========================================================================
 # 3. Shutdown idempotency
 # ===========================================================================
+
 
 class TestShutdownIdempotency:
     def test_double_shutdown_does_not_raise(self):
@@ -517,8 +560,12 @@ class TestShutdownIdempotency:
 
         t1 = threading.Thread(target=_shutdown)
         t2 = threading.Thread(target=_shutdown)
-        t1.start(); t2.start()
-        t1.join(timeout=5); t2.join(timeout=5)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        assert not t1.is_alive(), "shutdown thread 1 did not finish within timeout"
+        t2.join(timeout=5)
+        assert not t2.is_alive(), "shutdown thread 2 did not finish within timeout"
         assert errors == [], f"Shutdown raised: {errors}"
 
 
@@ -526,26 +573,51 @@ class TestShutdownIdempotency:
 # 4. Handlers never raise on malformed events
 # ===========================================================================
 
+
 class TestHandlersNeverRaise:
     """Pass a fully-None MagicMock as both source and event to every handler."""
 
     _HANDLER_NAMES = [
-        "on_crew_kickoff_started", "on_crew_kickoff_completed", "on_crew_kickoff_failed",
-        "on_task_started", "on_task_completed", "on_task_failed",
-        "on_agent_execution_started", "on_agent_execution_completed", "on_agent_execution_error",
-        "on_llm_call_started", "on_llm_call_completed", "on_llm_call_failed",
-        "on_llm_stream_chunk", "on_llm_thinking_chunk",
-        "on_tool_usage_started", "on_tool_usage_finished", "on_tool_usage_error",
-        "on_memory_query_started", "on_memory_query_completed", "on_memory_query_failed",
-        "on_memory_save_started", "on_memory_save_completed", "on_memory_save_failed",
-        "on_flow_started", "on_flow_finished",
-        "on_method_execution_started", "on_method_execution_finished", "on_method_execution_failed",
-        "on_knowledge_query_started", "on_knowledge_query_completed",
-        "on_agent_reasoning_started", "on_agent_reasoning_completed",
-        "on_llm_guardrail_started", "on_llm_guardrail_completed",
-        "on_mcp_connection_started", "on_mcp_connection_completed",
-        "on_mcp_tool_execution_started", "on_mcp_tool_execution_completed",
-        "on_a2a_delegation_started", "on_a2a_delegation_completed",
+        "on_crew_kickoff_started",
+        "on_crew_kickoff_completed",
+        "on_crew_kickoff_failed",
+        "on_task_started",
+        "on_task_completed",
+        "on_task_failed",
+        "on_agent_execution_started",
+        "on_agent_execution_completed",
+        "on_agent_execution_error",
+        "on_llm_call_started",
+        "on_llm_call_completed",
+        "on_llm_call_failed",
+        "on_llm_stream_chunk",
+        "on_llm_thinking_chunk",
+        "on_tool_usage_started",
+        "on_tool_usage_finished",
+        "on_tool_usage_error",
+        "on_memory_query_started",
+        "on_memory_query_completed",
+        "on_memory_query_failed",
+        "on_memory_save_started",
+        "on_memory_save_completed",
+        "on_memory_save_failed",
+        "on_flow_started",
+        "on_flow_finished",
+        "on_method_execution_started",
+        "on_method_execution_finished",
+        "on_method_execution_failed",
+        "on_knowledge_query_started",
+        "on_knowledge_query_completed",
+        "on_agent_reasoning_started",
+        "on_agent_reasoning_completed",
+        "on_llm_guardrail_started",
+        "on_llm_guardrail_completed",
+        "on_mcp_connection_started",
+        "on_mcp_connection_completed",
+        "on_mcp_tool_execution_started",
+        "on_mcp_tool_execution_completed",
+        "on_a2a_delegation_started",
+        "on_a2a_delegation_completed",
     ]
 
     @pytest.mark.parametrize("handler_name", _HANDLER_NAMES)
@@ -589,10 +661,13 @@ class TestHandlersNeverRaise:
 # 5. NoOp when is_initialized() = False
 # ===========================================================================
 
+
 class TestNoOpWhenNotInitialized:
     def test_crew_handler_noop_no_client(self):
         """Listener with no client and is_initialized()=False must not create spans."""
-        from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+        from noveum_trace.integrations.crewai.crewai_listener import (
+            NoveumCrewAIListener,
+        )
 
         with patch("noveum_trace.is_initialized", return_value=False):
             lnr = NoveumCrewAIListener(client=None)
@@ -603,7 +678,9 @@ class TestNoOpWhenNotInitialized:
             lnr.shutdown()
 
     def test_task_handler_noop_no_client(self):
-        from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+        from noveum_trace.integrations.crewai.crewai_listener import (
+            NoveumCrewAIListener,
+        )
 
         with patch("noveum_trace.is_initialized", return_value=False):
             lnr = NoveumCrewAIListener(client=None)
@@ -612,7 +689,9 @@ class TestNoOpWhenNotInitialized:
             lnr.shutdown()
 
     def test_llm_handler_noop_no_client(self):
-        from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+        from noveum_trace.integrations.crewai.crewai_listener import (
+            NoveumCrewAIListener,
+        )
 
         with patch("noveum_trace.is_initialized", return_value=False):
             lnr = NoveumCrewAIListener(client=None)
@@ -624,6 +703,7 @@ class TestNoOpWhenNotInitialized:
 # ===========================================================================
 # 6. Crew handler path
 # ===========================================================================
+
 
 class TestCrewHandlers:
     def _listener_with_trace(self):
@@ -639,7 +719,9 @@ class TestCrewHandlers:
 
         lnr.on_crew_kickoff_started(src, ev)
 
-        assert "crew-42" in lnr._crew_spans, "crew-42 should be in _crew_spans after kickoff"
+        assert (
+            "crew-42" in lnr._crew_spans
+        ), "crew-42 should be in _crew_spans after kickoff"
         client.start_trace.assert_called_once()
         lnr.shutdown()
 
@@ -690,6 +772,7 @@ class TestCrewHandlers:
 # 7. Task handler path
 # ===========================================================================
 
+
 class TestTaskHandlers:
     def _listener_with_crew(self, crew_id: str = "crew-t"):
         lnr = _make_listener()
@@ -697,7 +780,11 @@ class TestTaskHandlers:
         span = _make_span(span_id="crew-span", trace_id="trace-t")
         trace = _make_trace("trace-t")
         lnr._client._active_traces["trace-t"] = trace
-        lnr._crew_spans[crew_id] = {"trace": trace, "span": span, "start_t": time.monotonic()}
+        lnr._crew_spans[crew_id] = {
+            "trace": trace,
+            "span": span,
+            "start_t": time.monotonic(),
+        }
         return lnr
 
     def test_task_started_creates_span_entry(self):
@@ -733,6 +820,7 @@ class TestTaskHandlers:
 # ===========================================================================
 # 8. Agent handler path
 # ===========================================================================
+
 
 class TestAgentHandlers:
     def _listener_with_task(self, task_id: str = "task-a"):
@@ -792,6 +880,7 @@ class TestAgentHandlers:
 # ===========================================================================
 # 9. LLM handler path
 # ===========================================================================
+
 
 class TestLLMHandlers:
     def _listener_with_agent(self, agent_id: str = "agt-llm"):
@@ -866,7 +955,10 @@ class TestLLMHandlers:
         lnr.on_llm_call_started(MagicMock(), ev_start)
 
         # Simulate monkey-patch writing tokens before completion event
-        lnr._buffer_token_usage("cid-tok", {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
+        lnr._buffer_token_usage(
+            "cid-tok",
+            {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
 
         ev_end = _llm_completed_event("cid-tok")
         lnr.on_llm_call_completed(MagicMock(), ev_end)
@@ -912,6 +1004,7 @@ class TestLLMHandlers:
 # 10. Tool handler path
 # ===========================================================================
 
+
 class TestToolHandlers:
     def _listener_with_agent(self):
         lnr = _make_listener()
@@ -956,6 +1049,7 @@ class TestToolHandlers:
 # ===========================================================================
 # 11. Memory handler path
 # ===========================================================================
+
 
 class TestMemoryHandlers:
     def _listener_with_agent(self):
@@ -1035,6 +1129,7 @@ class TestMemoryHandlers:
 # 12. Flow handler path
 # ===========================================================================
 
+
 class TestFlowHandlers:
     def test_flow_started_creates_flow_span_entry(self):
         lnr = _make_listener()
@@ -1079,6 +1174,7 @@ class TestFlowHandlers:
 # 13. _create_child_span
 # ===========================================================================
 
+
 class TestCreateChildSpan:
     def test_returns_span_when_parent_has_trace_id(self):
         lnr = _make_listener()
@@ -1102,7 +1198,10 @@ class TestCreateChildSpan:
         lnr.shutdown()
 
     def test_returns_none_when_no_client(self):
-        from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+        from noveum_trace.integrations.crewai.crewai_listener import (
+            NoveumCrewAIListener,
+        )
+
         with patch("noveum_trace.is_initialized", return_value=False):
             lnr = NoveumCrewAIListener(client=None)
             child = lnr._create_child_span("crewai.test", parent_span=_make_span())
@@ -1114,7 +1213,11 @@ class TestCreateChildSpan:
         lnr = _make_listener()
         trace = _make_trace("fallback-trace")
         lnr._client._active_traces["fallback-trace"] = trace
-        lnr._crew_spans["crew-fb"] = {"trace": trace, "span": _make_span(trace_id="fallback-trace"), "start_t": 0}
+        lnr._crew_spans["crew-fb"] = {
+            "trace": trace,
+            "span": _make_span(trace_id="fallback-trace"),
+            "start_t": 0,
+        }
 
         child = lnr._create_child_span("crewai.test", parent_span=None)
         assert child is not None
@@ -1124,6 +1227,7 @@ class TestCreateChildSpan:
 # ===========================================================================
 # 14. Concurrent thread safety — multiple crews
 # ===========================================================================
+
 
 class TestConcurrentCrews:
     """Simulate N concurrent crews to verify no data corruption under lock contention."""
@@ -1151,6 +1255,9 @@ class TestConcurrentCrews:
             t.start()
         for t in threads:
             t.join(timeout=10)
+            assert (
+                not t.is_alive()
+            ), "concurrent crew thread did not finish within timeout"
 
         assert errors == [], f"Concurrent crews raised: {errors}"
         # All crews should have been cleaned up
@@ -1170,11 +1277,14 @@ class TestConcurrentCrews:
                 barrier.wait()
                 for j in range(calls_per_thread):
                     call_id = f"call-{thread_id}-{j}"
-                    lnr._buffer_token_usage(call_id, {
-                        "prompt_tokens": 1,
-                        "completion_tokens": 1,
-                        "total_tokens": 2,
-                    })
+                    lnr._buffer_token_usage(
+                        call_id,
+                        {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2,
+                        },
+                    )
             except Exception as e:
                 errors.append(e)
 
@@ -1183,6 +1293,7 @@ class TestConcurrentCrews:
             t.start()
         for t in threads:
             t.join(timeout=10)
+            assert not t.is_alive(), "token buffer thread did not finish within timeout"
 
         assert errors == [], f"Token buffer raised: {errors}"
         # Buffer size must be within LRU cap
@@ -1210,6 +1321,9 @@ class TestConcurrentCrews:
             t.start()
         for t in threads:
             t.join(timeout=10)
+            assert (
+                not t.is_alive()
+            ), "accumulate_tokens thread did not finish within timeout"
 
         assert errors == []
         assert lnr._total_tokens_by_crew["shared-crew"] == N * tokens_per_thread
@@ -1230,6 +1344,7 @@ class TestConcurrentCrews:
 #   that field to None to force the fallback to source.id.
 # ---------------------------------------------------------------------------
 
+
 def _make_rich_span(span_id: str = "span-x", trace_id: str = "trace-x") -> MagicMock:
     """Span mock where both set_attribute and set_attributes update .attributes."""
     span = MagicMock()
@@ -1237,7 +1352,9 @@ def _make_rich_span(span_id: str = "span-x", trace_id: str = "trace-x") -> Magic
     span.trace_id = trace_id
     span.attributes = {}
     span.finish = MagicMock()
-    span.set_attribute = MagicMock(side_effect=lambda k, v: span.attributes.update({k: v}))
+    span.set_attribute = MagicMock(
+        side_effect=lambda k, v: span.attributes.update({k: v})
+    )
     span.set_attributes = MagicMock(side_effect=lambda d: span.attributes.update(d))
     return span
 
@@ -1248,7 +1365,9 @@ def _make_rich_trace(trace_id: str = "trace-x") -> MagicMock:
     trace.trace_id = trace_id
     trace.finish = MagicMock()
 
-    def _create_span(name: str, parent_span_id: Any = None, attributes: Any = None, **kw):
+    def _create_span(
+        name: str, parent_span_id: Any = None, attributes: Any = None, **kw
+    ):
         s = _make_rich_span(trace_id=trace_id)
         if attributes:
             s.attributes.update(attributes)
@@ -1261,6 +1380,7 @@ def _make_rich_trace(trace_id: str = "trace-x") -> MagicMock:
 def _make_rich_listener(**kwargs) -> Any:
     """Listener backed by rich mocks so attribute assertions work."""
     from noveum_trace.integrations.crewai.crewai_listener import NoveumCrewAIListener
+
     trace_id = "rich-trace-1"
     trace = _make_rich_trace(trace_id)
     client = MagicMock()
@@ -1276,6 +1396,7 @@ class TestTaskContextTasks:
     def test_task_context_tasks_populated(self):
         """When source.context has upstream tasks, task.context_tasks is a JSON list."""
         import json
+
         lnr = _make_rich_listener()
 
         # Prime a crew span so _create_child_span can find it
@@ -1313,9 +1434,9 @@ class TestTaskContextTasks:
         assert span is not None, "task span not created"
         attrs = span.attributes
 
-        assert "task.context_tasks" in attrs, (
-            f"task.context_tasks missing; span attributes: {dict(attrs)}"
-        )
+        assert (
+            "task.context_tasks" in attrs
+        ), f"task.context_tasks missing; span attributes: {dict(attrs)}"
         context_list = json.loads(attrs["task.context_tasks"])
         assert isinstance(context_list, list)
         assert len(context_list) >= 1
@@ -1342,7 +1463,7 @@ class TestLLMTemperature:
         ev = _llm_started_event("llm-temp-1", model="gpt-4o")
         ev.call_id = "llm-temp-1"
         ev.agent_id = "agent-t"
-        ev.task_id = None         # force fallback to agent lookup
+        ev.task_id = None  # force fallback to agent lookup
         # Null out sampling-param fields so the handler reads them from source
         ev.temperature = None
         ev.max_tokens = None
@@ -1363,9 +1484,9 @@ class TestLLMTemperature:
         assert entry is not None, "LLM span not created"
         # _llm_call_spans stores {"span": span, "crew_id": ..., "agent_id": ...}
         span = entry.get("span") if isinstance(entry, dict) else entry
-        assert "llm.temperature" in span.attributes, (
-            f"llm.temperature missing; span attributes: {dict(span.attributes)}"
-        )
+        assert (
+            "llm.temperature" in span.attributes
+        ), f"llm.temperature missing; span attributes: {dict(span.attributes)}"
         assert abs(float(span.attributes["llm.temperature"]) - 0.3) < 1e-6
 
         lnr.shutdown()
@@ -1374,7 +1495,9 @@ class TestLLMTemperature:
 class TestToolRunAttempts:
     """tool.run_attempts and tool.delegations are captured from the event."""
 
-    def _listener_with_agent(self, crew_id: str = "crew-tool", agent_role: str = "Researcher"):
+    def _listener_with_agent(
+        self, crew_id: str = "crew-tool", agent_role: str = "Researcher"
+    ):
         """Listener pre-loaded with a crew trace + agent span."""
         lnr = _make_rich_listener()
         trace = _make_rich_trace("rich-trace-1")
@@ -1389,11 +1512,12 @@ class TestToolRunAttempts:
             lnr._agent_spans[agent_role] = agent_span
         return lnr
 
-    def _tool_ev_with_explicit_id(self, run_id: str, tool_name: str,
-                                   run_attempts: int, delegations: Any) -> MagicMock:
+    def _tool_ev_with_explicit_id(
+        self, run_id: str, tool_name: str, run_attempts: int, delegations: Any
+    ) -> MagicMock:
         """Tool event where run_id fields are controlled so key == run_id."""
         ev = MagicMock()
-        ev.run_id = run_id        # _resolve_started_run_id checks this first
+        ev.run_id = run_id  # _resolve_started_run_id checks this first
         ev.tool_run_id = None
         ev.event_id = None
         ev.tool_name = tool_name
@@ -1414,7 +1538,9 @@ class TestToolRunAttempts:
     def test_tool_run_attempts_zero_captured(self):
         """run_attempts=0 (first attempt) is captured — not swallowed by falsy or."""
         lnr = self._listener_with_agent()
-        ev = self._tool_ev_with_explicit_id("run-0", "search_tool", run_attempts=0, delegations=None)
+        ev = self._tool_ev_with_explicit_id(
+            "run-0", "search_tool", run_attempts=0, delegations=None
+        )
 
         lnr.on_tool_usage_started(MagicMock(), ev)
 
@@ -1422,9 +1548,9 @@ class TestToolRunAttempts:
             span = lnr._tool_spans.get("run-0")
 
         assert span is not None, "tool span not created for run_id='run-0'"
-        assert "tool.run_attempts" in span.attributes, (
-            f"tool.run_attempts missing (run_attempts=0); attrs: {dict(span.attributes)}"
-        )
+        assert (
+            "tool.run_attempts" in span.attributes
+        ), f"tool.run_attempts missing (run_attempts=0); attrs: {dict(span.attributes)}"
         assert span.attributes["tool.run_attempts"] == 0
 
         lnr.shutdown()
@@ -1432,7 +1558,9 @@ class TestToolRunAttempts:
     def test_tool_run_attempts_retry_captured(self):
         """run_attempts=2 (retry) is captured correctly."""
         lnr = self._listener_with_agent()
-        ev = self._tool_ev_with_explicit_id("run-2", "search_tool", run_attempts=2, delegations=None)
+        ev = self._tool_ev_with_explicit_id(
+            "run-2", "search_tool", run_attempts=2, delegations=None
+        )
 
         lnr.on_tool_usage_started(MagicMock(), ev)
 
@@ -1472,7 +1600,7 @@ class TestCrewTestResult:
         lnr.on_crew_kickoff_started(crew_src, _crew_event("crew-test-1"))
 
         result_ev = MagicMock()
-        result_ev.crew_id = None          # force fallback to source.id
+        result_ev.crew_id = None  # force fallback to source.id
         result_ev.quality = 8.5
         result_ev.execution_duration = 12.3
         result_ev.model = "gpt-4o"
@@ -1508,7 +1636,9 @@ class TestCrewTestResult:
         with lnr._lock:
             entry = lnr._crew_spans.get("crew-test-2")
         span = entry.get("span") if isinstance(entry, dict) else entry
-        assert span.attributes.get("crew.test.execution_duration_s") == pytest.approx(25.6)
+        assert span.attributes.get("crew.test.execution_duration_s") == pytest.approx(
+            25.6
+        )
 
         lnr.shutdown()
 
@@ -1516,14 +1646,16 @@ class TestCrewTestResult:
 class TestTaskEvaluationScore:
     """task.evaluation_score is written from TaskEvaluationEvent."""
 
-    def _make_evaluation_event(self, score: float, task_id: str = "task-eval-1") -> MagicMock:
+    def _make_evaluation_event(
+        self, score: float, task_id: str = "task-eval-1"
+    ) -> MagicMock:
         ev = MagicMock()
         ev.task_id = task_id
         ev.evaluation_type = "score"
         ev.score = score
         ev.feedback = "Good work."
         ev.model = "gpt-4o-mini"
-        ev.result = None        # no nested result object
+        ev.result = None  # no nested result object
         ev.criteria = None
         task_mock = MagicMock()
         task_mock.id = task_id
@@ -1552,9 +1684,9 @@ class TestTaskEvaluationScore:
         task_src.id = "task-eval-1"
         lnr.on_task_evaluation(task_src, eval_ev)
 
-        assert "task.evaluation_score" in span.attributes, (
-            f"task.evaluation_score missing; attrs: {dict(span.attributes)}"
-        )
+        assert (
+            "task.evaluation_score" in span.attributes
+        ), f"task.evaluation_score missing; attrs: {dict(span.attributes)}"
         assert span.attributes["task.evaluation_score"] == pytest.approx(9.2)
 
         lnr.shutdown()
@@ -1574,6 +1706,8 @@ class TestTaskEvaluationScore:
         task_src.id = "task-eval-2"
         lnr.on_task_evaluation(task_src, eval_ev)
 
-        assert span.attributes.get("task.evaluation_feedback") == "Could be more concise."
+        assert (
+            span.attributes.get("task.evaluation_feedback") == "Could be more concise."
+        )
 
         lnr.shutdown()

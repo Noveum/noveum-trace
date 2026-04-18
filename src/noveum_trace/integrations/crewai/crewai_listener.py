@@ -20,25 +20,24 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 from weakref import WeakSet
 
 from crewai.events import BaseEventListener
 
-from noveum_trace.integrations.crewai._handlers_crew import _CrewHandlersMixin
-from noveum_trace.integrations.crewai._handlers_task import _TaskHandlersMixin
-from noveum_trace.integrations.crewai._handlers_agent import _AgentHandlersMixin
-from noveum_trace.integrations.crewai._handlers_llm import _LLMHandlersMixin
-from noveum_trace.integrations.crewai._handlers_tool import _ToolHandlersMixin
-from noveum_trace.integrations.crewai._handlers_memory import _MemoryHandlersMixin
-from noveum_trace.integrations.crewai._handlers_flow import _FlowHandlersMixin
-from noveum_trace.integrations.crewai._handlers_knowledge import _KnowledgeHandlersMixin
-from noveum_trace.integrations.crewai._handlers_reasoning import _ReasoningHandlersMixin
-from noveum_trace.integrations.crewai._handlers_guardrail import _GuardrailHandlersMixin
-from noveum_trace.integrations.crewai._handlers_mcp import _MCPHandlersMixin
 from noveum_trace.integrations.crewai._handlers_a2a import _A2AHandlersMixin
+from noveum_trace.integrations.crewai._handlers_agent import _AgentHandlersMixin
+from noveum_trace.integrations.crewai._handlers_crew import _CrewHandlersMixin
+from noveum_trace.integrations.crewai._handlers_flow import _FlowHandlersMixin
+from noveum_trace.integrations.crewai._handlers_guardrail import _GuardrailHandlersMixin
+from noveum_trace.integrations.crewai._handlers_knowledge import _KnowledgeHandlersMixin
+from noveum_trace.integrations.crewai._handlers_llm import _LLMHandlersMixin
+from noveum_trace.integrations.crewai._handlers_mcp import _MCPHandlersMixin
+from noveum_trace.integrations.crewai._handlers_memory import _MemoryHandlersMixin
+from noveum_trace.integrations.crewai._handlers_reasoning import _ReasoningHandlersMixin
+from noveum_trace.integrations.crewai._handlers_task import _TaskHandlersMixin
+from noveum_trace.integrations.crewai._handlers_tool import _ToolHandlersMixin
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 
 if TYPE_CHECKING:
@@ -51,7 +50,9 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 _patch_applied: bool = False
-_active_listeners: WeakSet = WeakSet()
+# Class-level WeakSet: add/discard only under ``_patch_lock`` (see ``__init__``,
+# ``shutdown``, and the BaseLLM monkey-patch) so iteration cannot race mutation.
+_active_listeners: WeakSet[Any] = WeakSet()
 _original_track_token_usage: Optional[Any] = None
 _patch_lock = threading.RLock()
 
@@ -141,7 +142,7 @@ class NoveumCrewAIListener(
         # Everything that setup_listeners() reads must be set before super().__init__()
         # because BaseEventListener.__init__ calls setup_listeners() immediately.
         self._lock = threading.RLock()
-        self._handlers: List[Tuple[type, Any]] = []
+        self._handlers: list[tuple[type, Any]] = []
         self._crewai_event_bus: Optional[Any] = None
 
         # Flags that setup_listeners() reads — must be set before super().__init__()
@@ -188,6 +189,9 @@ class NoveumCrewAIListener(
         self._flow_spans: dict[str, Any] = {}
         self._flow_method_spans: dict[str, Any] = {}
         self._memory_op_spans: dict[str, Any] = {}
+        self._reasoning_spans: dict[str, Any] = {}
+        self._observation_spans: dict[str, Any] = {}
+        self._guardrail_spans: dict[str, Any] = {}
         self._a2a_spans: dict[str, Any] = {}
         self._mcp_spans: dict[str, Any] = {}
 
@@ -202,7 +206,7 @@ class NoveumCrewAIListener(
         # Token buffer for late-arriving token counts (from monkey-patch)
         # =====================================================================
 
-        self._token_buffer: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._token_buffer: OrderedDict[str, bool] = OrderedDict()
         self._llm_usage_by_call_id: dict[str, dict[str, Any]] = {}
 
         # =====================================================================
@@ -240,14 +244,58 @@ class NoveumCrewAIListener(
         # Register with class-level listener set and apply token patch
         # =====================================================================
 
-        _active_listeners.add(self)
-        NoveumCrewAIListener._patch_token_tracking()
+        with _patch_lock:
+            _active_listeners.add(self)
+            NoveumCrewAIListener._patch_token_tracking()
 
         logger.info(
             "NoveumCrewAIListener initialized (verbose=%s, prefix=%s)",
             self._verbose,
             self.trace_name_prefix,
         )
+
+        self._migrate_legacy_prefixed_span_maps()
+
+    def _migrate_legacy_prefixed_span_maps(self) -> None:
+        """
+        Move pre-dedicated-dict namespaced keys out of shared maps.
+
+        Older releases stored reasoning, observation, and guardrail spans under
+        ``rsn::``, ``obs::``, and ``grail::`` prefixes inside ``_flow_method_spans``
+        / ``_memory_op_spans``.  Keys with more than one ``::`` are left alone so
+        legitimate flow keys like ``rsn::method_name::method_id`` are not stolen.
+        """
+        rsn_p = "rsn::"
+        obs_p = "obs::"
+        grail_p = "grail::"
+        with self._lock:
+            for k in list(self._flow_method_spans.keys()):
+                if not k.startswith(rsn_p) or k.count("::") != 1:
+                    continue
+                entry = self._flow_method_spans.pop(k, None)
+                if entry is None:
+                    continue
+                rid = k[len(rsn_p) :]
+                self._reasoning_spans.setdefault(rid, entry)
+            for k in list(self._memory_op_spans.keys()):
+                if k.startswith(obs_p) and k.count("::") == 1:
+                    span = self._memory_op_spans.pop(k, None)
+                    if span is None:
+                        continue
+                    oid = k[len(obs_p) :]
+                    start_t = self._memory_op_start_times.pop(k, None)
+                    self._observation_spans.setdefault(
+                        oid, {"span": span, "start_t": start_t}
+                    )
+                elif k.startswith(grail_p) and k.count("::") == 1:
+                    span = self._memory_op_spans.pop(k, None)
+                    if span is None:
+                        continue
+                    gid = k[len(grail_p) :]
+                    start_t = self._memory_op_start_times.pop(k, None)
+                    self._guardrail_spans.setdefault(
+                        gid, {"span": span, "start_t": start_t}
+                    )
 
     def __enter__(self) -> NoveumCrewAIListener:
         """Context manager entry."""
@@ -275,14 +323,11 @@ class NoveumCrewAIListener(
                 logger.debug("NoveumCrewAIListener already shutdown")
                 return
 
+            # Resolve client before ``_is_shutdown`` makes ``_get_client()`` return
+            # None, so force-close paths can still call ``finish_trace`` on traces.
+            shutdown_finish_client = self._get_client()
+
             self._is_shutdown = True
-
-            # Deregister from class-level listener set
-            _active_listeners.discard(self)
-
-            # Only restore patch if no more active listeners
-            if len(_active_listeners) == 0:
-                NoveumCrewAIListener._restore_token_tracking()
 
             # Unsubscribe all event handlers from the CrewAI event bus
             if self._crewai_event_bus is not None:
@@ -300,6 +345,11 @@ class NoveumCrewAIListener(
             dangling_crew_ids = list(self._crew_spans.keys())
             dangling_flow_ids = list(self._flow_spans.keys())
 
+        with _patch_lock:
+            _active_listeners.discard(self)
+            if len(_active_listeners) == 0:
+                NoveumCrewAIListener._restore_token_tracking()
+
         # --- Force-close any crew/flow spans still open at shutdown time -----
         # This happens when shutdown() is called immediately after crew.kickoff()
         # returns (e.g. zero-impact check) and the CrewKickoffCompletedEvent
@@ -314,13 +364,19 @@ class NoveumCrewAIListener(
                     output=None,
                     error=None,
                     extra_attrs={"crew.shutdown_closed": True},
+                    finish_trace_client=shutdown_finish_client,
                 )
             except Exception:
                 pass
 
         for flow_id in dangling_flow_ids:
             try:
-                self._finish_flow_span(flow_id, status="ok", error=None)
+                self._finish_flow_span(
+                    flow_id,
+                    status="ok",
+                    error=None,
+                    finish_trace_client=shutdown_finish_client,
+                )
             except Exception:
                 pass
 
@@ -336,6 +392,9 @@ class NoveumCrewAIListener(
             self._flow_spans.clear()
             self._flow_method_spans.clear()
             self._memory_op_spans.clear()
+            self._reasoning_spans.clear()
+            self._observation_spans.clear()
+            self._guardrail_spans.clear()
             self._a2a_spans.clear()
             self._mcp_spans.clear()
 
@@ -369,7 +428,10 @@ class NoveumCrewAIListener(
                 return
 
             try:
-                from crewai.llms.base_llm import BaseLLM, get_current_call_id as _get_call_id
+                from crewai.llms.base_llm import (
+                    BaseLLM,
+                )
+                from crewai.llms.base_llm import get_current_call_id as _get_call_id
             except ImportError:
                 logger.warning(
                     "Could not import BaseLLM from crewai.llms.base_llm — "
@@ -387,14 +449,16 @@ class NoveumCrewAIListener(
 
             def _noveum_track_token_usage(
                 self_llm: Any,
-                usage_data: dict,
+                usage_data: dict[str, Any],
             ) -> Any:
                 """Intercept token tracking and forward to all active listeners."""
                 result = _original_track_token_usage(self_llm, usage_data)
                 try:
                     call_id = _get_call_id()
                     if usage_data and call_id:
-                        for listener in _active_listeners:
+                        with _patch_lock:
+                            listeners_snapshot = list(_active_listeners)
+                        for listener in listeners_snapshot:
                             listener._buffer_token_usage(call_id, usage_data)
                 except Exception as exc:
                     logger.debug("Error buffering tokens in monkey-patch: %s", exc)
@@ -442,14 +506,17 @@ class NoveumCrewAIListener(
             if self._is_shutdown:
                 return
 
-            agg = self._llm_usage_by_call_id.setdefault(call_id, {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_creation_tokens": 0,
-                "reasoning_tokens": 0,
-            })
+            agg = self._llm_usage_by_call_id.setdefault(
+                call_id,
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_creation_tokens": 0,
+                    "reasoning_tokens": 0,
+                },
+            )
             agg["prompt_tokens"] += int(
                 usage.get("prompt_tokens") or usage.get("input_tokens") or 0
             )
@@ -470,8 +537,12 @@ class NoveumCrewAIListener(
             )
             agg["reasoning_tokens"] += int(usage.get("reasoning_tokens") or 0)
 
-            # LRU eviction using _token_buffer as an ordered sentinel
-            self._token_buffer[call_id] = True
+            # LRU sentinel: bump ``call_id`` to most-recently-used before evicting
+            # oldest entries (``popitem(last=False)``).
+            if call_id in self._token_buffer:
+                self._token_buffer.move_to_end(call_id, last=True)
+            else:
+                self._token_buffer[call_id] = True
             while len(self._token_buffer) > self._MAX_TOKEN_BUFFER_ENTRIES:
                 evicted_id, _ = self._token_buffer.popitem(last=False)
                 self._llm_usage_by_call_id.pop(evicted_id, None)
@@ -525,7 +596,7 @@ class NoveumCrewAIListener(
             return self._client
 
         try:
-            from noveum_trace import is_initialized, get_client
+            from noveum_trace import get_client, is_initialized
 
             if is_initialized():
                 self._client = get_client()
@@ -597,9 +668,7 @@ class NoveumCrewAIListener(
                         if parent_span_id is None:
                             fallback_span = entry.get("span")
                             if fallback_span is not None:
-                                parent_span_id = getattr(
-                                    fallback_span, "span_id", None
-                                )
+                                parent_span_id = getattr(fallback_span, "span_id", None)
 
         if trace is None:
             # --- Last-resort fallback: scan all open crew / flow entries ------
@@ -688,8 +757,10 @@ class NoveumCrewAIListener(
             entry = self._crew_spans.get(crew_id)
         return entry.get("span") if entry else None
 
-    def _get_agent_span(self, agent_id: str) -> Optional[Any]:
+    def _get_agent_span(self, agent_id: Optional[str]) -> Optional[Any]:
         """Retrieve open agent span, or None."""
+        if not agent_id:
+            return None
         with self._lock:
             return self._agent_spans.get(agent_id)
 
@@ -740,10 +811,11 @@ class NoveumCrewAIListener(
         # ── Crew ──────────────────────────────────────────────────────────
         try:
             from crewai.events.types.crew_events import (
-                CrewKickoffStartedEvent,
                 CrewKickoffCompletedEvent,
                 CrewKickoffFailedEvent,
+                CrewKickoffStartedEvent,
             )
+
             _sub(CrewKickoffStartedEvent, self.on_crew_kickoff_started)
             _sub(CrewKickoffCompletedEvent, self.on_crew_kickoff_completed)
             _sub(CrewKickoffFailedEvent, self.on_crew_kickoff_failed)
@@ -752,9 +824,10 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.crew_events import (
-                CrewTestStartedEvent,
                 CrewTestCompletedEvent,
+                CrewTestStartedEvent,
             )
+
             _sub(CrewTestStartedEvent, self.on_crew_test_started)
             _sub(CrewTestCompletedEvent, self.on_crew_test_completed)
         except ImportError:
@@ -762,16 +835,18 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.crew_events import CrewTestResultEvent
+
             _sub(CrewTestResultEvent, self.on_crew_test_result)
         except ImportError:
             pass
 
         try:
             from crewai.events.types.crew_events import (
-                CrewTrainStartedEvent,
                 CrewTrainCompletedEvent,
                 CrewTrainFailedEvent,
+                CrewTrainStartedEvent,
             )
+
             _sub(CrewTrainStartedEvent, self.on_crew_train_started)
             _sub(CrewTrainCompletedEvent, self.on_crew_train_completed)
             _sub(CrewTrainFailedEvent, self.on_crew_train_failed)
@@ -781,10 +856,11 @@ class NoveumCrewAIListener(
         # ── Task ──────────────────────────────────────────────────────────
         try:
             from crewai.events.types.task_events import (
-                TaskStartedEvent,
                 TaskCompletedEvent,
                 TaskFailedEvent,
+                TaskStartedEvent,
             )
+
             _sub(TaskStartedEvent, self.on_task_started)
             _sub(TaskCompletedEvent, self.on_task_completed)
             _sub(TaskFailedEvent, self.on_task_failed)
@@ -793,6 +869,7 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.task_events import TaskEvaluationEvent
+
             _sub(TaskEvaluationEvent, self.on_task_evaluation)
         except ImportError:
             pass
@@ -800,10 +877,11 @@ class NoveumCrewAIListener(
         # ── Agent ─────────────────────────────────────────────────────────
         try:
             from crewai.events.types.agent_events import (
-                AgentExecutionStartedEvent,
                 AgentExecutionCompletedEvent,
                 AgentExecutionErrorEvent,
+                AgentExecutionStartedEvent,
             )
+
             _sub(AgentExecutionStartedEvent, self.on_agent_execution_started)
             _sub(AgentExecutionCompletedEvent, self.on_agent_execution_completed)
             _sub(AgentExecutionErrorEvent, self.on_agent_execution_error)
@@ -812,10 +890,11 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.agent_events import (
-                LiteAgentExecutionStartedEvent,
                 LiteAgentExecutionCompletedEvent,
                 LiteAgentExecutionErrorEvent,
+                LiteAgentExecutionStartedEvent,
             )
+
             _sub(LiteAgentExecutionStartedEvent, self.on_lite_agent_started)
             _sub(LiteAgentExecutionCompletedEvent, self.on_lite_agent_completed)
             _sub(LiteAgentExecutionErrorEvent, self.on_lite_agent_error)
@@ -824,10 +903,11 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.agent_events import (
-                AgentEvaluationStartedEvent,
                 AgentEvaluationCompletedEvent,
                 AgentEvaluationFailedEvent,
+                AgentEvaluationStartedEvent,
             )
+
             _sub(AgentEvaluationStartedEvent, self.on_agent_evaluation_started)
             _sub(AgentEvaluationCompletedEvent, self.on_agent_evaluation_completed)
             _sub(AgentEvaluationFailedEvent, self.on_agent_evaluation_error)
@@ -837,10 +917,11 @@ class NoveumCrewAIListener(
         # ── LLM ───────────────────────────────────────────────────────────
         try:
             from crewai.events.types.llm_events import (
-                LLMCallStartedEvent,
                 LLMCallCompletedEvent,
                 LLMCallFailedEvent,
+                LLMCallStartedEvent,
             )
+
             _sub(LLMCallStartedEvent, self.on_llm_call_started)
             _sub(LLMCallCompletedEvent, self.on_llm_call_completed)
             _sub(LLMCallFailedEvent, self.on_llm_call_failed)
@@ -849,12 +930,14 @@ class NoveumCrewAIListener(
 
         try:
             from crewai.events.types.llm_events import LLMStreamChunkEvent
+
             _sub(LLMStreamChunkEvent, self.on_llm_stream_chunk)
         except ImportError:
             pass
 
         try:
             from crewai.events.types.llm_events import LLMThinkingChunkEvent
+
             _sub(LLMThinkingChunkEvent, self.on_llm_thinking_chunk)
         except ImportError:
             pass
@@ -862,10 +945,11 @@ class NoveumCrewAIListener(
         # ── Tool ──────────────────────────────────────────────────────────
         try:
             from crewai.events.types.tool_usage_events import (
-                ToolUsageStartedEvent,
-                ToolUsageFinishedEvent,
                 ToolUsageErrorEvent,
+                ToolUsageFinishedEvent,
+                ToolUsageStartedEvent,
             )
+
             _sub(ToolUsageStartedEvent, self.on_tool_usage_started)
             _sub(ToolUsageFinishedEvent, self.on_tool_usage_finished)
             _sub(ToolUsageErrorEvent, self.on_tool_usage_error)
@@ -873,19 +957,24 @@ class NoveumCrewAIListener(
             logger.debug("Tool usage events not available in this CrewAI version")
 
         try:
-            from crewai.events.types.tool_usage_events import ToolValidateInputErrorEvent
+            from crewai.events.types.tool_usage_events import (
+                ToolValidateInputErrorEvent,
+            )
+
             _sub(ToolValidateInputErrorEvent, self.on_tool_validate_input_error)
         except ImportError:
             pass
 
         try:
             from crewai.events.types.tool_usage_events import ToolSelectionErrorEvent
+
             _sub(ToolSelectionErrorEvent, self.on_tool_selection_error)
         except ImportError:
             pass
 
         try:
             from crewai.events.types.tool_usage_events import ToolExecutionErrorEvent
+
             _sub(ToolExecutionErrorEvent, self.on_tool_execution_error)
         except ImportError:
             pass
@@ -894,13 +983,14 @@ class NoveumCrewAIListener(
         if self.capture_memory:
             try:
                 from crewai.events.types.memory_events import (
-                    MemoryQueryStartedEvent,
                     MemoryQueryCompletedEvent,
                     MemoryQueryFailedEvent,
-                    MemorySaveStartedEvent,
+                    MemoryQueryStartedEvent,
                     MemorySaveCompletedEvent,
                     MemorySaveFailedEvent,
+                    MemorySaveStartedEvent,
                 )
+
                 _sub(MemoryQueryStartedEvent, self.on_memory_query_started)
                 _sub(MemoryQueryCompletedEvent, self.on_memory_query_completed)
                 _sub(MemoryQueryFailedEvent, self.on_memory_query_failed)
@@ -912,10 +1002,11 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.memory_events import (
-                    MemoryRetrievalStartedEvent,
                     MemoryRetrievalCompletedEvent,
                     MemoryRetrievalFailedEvent,
+                    MemoryRetrievalStartedEvent,
                 )
+
                 _sub(MemoryRetrievalStartedEvent, self.on_memory_retrieval_started)
                 _sub(MemoryRetrievalCompletedEvent, self.on_memory_retrieval_completed)
                 _sub(MemoryRetrievalFailedEvent, self.on_memory_retrieval_failed)
@@ -926,19 +1017,28 @@ class NoveumCrewAIListener(
         if self.capture_knowledge:
             try:
                 from crewai.events.types.knowledge_events import (
-                    KnowledgeRetrievalStartedEvent,
-                    KnowledgeRetrievalCompletedEvent,
-                    KnowledgeQueryStartedEvent,
                     KnowledgeQueryCompletedEvent,
                     KnowledgeQueryFailedEvent,
+                    KnowledgeQueryStartedEvent,
+                    KnowledgeRetrievalCompletedEvent,
+                    KnowledgeRetrievalStartedEvent,
                     KnowledgeSearchQueryFailedEvent,
                 )
-                _sub(KnowledgeRetrievalStartedEvent, self.on_knowledge_retrieval_started)
-                _sub(KnowledgeRetrievalCompletedEvent, self.on_knowledge_retrieval_completed)
+
+                _sub(
+                    KnowledgeRetrievalStartedEvent, self.on_knowledge_retrieval_started
+                )
+                _sub(
+                    KnowledgeRetrievalCompletedEvent,
+                    self.on_knowledge_retrieval_completed,
+                )
                 _sub(KnowledgeQueryStartedEvent, self.on_knowledge_query_started)
                 _sub(KnowledgeQueryCompletedEvent, self.on_knowledge_query_completed)
                 _sub(KnowledgeQueryFailedEvent, self.on_knowledge_query_failed)
-                _sub(KnowledgeSearchQueryFailedEvent, self.on_knowledge_search_query_failed)
+                _sub(
+                    KnowledgeSearchQueryFailedEvent,
+                    self.on_knowledge_search_query_failed,
+                )
             except ImportError:
                 pass
 
@@ -948,12 +1048,13 @@ class NoveumCrewAIListener(
         if self.capture_flow:
             try:
                 from crewai.events.types.flow_events import (
-                    FlowStartedEvent,
                     FlowFinishedEvent,
-                    MethodExecutionStartedEvent,
-                    MethodExecutionFinishedEvent,
+                    FlowStartedEvent,
                     MethodExecutionFailedEvent,
+                    MethodExecutionFinishedEvent,
+                    MethodExecutionStartedEvent,
                 )
+
                 _sub(FlowStartedEvent, self.on_flow_started)
                 _sub(FlowFinishedEvent, self.on_flow_finished)
                 _sub(MethodExecutionStartedEvent, self.on_method_execution_started)
@@ -963,22 +1064,25 @@ class NoveumCrewAIListener(
                 pass
 
             try:
-                from crewai.events.types.flow_events import FlowFailedEvent  # type: ignore[attr-defined]
+                from crewai.events.types.flow_events import FlowFailedEvent
+
                 _sub(FlowFailedEvent, self.on_flow_failed)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.flow_events import FlowPausedEvent
+
                 _sub(FlowPausedEvent, self.on_flow_paused)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.flow_events import (
-                    FlowInputRequestedEvent,
                     FlowInputReceivedEvent,
+                    FlowInputRequestedEvent,
                 )
+
                 _sub(FlowInputRequestedEvent, self.on_flow_input_requested)
                 _sub(FlowInputReceivedEvent, self.on_flow_input_received)
             except ImportError:
@@ -986,9 +1090,10 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.flow_events import (
-                    HumanFeedbackRequestedEvent,
                     HumanFeedbackReceivedEvent,
+                    HumanFeedbackRequestedEvent,
                 )
+
                 _sub(HumanFeedbackRequestedEvent, self.on_human_feedback_requested)
                 _sub(HumanFeedbackReceivedEvent, self.on_human_feedback_received)
             except ImportError:
@@ -1000,10 +1105,11 @@ class NoveumCrewAIListener(
         if self.capture_reasoning:
             try:
                 from crewai.events.types.reasoning_events import (
-                    AgentReasoningStartedEvent,
                     AgentReasoningCompletedEvent,
                     AgentReasoningFailedEvent,
+                    AgentReasoningStartedEvent,
                 )
+
                 _sub(AgentReasoningStartedEvent, self.on_agent_reasoning_started)
                 _sub(AgentReasoningCompletedEvent, self.on_agent_reasoning_completed)
                 _sub(AgentReasoningFailedEvent, self.on_agent_reasoning_failed)
@@ -1012,10 +1118,11 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.observation_events import (
-                    StepObservationStartedEvent,
                     StepObservationCompletedEvent,
                     StepObservationFailedEvent,
+                    StepObservationStartedEvent,
                 )
+
                 _sub(StepObservationStartedEvent, self.on_step_observation_started)
                 _sub(StepObservationCompletedEvent, self.on_step_observation_completed)
                 _sub(StepObservationFailedEvent, self.on_step_observation_failed)
@@ -1024,18 +1131,25 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.observation_events import PlanRefinementEvent
+
                 _sub(PlanRefinementEvent, self.on_plan_refinement)
             except ImportError:
                 pass
 
             try:
-                from crewai.events.types.observation_events import PlanReplanTriggeredEvent
+                from crewai.events.types.observation_events import (
+                    PlanReplanTriggeredEvent,
+                )
+
                 _sub(PlanReplanTriggeredEvent, self.on_plan_replan_triggered)
             except ImportError:
                 pass
 
             try:
-                from crewai.events.types.observation_events import GoalAchievedEarlyEvent
+                from crewai.events.types.observation_events import (
+                    GoalAchievedEarlyEvent,
+                )
+
                 _sub(GoalAchievedEarlyEvent, self.on_goal_achieved_early)
             except ImportError:
                 pass
@@ -1044,16 +1158,20 @@ class NoveumCrewAIListener(
         if self.capture_guardrails:
             try:
                 from crewai.events.types.llm_guardrail_events import (
-                    LLMGuardrailStartedEvent,
                     LLMGuardrailCompletedEvent,
+                    LLMGuardrailStartedEvent,
                 )
+
                 _sub(LLMGuardrailStartedEvent, self.on_llm_guardrail_started)
                 _sub(LLMGuardrailCompletedEvent, self.on_llm_guardrail_completed)
             except ImportError:
                 pass
 
             try:
-                from crewai.events.types.llm_guardrail_events import LLMGuardrailFailedEvent  # type: ignore[attr-defined]
+                from crewai.events.types.llm_guardrail_events import (
+                    LLMGuardrailFailedEvent,
+                )
+
                 _sub(LLMGuardrailFailedEvent, self.on_llm_guardrail_failed)
             except ImportError:
                 pass
@@ -1062,24 +1180,28 @@ class NoveumCrewAIListener(
         if self.capture_mcp:
             try:
                 from crewai.events.types.mcp_events import (
-                    MCPConnectionStartedEvent,
                     MCPConnectionCompletedEvent,
                     MCPConnectionFailedEvent,
-                    MCPToolExecutionStartedEvent,
+                    MCPConnectionStartedEvent,
                     MCPToolExecutionCompletedEvent,
                     MCPToolExecutionFailedEvent,
+                    MCPToolExecutionStartedEvent,
                 )
+
                 _sub(MCPConnectionStartedEvent, self.on_mcp_connection_started)
                 _sub(MCPConnectionCompletedEvent, self.on_mcp_connection_completed)
                 _sub(MCPConnectionFailedEvent, self.on_mcp_connection_failed)
                 _sub(MCPToolExecutionStartedEvent, self.on_mcp_tool_execution_started)
-                _sub(MCPToolExecutionCompletedEvent, self.on_mcp_tool_execution_completed)
+                _sub(
+                    MCPToolExecutionCompletedEvent, self.on_mcp_tool_execution_completed
+                )
                 _sub(MCPToolExecutionFailedEvent, self.on_mcp_tool_execution_failed)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.mcp_events import MCPConfigFetchFailedEvent
+
                 _sub(MCPConfigFetchFailedEvent, self.on_mcp_config_fetch_failed)
             except ImportError:
                 pass
@@ -1091,25 +1213,28 @@ class NoveumCrewAIListener(
         if self.capture_a2a:
             try:
                 from crewai.events.types.a2a_events import (
-                    A2ADelegationStartedEvent,
                     A2ADelegationCompletedEvent,
+                    A2ADelegationStartedEvent,
                 )
+
                 _sub(A2ADelegationStartedEvent, self.on_a2a_delegation_started)
                 _sub(A2ADelegationCompletedEvent, self.on_a2a_delegation_completed)
             except ImportError:
                 pass
 
             try:
-                from crewai.events.types.a2a_events import A2ADelegationFailedEvent  # type: ignore[attr-defined]
+                from crewai.events.types.a2a_events import A2ADelegationFailedEvent
+
                 _sub(A2ADelegationFailedEvent, self.on_a2a_delegation_failed)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.a2a_events import (
-                    A2AConversationStartedEvent,
                     A2AConversationCompletedEvent,
+                    A2AConversationStartedEvent,
                 )
+
                 _sub(A2AConversationStartedEvent, self.on_a2a_conversation_started)
                 _sub(A2AConversationCompletedEvent, self.on_a2a_conversation_completed)
             except ImportError:
@@ -1117,15 +1242,17 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.a2a_events import A2AMessageSentEvent
+
                 _sub(A2AMessageSentEvent, self.on_a2a_message_sent)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.a2a_events import (
-                    A2AStreamingStartedEvent,
                     A2AStreamingChunkEvent,
+                    A2AStreamingStartedEvent,
                 )
+
                 _sub(A2AStreamingStartedEvent, self.on_a2a_streaming_started)
                 _sub(A2AStreamingChunkEvent, self.on_a2a_streaming_chunk)
             except ImportError:
@@ -1136,6 +1263,7 @@ class NoveumCrewAIListener(
                     A2APollingStartedEvent,
                     A2APollingStatusEvent,
                 )
+
                 _sub(A2APollingStartedEvent, self.on_a2a_polling_started)
                 _sub(A2APollingStatusEvent, self.on_a2a_polling_status)
             except ImportError:
@@ -1143,18 +1271,21 @@ class NoveumCrewAIListener(
 
             try:
                 from crewai.events.types.a2a_events import A2AArtifactReceivedEvent
+
                 _sub(A2AArtifactReceivedEvent, self.on_a2a_artifact_received)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.a2a_events import A2AAuthenticationFailedEvent
+
                 _sub(A2AAuthenticationFailedEvent, self.on_a2a_auth_failed)
             except ImportError:
                 pass
 
             try:
                 from crewai.events.types.a2a_events import A2AConnectionErrorEvent
+
                 _sub(A2AConnectionErrorEvent, self.on_a2a_connection_error)
             except ImportError:
                 pass
@@ -1195,11 +1326,11 @@ def setup_crewai_tracing(**kwargs: Any) -> NoveumCrewAIListener:
     >>> crew.callback_function = listener
     """
     try:
-        from noveum_trace import is_initialized, get_client
-    except ImportError:
+        from noveum_trace import get_client, is_initialized
+    except ImportError as exc:
         raise RuntimeError(
             "noveum_trace not installed. Install with: pip install noveum-trace"
-        )
+        ) from exc
 
     if not is_initialized():
         raise RuntimeError(

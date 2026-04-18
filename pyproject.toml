@@ -83,7 +83,7 @@ dev = [
     "types-requests>=2.25.0",
     "types-PyYAML>=6.0.0",
     "types-Pillow>=9.0.0",
-    
+
     # Runtime dependencies for type stubs
     "Pillow>=9.0.0",
 
@@ -224,6 +224,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"docs/examples/crewai_e2e_test.py" = ["E402"]
 "__init__.py" = ["F401"]
 "tests/*" = ["B011"]
 "src/noveum_trace/auto_instrument.py" = ["B010"]

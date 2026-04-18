@@ -35,13 +35,8 @@ Mid-reasoning annotations (no span lifecycle — annotate open reasoning span):
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown,
     _agent_spans,
-    _reasoning_spans (dict[reasoning_id, {span, start_t}]),
-    _observation_spans (dict[obs_id, {span, start_t}])
-
-Note: ``_reasoning_spans`` and ``_observation_spans`` are not declared in
-``_CrewAIObserverState``; this mixin stores them in ``_flow_method_spans``
-and ``_memory_op_spans`` respectively under namespaced keys to avoid adding
-new state dicts.  (Alternatively, subclasses may extend the state class.)
+    _reasoning_spans (``reasoning_id`` → ``{span, start_t, agent_id}``),
+    _observation_spans (``obs_id`` → ``{span, start_t, agent_id}``)
 """
 
 from __future__ import annotations
@@ -76,12 +71,6 @@ logger = logging.getLogger(__name__)
 # Span name constants (not in crewai_constants.py — reasoning is internal)
 _SPAN_REASONING = "crewai.reasoning"
 _SPAN_STEP_OBSERVATION = "crewai.step_observation"
-
-# Namespace prefixes for reusing existing state dicts
-# _flow_method_spans  → reasoning spans  (key: "rsn::{reasoning_id}")
-# _memory_op_spans    → observation spans (key: "obs::{obs_id}")
-_RSN_PREFIX = "rsn::"
-_OBS_PREFIX = "obs::"
 
 
 class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
@@ -124,7 +113,6 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            key = _RSN_PREFIX + reasoning_id
 
             attrs = _build_reasoning_start_attributes(source, event, reasoning_id)
             start_t = monotonic_now()
@@ -138,7 +126,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             )
 
             with self._lock:
-                self._flow_method_spans[key] = {
+                self._reasoning_spans[reasoning_id] = {
                     "span": span,
                     "start_t": start_t,
                     "agent_id": agent_id,
@@ -186,9 +174,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             if is_ready is not None:
                 extra["reasoning.is_ready"] = bool(is_ready)
 
-            self._finish_reasoning_span(
-                reasoning_id, ATTR_STATUS_SUCCESS, None, extra
-            )
+            self._finish_reasoning_span(reasoning_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
             logger.debug(
                 "on_agent_reasoning_completed error:\n%s", traceback.format_exc()
@@ -203,9 +189,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             self._finish_reasoning_span(reasoning_id, ATTR_STATUS_ERROR, error)
         except Exception:
-            logger.debug(
-                "on_agent_reasoning_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_agent_reasoning_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Step observation — started / completed / failed
@@ -234,16 +218,14 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             obs_id = _resolve_obs_id(event, source)
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            key = _OBS_PREFIX + obs_id
 
             attrs = _build_observation_start_attributes(source, event, obs_id)
             start_t = monotonic_now()
 
             # Parent: active reasoning span → agent span → None
-            parent_span = (
-                self._get_reasoning_span(reasoning_id)
-                or self._get_agent_span(agent_id)
-            )
+            parent_span = self._get_reasoning_span(
+                reasoning_id
+            ) or self._get_agent_span(agent_id)
 
             span = self._create_child_span(
                 _SPAN_STEP_OBSERVATION,
@@ -252,8 +234,11 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             )
 
             with self._lock:
-                self._memory_op_spans[key] = span
-                self._memory_op_start_times[key] = start_t
+                self._observation_spans[obs_id] = {
+                    "span": span,
+                    "start_t": start_t,
+                    "agent_id": agent_id,
+                }
 
             logger.debug(
                 "Observation span opened: obs_id=%s step=%s",
@@ -335,9 +320,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            span = (
-                self._get_reasoning_span(reasoning_id)
-                or self._get_agent_span(agent_id)
+            span = self._get_reasoning_span(reasoning_id) or self._get_agent_span(
+                agent_id
             )
             if span is None:
                 return
@@ -377,9 +361,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
             _set_span_attributes(span, attrs)
             logger.debug("Plan refinement annotated: reasoning_id=%s", reasoning_id)
         except Exception:
-            logger.debug(
-                "on_plan_refinement error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_plan_refinement error:\n%s", traceback.format_exc())
 
     def on_plan_replan_triggered(self, source: Any, event: Any) -> None:
         """
@@ -402,9 +384,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            span = (
-                self._get_reasoning_span(reasoning_id)
-                or self._get_agent_span(agent_id)
+            span = self._get_reasoning_span(reasoning_id) or self._get_agent_span(
+                agent_id
             )
             if span is None:
                 return
@@ -426,9 +407,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            completed = (
-                safe_getattr(event, "completed_steps")
-                or safe_getattr(event, "steps_done")
+            completed = safe_getattr(event, "completed_steps") or safe_getattr(
+                event, "steps_done"
             )
             if completed is not None:
                 if isinstance(completed, (list, tuple)):
@@ -447,9 +427,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 replan_count,
             )
         except Exception:
-            logger.debug(
-                "on_plan_replan_triggered error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_plan_replan_triggered error:\n%s", traceback.format_exc())
 
     def on_goal_achieved_early(self, source: Any, event: Any) -> None:
         """
@@ -471,18 +449,16 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            span = (
-                self._get_reasoning_span(reasoning_id)
-                or self._get_agent_span(agent_id)
+            span = self._get_reasoning_span(reasoning_id) or self._get_agent_span(
+                agent_id
             )
             if span is None:
                 return
 
             attrs: dict[str, Any] = {"reasoning.goal_achieved_early": True}
 
-            steps_remaining = (
-                safe_getattr(event, "steps_remaining")
-                or safe_getattr(event, "remaining_steps")
+            steps_remaining = safe_getattr(event, "steps_remaining") or safe_getattr(
+                event, "remaining_steps"
             )
             if steps_remaining is not None:
                 try:
@@ -516,9 +492,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                 steps_remaining,
             )
         except Exception:
-            logger.debug(
-                "on_goal_achieved_early error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_goal_achieved_early error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Internal helpers
@@ -531,11 +505,68 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         with self._lock:
             return self._agent_spans.get(agent_id)
 
+    def _close_orphan_observation_spans(
+        self,
+        agent_id: str,
+        status: str,
+        error: Any,
+    ) -> None:
+        """Force-close open step-observation spans owned by *agent_id*."""
+        with self._lock:
+            open_obs_ids = [
+                oid
+                for oid, entry in self._observation_spans.items()
+                if entry.get("agent_id") == agent_id
+            ]
+        for obs_id in open_obs_ids:
+            try:
+                logger.debug(
+                    "_close_orphan_observation_spans: force-closing obs_id=%s "
+                    "agent_id=%s",
+                    obs_id,
+                    agent_id,
+                )
+                self._finish_observation_span(obs_id, status, error, None)
+            except Exception:
+                logger.debug(
+                    "_close_orphan_observation_spans error for obs_id=%s:\n%s",
+                    obs_id,
+                    traceback.format_exc(),
+                )
+
+    def _close_orphan_reasoning_spans(
+        self,
+        agent_id: str,
+        status: str,
+        error: Any,
+    ) -> None:
+        """Force-close open reasoning spans owned by *agent_id*."""
+        with self._lock:
+            open_reasoning_ids = [
+                rid
+                for rid, entry in self._reasoning_spans.items()
+                if entry.get("agent_id") == agent_id
+            ]
+        for rid in open_reasoning_ids:
+            try:
+                logger.debug(
+                    "_close_orphan_reasoning_spans: force-closing reasoning_id=%s "
+                    "agent_id=%s",
+                    rid,
+                    agent_id,
+                )
+                self._finish_reasoning_span(rid, status, error, None)
+            except Exception:
+                logger.debug(
+                    "_close_orphan_reasoning_spans error for reasoning_id=%s:\n%s",
+                    rid,
+                    traceback.format_exc(),
+                )
+
     def _get_reasoning_span(self, reasoning_id: str) -> Any:
         """Return the open reasoning span for *reasoning_id*, or ``None``."""
-        key = _RSN_PREFIX + reasoning_id
         with self._lock:
-            entry = self._flow_method_spans.get(key)
+            entry = self._reasoning_spans.get(reasoning_id)
         return entry["span"] if entry else None
 
     def _finish_reasoning_span(
@@ -546,9 +577,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         extra_attrs: Optional[dict[str, Any]] = None,
     ) -> None:
         """Write final attributes onto the reasoning span and close it."""
-        key = _RSN_PREFIX + reasoning_id
         with self._lock:
-            entry = self._flow_method_spans.pop(key, None)
+            entry = self._reasoning_spans.pop(reasoning_id, None)
 
         if entry is None:
             logger.debug(
@@ -577,6 +607,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
                 from noveum_trace.core.span import SpanStatus
+
                 span.set_status(SpanStatus.ERROR, str(error) if error else "")
             except Exception:
                 pass
@@ -601,15 +632,13 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         extra_attrs: Optional[dict[str, Any]] = None,
     ) -> None:
         """Write final attributes onto the observation span and close it."""
-        key = _OBS_PREFIX + obs_id
         with self._lock:
-            span = self._memory_op_spans.pop(key, None)
-            start_t = self._memory_op_start_times.pop(key, None)
+            entry = self._observation_spans.pop(obs_id, None)
+        span = entry.get("span") if entry else None
+        start_t = entry.get("start_t") if entry else None
 
         if span is None:
-            logger.debug(
-                "_finish_observation_span: no open span for obs_id=%s", obs_id
-            )
+            logger.debug("_finish_observation_span: no open span for obs_id=%s", obs_id)
             return
 
         attrs: dict[str, Any] = {"step.status": status}
@@ -629,6 +658,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
                 from noveum_trace.core.span import SpanStatus
+
                 span.set_status(SpanStatus.ERROR, str(error) if error else "")
             except Exception:
                 pass
@@ -687,16 +717,12 @@ def _build_reasoning_start_attributes(
     """Collect span attributes for the opening ``crewai.reasoning`` span."""
     attrs: dict[str, Any] = {"reasoning.id": reasoning_id}
 
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-    task_id = (
-        safe_getattr(event, "task_id")
-        or safe_getattr(safe_getattr(source, "task"), "id")
+    task_id = safe_getattr(event, "task_id") or safe_getattr(
+        safe_getattr(source, "task"), "id"
     )
     if task_id:
         attrs[ATTR_TASK_ID] = str(task_id)
@@ -728,10 +754,7 @@ def _build_reasoning_start_attributes(
         attrs["reasoning.is_ready"] = bool(is_ready)
 
     # Planned action (when the thought already includes a tool decision)
-    tool_name = (
-        safe_getattr(event, "tool_name")
-        or safe_getattr(event, "action")
-    )
+    tool_name = safe_getattr(event, "tool_name") or safe_getattr(event, "action")
     if tool_name:
         attrs["reasoning.tool_name"] = truncate_str(str(tool_name), 256)
 
@@ -741,11 +764,7 @@ def _build_reasoning_start_attributes(
         or safe_getattr(event, "arguments")
     )
     if tool_input is not None:
-        raw = (
-            tool_input
-            if isinstance(tool_input, str)
-            else safe_json_dumps(tool_input)
-        )
+        raw = tool_input if isinstance(tool_input, str) else safe_json_dumps(tool_input)
         attrs["reasoning.tool_input"] = truncate_str(raw, MAX_DESCRIPTION_LENGTH)
 
     return attrs
@@ -758,10 +777,7 @@ def _build_observation_start_attributes(
     attrs: dict[str, Any] = {"step.obs_id": obs_id}
 
     # step.number — 1-based (spec); step.index — 0-based alias for convenience
-    step_number = (
-        safe_getattr(event, "step_number")
-        or safe_getattr(event, "number")
-    )
+    step_number = safe_getattr(event, "step_number") or safe_getattr(event, "number")
     if step_number is not None:
         try:
             attrs["step.number"] = int(step_number)
@@ -812,9 +828,7 @@ def _build_observation_start_attributes(
         attrs["step.action_input"] = truncate_str(raw, MAX_DESCRIPTION_LENGTH)
 
     # Completion and plan validity flags
-    completed_ok = safe_getattr(event, "completed_ok") or safe_getattr(
-        event, "success"
-    )
+    completed_ok = safe_getattr(event, "completed_ok") or safe_getattr(event, "success")
     if completed_ok is not None:
         attrs["step.completed_ok"] = bool(completed_ok)
 
@@ -840,14 +854,12 @@ def _build_observation_start_attributes(
             pass
 
     # Agent correlation
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
     return attrs
+
 
 def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
     """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""

@@ -55,7 +55,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_MCP_TOOL_NAME,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
-    MAX_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
     MAX_TOOL_OUTPUT_LENGTH,
     SPAN_MCP_CONNECTION,
@@ -87,6 +86,8 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
 
     ``source`` is the MCP adapter or Agent; ``event`` carries the per-operation
     payload.  Every method is fully exception-shielded.
+
+    All handlers no-op when ``capture_mcp`` is ``False`` on the listener.
     """
 
     # =========================================================================
@@ -104,10 +105,11 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.server``        — server name / identifier
         - ``mcp.url``           — server URL or endpoint address
         - ``mcp.transport``     — transport type: ``"stdio"`` | ``"sse"`` | ``"http"``
-        - ``mcp.config``        — JSON snapshot of MCP server config (truncated)
+        - ``mcp.config``        — JSON snapshot of MCP server config (truncated;
+                                  sensitive-looking dict keys redacted)
         - ``agent.role``        — role of the agent initiating the connection
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
@@ -140,9 +142,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
                 attrs.get(ATTR_MCP_SERVER, "?"),
             )
         except Exception:
-            logger.debug(
-                "on_mcp_connection_started error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_mcp_connection_started error:\n%s", traceback.format_exc())
 
     def on_mcp_connection_completed(self, source: Any, event: Any) -> None:
         """
@@ -155,22 +155,19 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.status``           — ``"success"``
         - ``mcp.duration_ms``      — wall-clock duration of the connection handshake
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
             extra: dict[str, Any] = {}
 
-            tools = (
-                safe_getattr(event, "tools")
-                or safe_getattr(event, "available_tools")
+            tools = safe_getattr(event, "tools") or safe_getattr(
+                event, "available_tools"
             )
             if tools is not None:
                 try:
                     tool_list = list(tools)
-                    tool_names = [
-                        str(safe_getattr(t, "name") or t) for t in tool_list
-                    ]
+                    tool_names = [str(safe_getattr(t, "name") or t) for t in tool_list]
                     extra["mcp.available_tools"] = safe_json_dumps(tool_names)
                     extra["mcp.tool_count"] = len(tool_names)
                 except Exception:
@@ -196,7 +193,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.status``       — ``"error"``
         - ``mcp.duration_ms``  — wall-clock duration
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
@@ -209,9 +206,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
                 extra["mcp.error_type"] = str(error_type)
             self._finish_mcp_span(mcp_key, ATTR_STATUS_ERROR, error, extra)
         except Exception:
-            logger.debug(
-                "on_mcp_connection_failed error:\n%s", traceback.format_exc()
-            )
+            logger.debug("on_mcp_connection_failed error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # MCP Tool Execution — started / completed / failed
@@ -233,7 +228,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.input``         — JSON of arguments passed to the tool
         - ``agent.role``        — role of the invoking agent (correlation)
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
@@ -282,7 +277,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.status``       — ``"success"``
         - ``mcp.duration_ms``  — wall-clock duration of the tool call
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
@@ -295,9 +290,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             )
             if result is not None:
                 result_str = (
-                    result
-                    if isinstance(result, str)
-                    else safe_json_dumps(result)
+                    result if isinstance(result, str) else safe_json_dumps(result)
                 )
                 extra[ATTR_MCP_OUTPUT] = truncate_str(
                     result_str, MAX_TOOL_OUTPUT_LENGTH
@@ -324,7 +317,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.status``       — ``"error"``
         - ``mcp.duration_ms``  — wall-clock duration
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             mcp_key = _resolve_mcp_key(event, source)
@@ -362,7 +355,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.config_fetch_error.server``   — server name that failed to configure
         - ``mcp.config_fetch_error.config``   — partial config snapshot (truncated)
         """
-        if not self._is_active():
+        if not self._is_active() or not self.capture_mcp:
             return
         try:
             agent_id = _resolve_agent_id(source, event)
@@ -377,22 +370,17 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
 
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             error_str = (
-                str(error) if error else
-                str(safe_getattr(event, "message") or "")
+                str(error) if error else str(safe_getattr(event, "message") or "")
             )
 
             err_attrs: dict[str, Any] = {"mcp.config_fetch_failed": True}
             if error_str:
-                err_attrs["mcp.config_fetch_error"] = truncate_str(
-                    error_str, 1024
-                )
+                err_attrs["mcp.config_fetch_error"] = truncate_str(error_str, 1024)
             if error is not None:
                 err_attrs["mcp.config_fetch_error.type"] = type(error).__name__
                 tb = getattr(error, "__traceback__", None)
                 if tb:
-                    err_attrs[ATTR_ERROR_STACKTRACE] = "".join(
-                        traceback.format_tb(tb)
-                    )
+                    err_attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
 
             server = (
                 safe_getattr(event, "server_name")
@@ -405,7 +393,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             config = safe_getattr(event, "config") or safe_getattr(source, "config")
             if config is not None:
                 err_attrs["mcp.config_fetch_error.config"] = truncate_str(
-                    safe_json_dumps(config), 512
+                    safe_json_dumps(_redact_config(config)), 512
                 )
 
             _set_span_attributes(span, err_attrs)
@@ -423,11 +411,16 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
     # Internal helpers
     # =========================================================================
 
-    def _get_agent_or_crew_span(self, agent_id: Optional[str]) -> Any:
-        """Return the best available parent span: agent → any crew → None."""
+    def _get_agent_or_crew_span(
+        self, agent_id: Optional[str], crew_id: Optional[str] = None
+    ) -> Optional[Any]:
+        """Return the best available parent span: agent → specific crew → any crew."""
         with self._lock:
             if agent_id and agent_id in self._agent_spans:
                 return self._agent_spans[agent_id]
+            if crew_id and crew_id in self._crew_spans:
+                entry = self._crew_spans[crew_id]
+                return entry.get("span") if isinstance(entry, dict) else None
             # Fall back to any open crew span
             for entry in self._crew_spans.values():
                 return entry.get("span")
@@ -445,9 +438,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             entry = self._mcp_spans.pop(mcp_key, None)
 
         if entry is None:
-            logger.debug(
-                "_finish_mcp_span: no open entry for mcp_key=%s", mcp_key
-            )
+            logger.debug("_finish_mcp_span: no open entry for mcp_key=%s", mcp_key)
             return
 
         span = entry["span"]
@@ -477,6 +468,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
                 try:
                     from noveum_trace.core.span import SpanStatus
+
                     span.set_status(SpanStatus.ERROR, str(error) if error else "")
                 except Exception:
                     pass
@@ -489,22 +481,58 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "MCP span closed: mcp_key=%s status=%s", mcp_key, status
-        )
+        logger.debug("MCP span closed: mcp_key=%s status=%s", mcp_key, status)
 
 
 # =============================================================================
 # Module-level helpers (pure functions — no state access)
 # =============================================================================
 
+# Substrings matched against **dict keys** (lowercased) before writing config JSON.
+_SENSITIVE_CONFIG_KEY_MARKERS = (
+    "api_key",
+    "authorization",
+    "key",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def _redact_config(value: Any) -> Any:
+    """
+    Recursively copy *value*, replacing dict entries whose keys look like
+    credentials with ``\"<redacted>\"`` so MCP configs can be logged safely.
+    """
+    if isinstance(value, dict):
+        return {
+            str(k): (
+                "<redacted>"
+                if any(m in str(k).lower() for m in _SENSITIVE_CONFIG_KEY_MARKERS)
+                else _redact_config(v)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_config(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_config(item) for item in value)
+    return value
+
 
 def _resolve_mcp_key(event: Any, source: Any) -> str:
-    """Return a stable string key for this MCP operation instance."""
+    """
+    Return a stable string key for this MCP operation instance.
+
+    ``started_event_id`` is checked before ``event.id`` so completion/failure
+    events that reference the original start event reuse the same key as the
+    matching ``on_mcp_*_started`` handler.
+    """
     return str(
         safe_getattr(event, "mcp_key")
         or safe_getattr(event, "connection_id")
         or safe_getattr(event, "execution_id")
+        or safe_getattr(event, "started_event_id")
         or safe_getattr(event, "id")
         or safe_getattr(event, "run_id")
         or id(event)
@@ -521,9 +549,7 @@ def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
     return str(raw) if raw is not None else None
 
 
-def _populate_connection_attrs(
-    attrs: dict[str, Any], source: Any, event: Any
-) -> None:
+def _populate_connection_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None:
     """Write connection-specific attributes into *attrs* in-place."""
     server = (
         safe_getattr(event, "server_name")
@@ -550,22 +576,17 @@ def _populate_connection_attrs(
     if transport:
         attrs["mcp.transport"] = str(transport).lower()
 
-    # Compact config snapshot (exclude secrets / tokens)
+    # Compact config snapshot (sensitive dict keys redacted before JSON)
     config = safe_getattr(event, "config") or safe_getattr(source, "config")
     if config is not None:
-        attrs["mcp.config"] = truncate_str(safe_json_dumps(config), 512)
+        attrs["mcp.config"] = truncate_str(safe_json_dumps(_redact_config(config)), 512)
 
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
 
-def _populate_tool_attrs(
-    attrs: dict[str, Any], source: Any, event: Any
-) -> None:
+def _populate_tool_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None:
     """Write tool-execution-specific attributes into *attrs* in-place."""
     server = (
         safe_getattr(event, "server_name")
@@ -590,17 +611,10 @@ def _populate_tool_attrs(
         or safe_getattr(event, "params")
     )
     if arguments is not None:
-        raw = (
-            arguments
-            if isinstance(arguments, str)
-            else safe_json_dumps(arguments)
-        )
+        raw = arguments if isinstance(arguments, str) else safe_json_dumps(arguments)
         attrs[ATTR_MCP_INPUT] = truncate_str(raw, MAX_TEXT_LENGTH)
 
-    agent_role = (
-        safe_getattr(event, "agent_role")
-        or safe_getattr(source, "role")
-    )
+    agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 

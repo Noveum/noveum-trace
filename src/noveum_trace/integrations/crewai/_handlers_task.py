@@ -118,9 +118,7 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
                 self._task_spans[task_id] = span
                 self._task_start_times[task_id] = start_t
 
-            logger.debug(
-                "Task span opened: task_id=%s crew_id=%s", task_id, crew_id
-            )
+            logger.debug("Task span opened: task_id=%s crew_id=%s", task_id, crew_id)
 
         except Exception:
             logger.debug("on_task_started error:\n%s", traceback.format_exc())
@@ -269,9 +267,7 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
             start_t = self._task_start_times.pop(task_id, None)
 
         if span is None:
-            logger.debug(
-                "_finish_task_span: no open span for task_id=%s", task_id
-            )
+            logger.debug("_finish_task_span: no open span for task_id=%s", task_id)
             return
 
         attrs: dict[str, Any] = {ATTR_TASK_STATUS: status}
@@ -316,9 +312,7 @@ class _TaskHandlersMixin(_CrewAIObserverMixinBase):
                 traceback.format_exc(),
             )
 
-        logger.debug(
-            "Task span closed: task_id=%s status=%s", task_id, status
-        )
+        logger.debug("Task span closed: task_id=%s status=%s", task_id, status)
 
 
 # =============================================================================
@@ -368,18 +362,16 @@ def _build_task_attributes(source: Any, event: Any) -> dict[str, Any]:
     if name:
         attrs[ATTR_TASK_NAME] = str(name)
 
-    description = (
-        safe_getattr(event, "description")
-        or safe_getattr(source, "description")
+    description = safe_getattr(event, "description") or safe_getattr(
+        source, "description"
     )
     if description:
         attrs[ATTR_TASK_DESCRIPTION] = truncate_str(
             str(description), MAX_DESCRIPTION_LENGTH
         )
 
-    expected_output = (
-        safe_getattr(event, "expected_output")
-        or safe_getattr(source, "expected_output")
+    expected_output = safe_getattr(event, "expected_output") or safe_getattr(
+        source, "expected_output"
     )
     if expected_output:
         attrs[ATTR_TASK_EXPECTED_OUTPUT] = truncate_str(
@@ -448,9 +440,7 @@ def _extract_context_chain(context_tasks: Any) -> list[str]:
                 continue
             description = safe_getattr(ctx_task, "description")
             if description:
-                result.append(
-                    truncate_str(str(description), MAX_DESCRIPTION_LENGTH)
-                )
+                result.append(truncate_str(str(description), MAX_DESCRIPTION_LENGTH))
                 continue
             task_id = safe_getattr(ctx_task, "id")
             if task_id:
@@ -508,9 +498,7 @@ def _extract_evaluation_attributes(event: Any) -> dict[str, Any]:
                 pass
         nested_feedback = safe_getattr(result_obj, "feedback")
         if nested_feedback and "task.evaluation_feedback" not in attrs:
-            attrs["task.evaluation_feedback"] = truncate_str(
-                str(nested_feedback), 2048
-            )
+            attrs["task.evaluation_feedback"] = truncate_str(str(nested_feedback), 2048)
 
     return attrs
 
@@ -545,6 +533,7 @@ def _extract_task_output_text(output: Any) -> Optional[str]:
     if isinstance(json_dict, dict):
         try:
             import json
+
             return json.dumps(json_dict, default=str)
         except Exception:
             pass

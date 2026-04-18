@@ -21,8 +21,8 @@ that itself needs the same lock.
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Optional, Protocol
-
 
 # ---------------------------------------------------------------------------
 # Annotation-only state class
@@ -91,6 +91,18 @@ class _CrewAIObserverState:
 
     #: memory_op_id → Span for a memory read/write operation
     _memory_op_spans: dict[str, Any]
+
+    #: reasoning_id → entry dict for an open ``crewai.reasoning`` span
+    #: (``span``, ``start_t``, ``agent_id``)
+    _reasoning_spans: dict[str, Any]
+
+    #: obs_id → entry dict for an open ``crewai.step_observation`` span
+    #: (``span``, ``start_t``, ``agent_id``)
+    _observation_spans: dict[str, Any]
+
+    #: guardrail_id → entry dict for an open ``crewai.guardrail`` span
+    #: (``span``, ``start_t``)
+    _guardrail_spans: dict[str, Any]
 
     #: a2a_context_id → Span for an agent-to-agent (A2A) interaction context
     _a2a_spans: dict[str, Any]
@@ -167,8 +179,8 @@ class _CrewAIObserverState:
     # =========================================================================
     # Token tracking (monkey-patch buffer)
     # =========================================================================
-    #: call_id → dict of token counts from monkey-patch (for late arrivals)
-    _token_buffer: dict[str, dict[str, Any]]
+    #: LRU sentinel map (``call_id → True``) paired with ``_llm_usage_by_call_id``
+    _token_buffer: OrderedDict[str, bool]
 
     #: call_id → dict of token counts populated by monkey-patch
     _llm_usage_by_call_id: dict[str, dict[str, Any]]
@@ -209,20 +221,52 @@ class _CrewAIObserverMethods(Protocol):
     type-checkers can verify all call sites without a circular import.
     """
 
+    def _is_active(self) -> bool: ...
+
     def _create_child_span(
         self,
-        name: str,
+        span_name: str,
         parent_span: Any = None,
         attributes: Optional[dict[str, Any]] = None,
+        crew_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Any: ...
 
     def _get_client(self) -> Any: ...
+
+    def _get_crew_span(self, crew_id: str) -> Optional[Any]: ...
+
+    def _get_agent_span(self, agent_id: Optional[str]) -> Optional[Any]: ...
+
+    def _get_agent_or_crew_span(
+        self, agent_id: Optional[str], crew_id: Optional[str] = None
+    ) -> Optional[Any]: ...
+
+    def _get_agent_or_task_span(
+        self, agent_id: Optional[str], task_id: Optional[str]
+    ) -> Optional[Any]: ...
+
+    def _get_tool_or_agent_span(
+        self, run_id: Optional[str], agent_id: Optional[str]
+    ) -> Optional[Any]: ...
 
     def _accumulate_tokens(
         self,
         crew_id: str,
         tokens: int,
         cost: float,
+    ) -> None: ...
+
+    def _finish_llm_span(self, *args: Any, **kwargs: Any) -> None: ...
+
+    def _finish_tool_span(self, *args: Any, **kwargs: Any) -> None: ...
+
+    def _close_orphan_observation_spans(
+        self, agent_id: str, status: str, error: Any
+    ) -> None: ...
+
+    def _close_orphan_reasoning_spans(
+        self, agent_id: str, status: str, error: Any
     ) -> None: ...
 
 
@@ -243,20 +287,52 @@ class _CrewAIObserverMixinBase(_CrewAIObserverState):
 
     if TYPE_CHECKING:
 
+        def _is_active(self) -> bool: ...
+
         def _create_child_span(
             self,
-            name: str,
+            span_name: str,
             parent_span: Any = None,
             attributes: Optional[dict[str, Any]] = None,
+            crew_id: Optional[str] = None,
+            task_id: Optional[str] = None,
         ) -> Any: ...
 
         def _get_client(self) -> Any: ...
+
+        def _get_crew_span(self, crew_id: str) -> Optional[Any]: ...
+
+        def _get_agent_span(self, agent_id: Optional[str]) -> Optional[Any]: ...
+
+        def _get_agent_or_crew_span(
+            self, agent_id: Optional[str], crew_id: Optional[str] = None
+        ) -> Optional[Any]: ...
+
+        def _get_agent_or_task_span(
+            self, agent_id: Optional[str], task_id: Optional[str]
+        ) -> Optional[Any]: ...
+
+        def _get_tool_or_agent_span(
+            self, run_id: Optional[str], agent_id: Optional[str]
+        ) -> Optional[Any]: ...
 
         def _accumulate_tokens(
             self,
             crew_id: str,
             tokens: int,
             cost: float,
+        ) -> None: ...
+
+        def _finish_llm_span(self, *args: Any, **kwargs: Any) -> None: ...
+
+        def _finish_tool_span(self, *args: Any, **kwargs: Any) -> None: ...
+
+        def _close_orphan_observation_spans(
+            self, agent_id: str, status: str, error: Any
+        ) -> None: ...
+
+        def _close_orphan_reasoning_spans(
+            self, agent_id: str, status: str, error: Any
         ) -> None: ...
 
     # ------------------------------------------------------------------
