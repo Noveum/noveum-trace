@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -238,6 +238,8 @@ def _memory_event(op_id: str = "mem-op-1") -> MagicMock:
     ev = MagicMock()
     # _resolve_op_id() checks event.memory_op_id first — set it explicitly
     ev.memory_op_id = op_id
+    # Correlate with TestMemoryHandlers._listener_with_agent (``_agent_spans["Researcher"]``)
+    ev.agent_id = "Researcher"
     ev.query = "what did we discuss?"
     ev.limit = 5
     ev.score_threshold = 0.5
@@ -353,6 +355,26 @@ class TestListenerInit:
         assert lnr.capture_flow is False
         lnr.shutdown()
 
+    def test_capture_reasoning_false_skips_reasoning_handlers(self):
+        """With capture_reasoning=False, reasoning/observation spans are not opened."""
+        lnr = _make_listener(capture_reasoning=False)
+        span = _make_span(span_id="agent-span", trace_id="trace-r")
+        trace = _make_trace("trace-r")
+        lnr._client._active_traces["trace-r"] = trace
+        lnr._agent_spans["ag-1"] = span
+
+        ev = MagicMock()
+        ev.agent_id = "ag-1"
+        ev.reasoning_id = "r-1"
+        lnr.on_agent_reasoning_started(MagicMock(), ev)
+        assert lnr._reasoning_spans == {}
+
+        lnr.on_step_observation_started(MagicMock(), ev)
+        assert lnr._observation_spans == {}
+
+        lnr.on_plan_refinement(MagicMock(), ev)
+        lnr.shutdown()
+
     def test_span_correlation_dicts_are_empty(self):
         lnr = _make_listener()
         for attr in [
@@ -370,6 +392,7 @@ class TestListenerInit:
             "_a2a_spans",
             "_a2a_stream_buffers",
             "_a2a_streaming_chunks",
+            "_a2a_streaming_lengths",
             "_mcp_spans",
         ]:
             assert getattr(lnr, attr) == {}, f"{attr} should start empty"
@@ -413,6 +436,38 @@ class TestTokenPatch:
         lnr = _make_listener()
         assert m._patch_applied is True
         lnr.shutdown()
+
+    def test_track_token_usage_wrapper_delegates_to_captured_original(self):
+        """Patch wrapper forwards to the captured CrewAI fn and returns the same value."""
+        from crewai.llms.base_llm import BaseLLM
+
+        import noveum_trace.integrations.crewai.crewai_listener as m
+
+        assert m._patch_applied is False
+
+        true_crewai = BaseLLM._track_token_usage_internal
+        spy = MagicMock(wraps=true_crewai)
+        BaseLLM._track_token_usage_internal = spy
+
+        lnr = None
+        try:
+            lnr = _make_listener()
+            wrapped = BaseLLM._track_token_usage_internal
+            llm = MagicMock()
+            usage_in = {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+            spy.reset_mock()
+            ret = wrapped(llm, usage_in)
+            assert spy.call_count == 1
+            assert spy.call_args == call(llm, usage_in)
+            usage_dup = {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+            assert ret == true_crewai(llm, usage_dup)
+        finally:
+            if lnr is not None:
+                lnr.shutdown()
+            # Shutdown restores BaseLLM to ``spy`` (stored as the patch's original).
+            BaseLLM._track_token_usage_internal = true_crewai
+            assert m._patch_applied is False
 
     def test_patch_applied_only_once_for_two_listeners(self):
         from crewai.llms.base_llm import BaseLLM
@@ -1298,6 +1353,42 @@ class TestMemoryHandlers:
         fail_ev.error = "timeout"
         lnr.on_memory_query_failed(MagicMock(), fail_ev)
         assert "mem-fail-op" not in lnr._memory_op_spans
+        lnr.shutdown()
+
+
+# ===========================================================================
+# 11b. Guardrail handler path
+# ===========================================================================
+
+
+class TestGuardrailHandlers:
+    def test_guardrail_completed_pairs_via_started_event_id(self):
+        """CrewAI links completed → started via ``started_event_id`` / ``event_id``."""
+        from types import SimpleNamespace
+
+        lnr = _make_listener()
+        span = _make_span(span_id="llm-span", trace_id="trace-1")
+        lnr._llm_call_spans["call-1"] = span
+        ev_start = SimpleNamespace(
+            event_id="crewai-gr-start-1",
+            started_event_id=None,
+            guardrail_id=None,
+            check_id=None,
+            id=None,
+            run_id=None,
+            call_id="call-1",
+        )
+        lnr.on_llm_guardrail_started(MagicMock(), ev_start)
+        assert "crewai-gr-start-1" in lnr._guardrail_spans
+
+        ev_done = SimpleNamespace(
+            event_id="crewai-gr-done-9",
+            started_event_id="crewai-gr-start-1",
+            guardrail_id="other-id",
+            validation_success=True,
+        )
+        lnr.on_llm_guardrail_completed(MagicMock(), ev_done)
+        assert "crewai-gr-start-1" not in lnr._guardrail_spans
         lnr.shutdown()
 
 

@@ -40,7 +40,8 @@ Handles CrewAI A2A events across multiple span types:
 
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown, _agent_spans, _task_spans,
-    _a2a_spans, _a2a_stream_buffers, _a2a_streaming_chunks, _a2a_start_times
+    _a2a_spans, _a2a_stream_buffers, _a2a_streaming_chunks, _a2a_streaming_lengths,
+    _a2a_start_times
     (composite keys ``(context_id, "delegation")`` / ``(context_id, "conversation")``)
 """
 
@@ -61,6 +62,7 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_ERROR_TYPE,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
+    MAX_A2A_CONVERSATION_MESSAGES,
     MAX_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
     SPAN_A2A_CONVERSATION,
@@ -270,6 +272,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 }
                 self._a2a_stream_buffers.setdefault(ck, [])
                 self._a2a_streaming_chunks.setdefault(ck, [])
+                self._a2a_streaming_lengths.setdefault(ck, 0)
                 self._a2a_start_times[ck] = start_t
 
             logger.debug("A2A conversation span opened: context_id=%s", context_id)
@@ -346,6 +349,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             turn_number = safe_getattr(event, "turn_number")
             message = safe_getattr(event, "message") or safe_getattr(event, "content")
             sender = safe_getattr(event, "sender") or safe_getattr(event, "agent_role")
+            message_type = safe_getattr(event, "message_type")
+            if message_type is None:
+                message_type = safe_getattr(event, "msg_type")
 
             msg_entry = {
                 "type": "sent",
@@ -355,11 +361,15 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 ),
                 "sender": str(sender) if sender else "unknown",
             }
+            if message_type is not None:
+                msg_entry["message_type"] = truncate_str(
+                    str(message_type), MAX_TEXT_LENGTH
+                )
 
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
                 buf = self._a2a_stream_buffers.get(ck, [])
-                if len(buf) < 1000:  # Limit buffer size per conversation
+                if len(buf) < MAX_A2A_CONVERSATION_MESSAGES:
                     buf.append(msg_entry)
                     self._a2a_stream_buffers[ck] = buf
 
@@ -375,6 +385,13 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     def on_a2a_message_received(self, source: Any, event: Any) -> None:
         """
         Append a received message to the conversation buffer.
+
+        Attributes recorded (buffered)
+        ------------------------------
+        - ``a2a.turn_number``      — turn in the conversation
+        - ``a2a.message_content``  — message text (truncated)
+        - ``a2a.message_sender``   — agent role sending the message
+        - ``a2a.message_type``     — message type (e.g., "query", "response")
         """
         if not self._is_active():
             return
@@ -385,6 +402,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             sender = safe_getattr(event, "sender") or safe_getattr(
                 event, "from_agent_role"
             )
+            message_type = safe_getattr(event, "message_type")
+            if message_type is None:
+                message_type = safe_getattr(event, "msg_type")
 
             msg_entry = {
                 "type": "received",
@@ -394,11 +414,15 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 ),
                 "sender": str(sender) if sender else "unknown",
             }
+            if message_type is not None:
+                msg_entry["message_type"] = truncate_str(
+                    str(message_type), MAX_TEXT_LENGTH
+                )
 
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
                 buf = self._a2a_stream_buffers.get(ck, [])
-                if len(buf) < 1000:
+                if len(buf) < MAX_A2A_CONVERSATION_MESSAGES:
                     buf.append(msg_entry)
                     self._a2a_stream_buffers[ck] = buf
 
@@ -425,6 +449,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             with self._lock:
                 if ck not in self._a2a_streaming_chunks:
                     self._a2a_streaming_chunks[ck] = []
+                    self._a2a_streaming_lengths[ck] = 0
             logger.debug("A2A streaming started: context_id=%s", context_id)
         except Exception:
             logger.debug("on_a2a_streaming_started error:\n%s", traceback.format_exc())
@@ -454,9 +479,11 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
                 chunks = self._a2a_streaming_chunks.setdefault(ck, [])
-                current_len = sum(len(s) for s in chunks)
-                if current_len + len(chunk_str) <= MAX_TEXT_LENGTH:
+                current_len = self._a2a_streaming_lengths.setdefault(ck, 0)
+                add_len = len(chunk_str)
+                if current_len + add_len <= MAX_TEXT_LENGTH:
                     chunks.append(chunk_str)
+                    self._a2a_streaming_lengths[ck] = current_len + add_len
 
             if is_final:
                 logger.debug("A2A streaming final chunk: context_id=%s", context_id)
@@ -474,6 +501,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
             with self._lock:
                 raw_chunks = self._a2a_streaming_chunks.pop(ck, [])
+                self._a2a_streaming_lengths.pop(ck, None)
                 span_entry = self._a2a_spans.get(ck)
 
             if not span_entry:
@@ -990,6 +1018,7 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             start_t = self._a2a_start_times.pop(key, None)
             buf = self._a2a_stream_buffers.pop(key, None)
             stream_chunks = self._a2a_streaming_chunks.pop(key, None)
+            self._a2a_streaming_lengths.pop(key, None)
 
         if entry is None:
             logger.debug(

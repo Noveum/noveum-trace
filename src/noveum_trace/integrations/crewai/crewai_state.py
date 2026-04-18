@@ -175,11 +175,16 @@ class _CrewAIObserverState:
     # A2A streaming buffers
     # =========================================================================
     #: (context_id, span_type) → ordered list of message dicts (sent/received);
-    #: ``span_type="conversation"``. Raw streaming strings use ``_a2a_streaming_chunks``.
+    #: ``span_type="conversation"``. Raw streaming strings use ``_a2a_streaming_chunks``
+    #: plus ``_a2a_streaming_lengths`` (running character count per key).
     _a2a_stream_buffers: dict[tuple[str, str], list[Any]]
 
     #: (context_id, span_type) → raw streaming text chunks (``list[str]``).
     _a2a_streaming_chunks: dict[tuple[str, str], list[str]]
+
+    #: (context_id, span_type) → running sum of ``len(s)`` for that key's chunk list
+    #: (updated under ``_lock`` with every append / pop; avoids O(n) re-sums).
+    _a2a_streaming_lengths: dict[tuple[str, str], int]
 
     # =========================================================================
     # Token tracking (monkey-patch buffer)

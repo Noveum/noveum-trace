@@ -222,6 +222,7 @@ class NoveumCrewAIListener(
 
         self._a2a_stream_buffers: dict[tuple[str, str], list[Any]] = {}
         self._a2a_streaming_chunks: dict[tuple[str, str], list[str]] = {}
+        self._a2a_streaming_lengths: dict[tuple[str, str], int] = {}
 
         # =====================================================================
         # Pending metadata stash
@@ -406,6 +407,7 @@ class NoveumCrewAIListener(
             self._llm_thinking_chunks.clear()
             self._a2a_stream_buffers.clear()
             self._a2a_streaming_chunks.clear()
+            self._a2a_streaming_lengths.clear()
             self._token_buffer.clear()
             self._llm_usage_by_call_id.clear()
             self._pending_llm_metadata.clear()

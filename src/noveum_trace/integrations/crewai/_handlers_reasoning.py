@@ -34,6 +34,8 @@ Mid-reasoning annotations (no span lifecycle — annotate open reasoning span):
 
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown,
+    capture_reasoning — when ``False``, all public handlers in this mixin no-op
+    after ``_is_active()`` (no spans, no sensitive attributes).
     _agent_spans,
     _reasoning_spans (``reasoning_id`` → ``{span, start_t, agent_id}``),
     _observation_spans (``obs_id`` → ``{span, start_t, agent_id}``)
@@ -118,6 +120,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not self.capture_reasoning:
+            return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             agent_id = _resolve_agent_id(source, event)
@@ -164,6 +168,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not self.capture_reasoning:
+            return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
             extra: dict[str, Any] = {}
@@ -191,6 +197,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
     def on_agent_reasoning_failed(self, source: Any, event: Any) -> None:
         """Close the ``crewai.reasoning`` span as ERROR."""
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
@@ -221,6 +229,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         - ``agent.role``           — executing agent's role (correlation)
         """
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             obs_id = _resolve_obs_id(event, source)
@@ -270,6 +280,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not self.capture_reasoning:
+            return
         try:
             obs_id = _resolve_obs_id(event, source)
             extra: dict[str, Any] = {}
@@ -296,6 +308,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
     def on_step_observation_failed(self, source: Any, event: Any) -> None:
         """Close the ``crewai.step_observation`` span as ERROR."""
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             obs_id = _resolve_obs_id(event, source)
@@ -324,6 +338,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         - ``reasoning.refinement_reason``  — why the plan was refined (if provided)
         """
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
@@ -391,6 +407,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                                                  the replan (context for debugging)
         """
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
@@ -460,6 +478,8 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         - ``reasoning.early_exit_reason``    — optional rationale from the agent
         """
         if not self._is_active():
+            return
+        if not self.capture_reasoning:
             return
         try:
             reasoning_id = _resolve_reasoning_id(event, source)
@@ -697,25 +717,40 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
 
 
 def _resolve_reasoning_id(event: Any, source: Any) -> str:
-    """Return a stable key for a reasoning attempt."""
-    return str(
-        safe_getattr(event, "reasoning_id")
-        or safe_getattr(event, "thought_id")
-        or safe_getattr(event, "id")
-        or safe_getattr(event, "run_id")
-        or id(event)
+    """
+    Return a stable key for a reasoning attempt.
+
+    CrewAI completion/failure events may set ``started_event_id`` to the start
+    event's id so finish handlers resolve the same key as ``on_agent_reasoning_started``.
+    """
+    raw = _first_non_none(
+        safe_getattr(event, "started_event_id"),
+        safe_getattr(event, "startedEventId"),
+        safe_getattr(event, "reasoning_id"),
+        safe_getattr(event, "thought_id"),
+        safe_getattr(event, "id"),
+        safe_getattr(event, "run_id"),
     )
+    return str(raw) if raw is not None else str(id(event))
 
 
 def _resolve_obs_id(event: Any, source: Any) -> str:
-    """Return a stable key for a step observation."""
-    return str(
-        safe_getattr(event, "obs_id")
-        or safe_getattr(event, "step_id")
-        or safe_getattr(event, "observation_id")
-        or safe_getattr(event, "id")
-        or id(event)
+    """
+    Return a stable key for a step observation.
+
+    Same ``started_event_id`` / ``startedEventId`` contract as reasoning and
+    tool handlers so ``on_step_observation_completed`` closes the span opened
+    in ``on_step_observation_started``.
+    """
+    raw = _first_non_none(
+        safe_getattr(event, "started_event_id"),
+        safe_getattr(event, "startedEventId"),
+        safe_getattr(event, "obs_id"),
+        safe_getattr(event, "step_id"),
+        safe_getattr(event, "observation_id"),
+        safe_getattr(event, "id"),
     )
+    return str(raw) if raw is not None else str(id(event))
 
 
 def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:

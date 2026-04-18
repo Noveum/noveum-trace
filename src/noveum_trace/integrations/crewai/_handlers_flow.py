@@ -422,7 +422,9 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
             recv_attrs: dict[str, Any] = {"flow.input_received": True}
 
-            value = safe_getattr(event, "value") or safe_getattr(event, "input")
+            value = safe_getattr(event, "value")
+            if value is None:
+                value = safe_getattr(event, "input")
             if value is not None:
                 raw = value if isinstance(value, str) else safe_json_dumps(value)
                 recv_attrs["flow.input_value"] = truncate_str(raw, 1024)
@@ -495,12 +497,12 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
 
-            feedback = (
-                safe_getattr(event, "feedback")
-                or safe_getattr(event, "response")
-                or safe_getattr(event, "value")
-                or safe_getattr(event, "text")
-            )
+            feedback = None
+            for _attr in ("feedback", "response", "value", "text"):
+                val = safe_getattr(event, _attr)
+                if val is not None:
+                    feedback = val
+                    break
             recv_attrs: dict[str, Any] = {"flow.feedback_received": True}
             if feedback is not None:
                 raw = (
@@ -508,7 +510,9 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                 )
                 recv_attrs["flow.feedback_text"] = truncate_str(raw, 2048)
 
-            outcome = safe_getattr(event, "outcome") or safe_getattr(event, "result")
+            outcome = safe_getattr(event, "outcome")
+            if outcome is None:
+                outcome = safe_getattr(event, "result")
             if outcome is not None:
                 recv_attrs["flow.feedback_outcome"] = truncate_str(
                     outcome if isinstance(outcome, str) else safe_json_dumps(outcome),
@@ -578,10 +582,13 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             attrs[ATTR_FLOW_DURATION_MS] = duration_ms_monotonic(start_t)
         if error is not None:
             attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
+            attrs[ATTR_ERROR_MESSAGE] = truncate_str(str(error), MAX_DESCRIPTION_LENGTH)
             tb = getattr(error, "__traceback__", None)
             if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
+                attrs[ATTR_ERROR_STACKTRACE] = truncate_str(
+                    "".join(traceback.format_tb(tb)),
+                    MAX_TEXT_LENGTH,
+                )
         if extra_attrs:
             attrs.update(extra_attrs)
 
@@ -649,10 +656,13 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
 
         if error is not None:
             attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
+            attrs[ATTR_ERROR_MESSAGE] = truncate_str(str(error), MAX_DESCRIPTION_LENGTH)
             tb = getattr(error, "__traceback__", None)
             if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
+                attrs[ATTR_ERROR_STACKTRACE] = truncate_str(
+                    "".join(traceback.format_tb(tb)),
+                    MAX_TEXT_LENGTH,
+                )
 
         _set_span_attributes(span, attrs)
 

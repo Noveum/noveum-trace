@@ -158,7 +158,16 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
-            self._open_memory_span(op_id, agent_id, attrs, span_name=SPAN_MEMORY_QUERY)
+            task_id = _resolve_memory_task_id(source, event)
+            crew_id = _resolve_memory_crew_id(source, event)
+            self._open_memory_span(
+                op_id,
+                agent_id,
+                attrs,
+                span_name=SPAN_MEMORY_QUERY,
+                task_id=task_id,
+                crew_id=crew_id,
+            )
             logger.debug(
                 "Memory query span opened: op_id=%s type=%s", op_id, memory_type
             )
@@ -271,7 +280,16 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-            self._open_memory_span(op_id, agent_id, attrs, span_name=SPAN_MEMORY_SAVE)
+            task_id = _resolve_memory_task_id(source, event)
+            crew_id = _resolve_memory_crew_id(source, event)
+            self._open_memory_span(
+                op_id,
+                agent_id,
+                attrs,
+                span_name=SPAN_MEMORY_SAVE,
+                task_id=task_id,
+                crew_id=crew_id,
+            )
             logger.debug(
                 "Memory save span opened: op_id=%s type=%s", op_id, memory_type
             )
@@ -332,14 +350,10 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 ATTR_MEMORY_OPERATION: _OP_RETRIEVAL,
             }
 
-            task_id = (
-                safe_getattr(event, "task_id")
-                or safe_getattr(event, "id")
-                or safe_getattr(safe_getattr(source, "task"), "id")
-            )
+            task_id = _resolve_memory_task_id(source, event)
             if task_id:
-                attrs["task.id"] = str(task_id)
-                attrs["memory.task_id"] = str(task_id)  # spec key
+                attrs["task.id"] = task_id
+                attrs["memory.task_id"] = task_id  # spec key
 
             agent_role = safe_getattr(event, "agent_role") or safe_getattr(
                 source, "role"
@@ -347,8 +361,14 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             if agent_role:
                 attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
+            crew_id = _resolve_memory_crew_id(source, event)
             self._open_memory_span(
-                op_id, agent_id, attrs, span_name=SPAN_MEMORY_RETRIEVAL
+                op_id,
+                agent_id,
+                attrs,
+                span_name=SPAN_MEMORY_RETRIEVAL,
+                task_id=task_id,
+                crew_id=crew_id,
             )
             logger.debug(
                 "Memory retrieval span opened: op_id=%s type=%s", op_id, memory_type
@@ -375,12 +395,17 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             op_id = _resolve_op_id(event, source)
             extra: dict[str, Any] = {}
 
-            memory_content = (
-                safe_getattr(event, "memory_content")
-                or safe_getattr(event, "context")
-                or safe_getattr(event, "memories")
-                or safe_getattr(event, "results")
-            )
+            memory_content = None
+            for _attr in (
+                "memory_content",
+                "context",
+                "memories",
+                "results",
+            ):
+                val = safe_getattr(event, _attr)
+                if val is not None:
+                    memory_content = val
+                    break
             if memory_content is not None:
                 if isinstance(memory_content, str):
                     extra["memory.content_preview"] = truncate_str(
@@ -430,36 +455,28 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         agent_id: Optional[str],
         attrs: dict[str, Any],
         span_name: str = SPAN_MEMORY_QUERY,
+        *,
+        task_id: Optional[str] = None,
+        crew_id: Optional[str] = None,
     ) -> None:
         """Create a memory span with the given *span_name* and register it in state."""
         start_t = monotonic_now()
 
-        # Best parent: agent span → task span (any open task) → None
-        parent_span = self._best_parent_for_memory(agent_id)
+        # Parent: same resolution as LLM/A2A — agent span, else explicit task span
+        # (never iterate arbitrary open tasks — avoids wrong trace under concurrency).
+        parent_span = self._get_agent_or_task_span(agent_id, task_id)
 
         span = self._create_child_span(
             span_name,
             parent_span=parent_span,
             attributes=attrs,
+            crew_id=crew_id,
+            task_id=task_id,
         )
 
         with self._lock:
             self._memory_op_spans[op_id] = span
             self._memory_op_start_times[op_id] = start_t
-
-    def _best_parent_for_memory(self, agent_id: Optional[str]) -> Any:
-        """
-        Return the most contextually appropriate parent span for a memory op.
-
-        Priority: agent span → first open task span → None.
-        """
-        with self._lock:
-            if agent_id and agent_id in self._agent_spans:
-                return self._agent_spans[agent_id]
-            # Pick any open task span (memory is task-scoped)
-            for span in self._task_spans.values():
-                return span
-        return None
 
     def _finish_memory_span(
         self,
@@ -552,6 +569,29 @@ def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
         safe_getattr(event, "agent_id")
         or safe_getattr(source, "id")
         or safe_getattr(source, "agent_id")
+    )
+    return str(raw) if raw is not None else None
+
+
+def _resolve_memory_task_id(source: Any, event: Any) -> Optional[str]:
+    """Return the task_id for this memory event, or ``None``."""
+    raw = (
+        safe_getattr(event, "task_id")
+        or safe_getattr(safe_getattr(event, "task"), "id")
+        or safe_getattr(safe_getattr(event, "from_task"), "id")
+        or safe_getattr(source, "task_id")
+        or safe_getattr(safe_getattr(source, "task"), "id")
+    )
+    return str(raw) if raw is not None else None
+
+
+def _resolve_memory_crew_id(source: Any, event: Any) -> Optional[str]:
+    """Return the crew_id for this memory event, or ``None``."""
+    raw = (
+        safe_getattr(event, "crew_id")
+        or safe_getattr(source, "crew_id")
+        or safe_getattr(safe_getattr(source, "crew"), "id")
+        or safe_getattr(safe_getattr(event, "crew"), "id")
     )
     return str(raw) if raw is not None else None
 

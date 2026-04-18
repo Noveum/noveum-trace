@@ -325,14 +325,28 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
 
 
 def _resolve_guardrail_id(event: Any, source: Any) -> str:
-    """Return a stable string key for the guardrail check instance."""
-    return str(
+    """Return a stable string key for the guardrail check instance.
+
+    CrewAI's event bus sets ``started_event_id`` on completed/failed events to the
+    ``event_id`` of the matching ``*_started`` event.  When that link is present it
+    must win so lifecycle handlers close the same span opened in ``*_started``.
+
+    Otherwise we fall back to explicit guardrail identifiers, then ``event_id`` (so
+    started events align with the bus link), then ``id(event)`` as a last resort.
+    """
+    started_link = safe_getattr(event, "started_event_id")
+    if isinstance(started_link, str) and started_link.strip():
+        return started_link.strip()
+
+    raw = (
         safe_getattr(event, "guardrail_id")
         or safe_getattr(event, "check_id")
         or safe_getattr(event, "id")
         or safe_getattr(event, "run_id")
+        or safe_getattr(event, "event_id")
         or id(event)
     )
+    return str(raw)
 
 
 def _resolve_call_id(event: Any) -> Optional[str]:
