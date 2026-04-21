@@ -119,8 +119,9 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_CONNECTION)
             agent_id = _resolve_agent_id(source, event)
+            crew_id, task_id = _resolve_mcp_parent_hints(self, source, event)
 
             attrs: dict[str, Any] = {
                 ATTR_MCP_KEY: mcp_key,
@@ -129,12 +130,14 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             _populate_connection_attrs(attrs, source, event)
 
             start_t = monotonic_now()
-            parent_span = self._get_agent_or_crew_span(agent_id)
+            parent_span = self._get_agent_or_crew_span(agent_id, crew_id)
 
             span = self._create_child_span(
                 SPAN_MCP_CONNECTION,
                 parent_span=parent_span,
                 attributes=attrs,
+                crew_id=crew_id,
+                task_id=task_id,
             )
 
             with self._lock:
@@ -165,16 +168,20 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_CONNECTION)
             extra: dict[str, Any] = {}
 
-            tools = safe_getattr(event, "tools") or safe_getattr(
-                event, "available_tools"
+            tools = _mcp_first_non_none(
+                safe_getattr(event, "tools"),
+                safe_getattr(event, "available_tools"),
             )
             if tools is not None:
                 try:
                     tool_list = list(tools)
-                    tool_names = [str(safe_getattr(t, "name") or t) for t in tool_list]
+                    tool_names = []
+                    for t in tool_list:
+                        nm = safe_getattr(t, "name")
+                        tool_names.append(str(nm) if nm is not None else str(t))
                     extra["mcp.available_tools"] = safe_json_dumps(tool_names)
                     extra["mcp.tool_count"] = len(tool_names)
                 except Exception as exc:
@@ -207,7 +214,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_CONNECTION)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             extra: dict[str, Any] = {}
             error_type = safe_getattr(event, "error_type") or safe_getattr(
@@ -244,8 +251,9 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_TOOL_CALL)
             agent_id = _resolve_agent_id(source, event)
+            crew_id, task_id = _resolve_mcp_parent_hints(self, source, event)
 
             attrs: dict[str, Any] = {
                 ATTR_MCP_KEY: mcp_key,
@@ -254,12 +262,14 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             _populate_tool_attrs(attrs, source, event)
 
             start_t = monotonic_now()
-            parent_span = self._get_agent_or_crew_span(agent_id)
+            parent_span = self._get_agent_or_crew_span(agent_id, crew_id)
 
             span = self._create_child_span(
                 SPAN_MCP_TOOL,
                 parent_span=parent_span,
                 attributes=attrs,
+                crew_id=crew_id,
+                task_id=task_id,
             )
 
             with self._lock:
@@ -293,13 +303,13 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_TOOL_CALL)
             extra: dict[str, Any] = {}
 
-            result = (
-                safe_getattr(event, "result")
-                or safe_getattr(event, "output")
-                or safe_getattr(event, "response")
+            result = _mcp_first_non_none(
+                safe_getattr(event, "result"),
+                safe_getattr(event, "output"),
+                safe_getattr(event, "response"),
             )
             if result is not None:
                 result_str = (
@@ -333,7 +343,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         if not self._is_active() or not self.capture_mcp:
             return
         try:
-            mcp_key = _resolve_mcp_key(event, source)
+            mcp_key = _resolve_mcp_key(event, source, _OP_TOOL_CALL)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             extra: dict[str, Any] = {}
             error_type = safe_getattr(event, "error_type") or safe_getattr(
@@ -372,12 +382,14 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             return
         try:
             agent_id = _resolve_agent_id(source, event)
-            span = self._get_agent_or_crew_span(agent_id)
+            crew_id, _task_id = _resolve_mcp_parent_hints(self, source, event)
+            span = self._get_agent_or_crew_span(agent_id, crew_id)
             if span is None:
                 logger.debug(
                     "on_mcp_config_fetch_failed: no open span to annotate "
-                    "(agent_id=%s) — error dropped",
+                    "(agent_id=%s crew_id=%s) — error dropped",
                     agent_id,
+                    crew_id,
                 )
                 return
 
@@ -403,7 +415,10 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
             if server:
                 err_attrs["mcp.config_fetch_error.server"] = str(server)
 
-            config = safe_getattr(event, "config") or safe_getattr(source, "config")
+            config = _mcp_first_non_none(
+                safe_getattr(event, "config"),
+                safe_getattr(source, "config"),
+            )
             if config is not None:
                 err_attrs["mcp.config_fetch_error.config"] = truncate_str(
                     safe_json_dumps(_redact_config(config)), 512
@@ -423,23 +438,6 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
     # =========================================================================
     # Internal helpers
     # =========================================================================
-
-    def _get_agent_or_crew_span(
-        self, agent_id: Optional[str], crew_id: Optional[str] = None
-    ) -> Optional[Any]:
-        """Return the best available parent span: agent → specific crew."""
-        with self._lock:
-            if agent_id and agent_id in self._agent_spans:
-                return self._agent_spans[agent_id]
-            if crew_id and crew_id in self._crew_spans:
-                entry = self._crew_spans[crew_id]
-                return entry.get("span") if isinstance(entry, dict) else None
-            logger.debug(
-                "_get_agent_or_crew_span: no matching parent (agent_id=%s crew_id=%s)",
-                agent_id,
-                crew_id,
-            )
-        return None
 
     def _finish_mcp_span(
         self,
@@ -474,13 +472,54 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
 
 
 # =============================================================================
-# Module-level helpers (pure functions — no state access)
+# Module-level helpers
 # =============================================================================
+
+
+def _resolve_mcp_parent_hints(
+    observer: Any,
+    source: Any,
+    event: Any,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Return ``(crew_id, task_id)`` for MCP parent span and ``_create_child_span`` hints.
+
+    Crew id is resolved from the event/source (same fields as memory handlers), then
+    from ``observer._task_to_crew_id`` when kickoff registered the current task.
+    """
+    raw_crew = (
+        safe_getattr(event, "crew_id")
+        or safe_getattr(source, "crew_id")
+        or safe_getattr(safe_getattr(source, "crew"), "id")
+        or safe_getattr(safe_getattr(event, "crew"), "id")
+    )
+    crew_id: Optional[str] = str(raw_crew) if raw_crew is not None else None
+
+    task_raw = (
+        safe_getattr(event, "task_id")
+        or safe_getattr(source, "task_id")
+        or safe_getattr(safe_getattr(source, "task"), "id")
+    )
+    task_id: Optional[str] = str(task_raw) if task_raw is not None else None
+
+    if crew_id is None and task_id is not None:
+        with observer._lock:
+            mapped = observer._task_to_crew_id.get(task_id)
+        if mapped:
+            crew_id = mapped
+
+    return crew_id, task_id
+
 
 # Substrings matched against **dict keys** (lowercased) before writing config JSON.
 _SENSITIVE_CONFIG_KEY_MARKERS = (
     "api_key",
     "authorization",
+    "auth_token",
+    "client_secret",
+    "credentials",
+    "credential",
+    "auth",
     "key",
     "password",
     "secret",
@@ -490,9 +529,19 @@ _SENSITIVE_CONFIG_KEY_MARKERS = (
 _HIGH_RISK_CONTAINER_KEYS = frozenset(
     {"args", "command", "headers", "env", "environment", "params", "options"}
 )
-_CLI_SECRET_FLAG_RE = re.compile(r"^--(token|key|secret|password)$", re.IGNORECASE)
-_HEADER_SECRET_RE = re.compile(r"(authorization\s*:|bearer\s+)", re.IGNORECASE)
-_INLINE_SECRET_RE = re.compile(r"(token|key|secret|password)\s*=", re.IGNORECASE)
+# Long/short flags whose *next* argv token is typically the secret (see _redact_sequence).
+_CLI_SECRET_FLAG_RE = re.compile(
+    r"^--.*(?:token|key|secret|password|auth|credential)s?$",
+    re.IGNORECASE,
+)
+_HEADER_SECRET_RE = re.compile(
+    r"(?:authorization\s*:|bearer\s+|x-api-key\s*:|api-key\s*:|proxy-authorization\s*:)",
+    re.IGNORECASE,
+)
+_INLINE_SECRET_RE = re.compile(
+    r"(?:token|apikey|api_key|key|secret|password|auth|credential|client_secret)\s*=",
+    re.IGNORECASE,
+)
 
 
 def _is_credential_like_string(value: str) -> bool:
@@ -551,23 +600,50 @@ def _redact_config(value: Any, *, scan_strings: bool = False) -> Any:
     return value
 
 
-def _resolve_mcp_key(event: Any, source: Any) -> str:
+def _resolve_mcp_key(event: Any, source: Any, operation: str) -> str:
     """
     Return a stable string key for this MCP operation instance.
 
-    ``started_event_id`` is checked before ``event.id`` so completion/failure
-    events that reference the original start event reuse the same key as the
-    matching ``on_mcp_*_started`` handler.
+    *operation* must be ``_OP_CONNECTION`` or ``_OP_TOOL_CALL`` so connection and
+    tool lifetimes do not collide in ``_mcp_spans`` (tool payloads often carry a
+    ``connection_id`` that must not win over ``execution_id``).
+
+    For tool calls, ``execution_id`` → ``started_event_id`` → ``id`` → ``run_id``
+    → ``connection_id`` → ``id(event)``. For connections, ``connection_id`` stays
+    ahead of ``execution_id`` as before (after an explicit non-empty ``mcp_key``).
     """
-    return str(
-        safe_getattr(event, "mcp_key")
-        or safe_getattr(event, "connection_id")
+    mk = safe_getattr(event, "mcp_key")
+    if mk:
+        return str(mk)
+
+    if operation == _OP_TOOL_CALL:
+        raw = (
+            safe_getattr(event, "execution_id")
+            or safe_getattr(event, "started_event_id")
+            or safe_getattr(event, "id")
+            or safe_getattr(event, "run_id")
+            or safe_getattr(event, "connection_id")
+            or id(event)
+        )
+        return str(raw)
+
+    raw = (
+        safe_getattr(event, "connection_id")
         or safe_getattr(event, "execution_id")
         or safe_getattr(event, "started_event_id")
         or safe_getattr(event, "id")
         or safe_getattr(event, "run_id")
         or id(event)
     )
+    return str(raw)
+
+
+def _mcp_first_non_none(*values: Any) -> Any:
+    """Return the first argument that is not ``None``, or ``None`` if all are ``None``."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
 
 
 def _populate_connection_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None:
@@ -598,7 +674,10 @@ def _populate_connection_attrs(attrs: dict[str, Any], source: Any, event: Any) -
         attrs["mcp.transport"] = str(transport).lower()
 
     # Compact config snapshot (sensitive dict keys redacted before JSON)
-    config = safe_getattr(event, "config") or safe_getattr(source, "config")
+    config = _mcp_first_non_none(
+        safe_getattr(event, "config"),
+        safe_getattr(source, "config"),
+    )
     if config is not None:
         attrs["mcp.config"] = truncate_str(safe_json_dumps(_redact_config(config)), 512)
 
@@ -625,11 +704,11 @@ def _populate_tool_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None
     if tool_name:
         attrs[ATTR_MCP_TOOL_NAME] = truncate_str(str(tool_name), 256)
 
-    arguments = (
-        safe_getattr(event, "arguments")
-        or safe_getattr(event, "args")
-        or safe_getattr(event, "input")
-        or safe_getattr(event, "params")
+    arguments = _mcp_first_non_none(
+        safe_getattr(event, "arguments"),
+        safe_getattr(event, "args"),
+        safe_getattr(event, "input"),
+        safe_getattr(event, "params"),
     )
     if arguments is not None:
         raw = arguments if isinstance(arguments, str) else safe_json_dumps(arguments)
@@ -639,11 +718,11 @@ def _populate_tool_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-    tools = (
-        safe_getattr(event, "tools")
-        or safe_getattr(event, "available_tools")
-        or safe_getattr(source, "tools")
-        or safe_getattr(source, "available_tools")
+    tools = _mcp_first_non_none(
+        safe_getattr(event, "tools"),
+        safe_getattr(event, "available_tools"),
+        safe_getattr(source, "tools"),
+        safe_getattr(source, "available_tools"),
     )
     if tools is not None:
         merge_available_tools_attributes(attrs, tools, "mcp")

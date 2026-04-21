@@ -10,20 +10,20 @@ Each operation family follows the same started → completed/failed lifecycle:
   - ``on_memory_query_started``     → open ``crewai.memory_op`` span;
                                        capture memory_type, query text, agent_role
   - ``on_memory_query_completed``   → close as SUCCESS; write results_count,
-                                       duration_ms, serialised results preview
+                                       duration_ms, full serialised results
   - ``on_memory_query_failed``      → close as ERROR
 
   Save (write / store):
   - ``on_memory_save_started``      → open ``crewai.memory_op`` span;
-                                       capture memory_type, value, metadata
+                                       capture memory_type, full value/metadata
   - ``on_memory_save_completed``    → close as SUCCESS; write duration_ms
   - ``on_memory_save_failed``       → close as ERROR
 
   Retrieval (bulk context pull — distinct from single-item query):
   - ``on_memory_retrieval_started``  → open ``crewai.memory_op`` span;
                                         capture task_id (the requesting task)
-  - ``on_memory_retrieval_completed``→ close as SUCCESS; write memory_content
-                                        preview and duration_ms
+  - ``on_memory_retrieval_completed``→ close as SUCCESS; write full memory
+                                        content and duration_ms
   - ``on_memory_retrieval_failed``   → close as ERROR
 
 State consumed / mutated (declared in _CrewAIObserverState):
@@ -48,7 +48,6 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_MEMORY_TYPE,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
-    MAX_DESCRIPTION_LENGTH,
     SPAN_MEMORY_QUERY,
     SPAN_MEMORY_RETRIEVAL,
     SPAN_MEMORY_SAVE,
@@ -64,7 +63,6 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
-    truncate_str,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,10 +71,6 @@ logger = logging.getLogger(__name__)
 _OP_QUERY = "query"
 _OP_SAVE = "save"
 _OP_RETRIEVAL = "retrieval"
-
-# Preview lengths — kept short; full results can be large
-_MEMORY_VALUE_PREVIEW_LEN = 1_024
-_MEMORY_RESULTS_PREVIEW_LEN = 2_048
 
 
 class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
@@ -107,7 +101,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.type``      — ``"short_term"`` | ``"long_term"`` | ``"entity"``
                                  | ``"external"`` | ``"unknown"``
         - ``memory.operation`` — ``"query"``
-        - ``memory.query``     — search query text (≤ MAX_DESCRIPTION_LENGTH)
+        - ``memory.query``     — search query text (full)
         - ``agent.role``       — role of the querying agent (correlation)
         """
         if not self._is_active() or not self.capture_memory:
@@ -129,15 +123,13 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 or safe_getattr(event, "text")
             )
             if query:
-                attrs[ATTR_MEMORY_QUERY] = truncate_str(
-                    str(query), MAX_DESCRIPTION_LENGTH
-                )
+                attrs[ATTR_MEMORY_QUERY] = str(query)
 
             agent_role = safe_getattr(event, "agent_role") or safe_getattr(
                 source, "role"
             )
             if agent_role:
-                attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
+                attrs[ATTR_AGENT_ROLE] = str(agent_role)
 
             # memory.limit — max results requested (0 is valid; do not use ``or``)
             limit_raw = safe_getattr(event, "limit")
@@ -183,7 +175,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         Attributes written
         ------------------
         - ``memory.result_count``    — number of results returned
-        - ``memory.results_preview`` — truncated JSON preview of results
+        - ``memory.results_preview`` — full JSON serialisation of results
         - ``memory.status``          — ``"success"``
         - ``memory.duration_ms``     — wall-clock duration
         """
@@ -206,9 +198,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                         extra[ATTR_MEMORY_RESULT_COUNT] = count
                     preview = safe_json_dumps(results)
                     if preview:
-                        extra["memory.results_preview"] = truncate_str(
-                            preview, _MEMORY_RESULTS_PREVIEW_LEN
-                        )
+                        extra["memory.results_preview"] = preview
                 except Exception:
                     pass
 
@@ -240,8 +230,8 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
         - ``memory.op_id``        — unique operation identifier
         - ``memory.type``         — memory subsystem type
         - ``memory.operation``    — ``"save"``
-        - ``memory.value``        — the value being stored (preview, truncated)
-        - ``memory.metadata``     — JSON of associated metadata when available
+        - ``memory.value``        — the value being stored (full)
+        - ``memory.metadata``     — full JSON of associated metadata when available
         - ``agent.role``          — role of the saving agent (correlation)
         """
         if not self._is_active() or not self.capture_memory:
@@ -257,30 +247,28 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 ATTR_MEMORY_OPERATION: _OP_SAVE,
             }
 
-            value = (
-                safe_getattr(event, "value")
-                or safe_getattr(event, "content")
-                or safe_getattr(event, "memory")
-            )
+            value = safe_getattr(event, "value")
+            if value is None:
+                value = safe_getattr(event, "content")
+            if value is None:
+                value = safe_getattr(event, "memory")
             if value is not None:
                 if isinstance(value, str):
-                    attrs["memory.value"] = truncate_str(
-                        value, _MEMORY_VALUE_PREVIEW_LEN
-                    )
+                    attrs["memory.value"] = value
                 else:
-                    attrs["memory.value"] = truncate_str(
-                        safe_json_dumps(value), _MEMORY_VALUE_PREVIEW_LEN
-                    )
+                    attrs["memory.value"] = safe_json_dumps(value)
 
-            metadata = safe_getattr(event, "metadata") or safe_getattr(event, "meta")
+            metadata = safe_getattr(event, "metadata")
+            if metadata is None:
+                metadata = safe_getattr(event, "meta")
             if metadata is not None:
-                attrs["memory.metadata"] = truncate_str(safe_json_dumps(metadata), 512)
+                attrs["memory.metadata"] = safe_json_dumps(metadata)
 
             agent_role = safe_getattr(event, "agent_role") or safe_getattr(
                 source, "role"
             )
             if agent_role:
-                attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
+                attrs[ATTR_AGENT_ROLE] = str(agent_role)
 
             task_id = _resolve_memory_task_id(source, event)
             crew_id = _resolve_memory_crew_id(source, event)
@@ -361,7 +349,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                 source, "role"
             )
             if agent_role:
-                attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
+                attrs[ATTR_AGENT_ROLE] = str(agent_role)
 
             crew_id = _resolve_memory_crew_id(source, event)
             self._open_memory_span(
@@ -386,7 +374,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
 
         Attributes written
         ------------------
-        - ``memory.content_preview`` — truncated preview of retrieved memory context
+        - ``memory.content_preview`` — full retrieved memory context
         - ``memory.result_count``    — number of memory items retrieved (when countable)
         - ``memory.status``          — ``"success"``
         - ``memory.duration_ms``     — wall-clock duration
@@ -410,9 +398,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                     break
             if memory_content is not None:
                 if isinstance(memory_content, str):
-                    extra["memory.content_preview"] = truncate_str(
-                        memory_content, _MEMORY_RESULTS_PREVIEW_LEN
-                    )
+                    extra["memory.content_preview"] = memory_content
                 else:
                     try:
                         count = (
@@ -424,9 +410,7 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
                             extra[ATTR_MEMORY_RESULT_COUNT] = count
                     except Exception:
                         pass
-                    extra["memory.content_preview"] = truncate_str(
-                        safe_json_dumps(memory_content), _MEMORY_RESULTS_PREVIEW_LEN
-                    )
+                    extra["memory.content_preview"] = safe_json_dumps(memory_content)
 
             self._finish_memory_span(op_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:

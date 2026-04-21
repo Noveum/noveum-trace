@@ -242,7 +242,12 @@ def _tool_event(tool_name: str = "web_search") -> MagicMock:
 
 def _memory_event(op_id: str = "mem-op-1") -> MagicMock:
     ev = MagicMock()
-    # _resolve_op_id() checks event.memory_op_id first — set it explicitly
+    # ``_resolve_op_id`` prefers ``event_id`` / ``started_event_id`` when set; MagicMock
+    # would otherwise auto-create truthy placeholders and skip ``memory_op_id``.
+    ev.event_id = None
+    ev.started_event_id = None
+    ev.op_id = None
+    ev.run_id = None
     ev.memory_op_id = op_id
     # Correlate with TestMemoryHandlers._listener_with_agent (``_agent_spans["Researcher"]``)
     ev.agent_id = "Researcher"

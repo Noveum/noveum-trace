@@ -175,26 +175,28 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
             if retry_count is not None:
                 extra["guardrail.retry_count"] = retry_count
 
-            results = safe_getattr(event, "results") or safe_getattr(event, "checks")
+            results = safe_getattr(event, "results")
+            if results is None:
+                results = safe_getattr(event, "checks")
             if results is not None:
                 extra["guardrail.results"] = truncate_str(
                     safe_json_dumps(results), MAX_TEXT_LENGTH
                 )
 
-            summary = safe_getattr(event, "result_summary") or safe_getattr(
-                event, "summary"
-            )
-            if summary:
+            summary = safe_getattr(event, "result_summary")
+            if summary is None:
+                summary = safe_getattr(event, "summary")
+            if summary is not None:
                 extra["guardrail.result_summary"] = truncate_str(
                     str(summary), MAX_DESCRIPTION_LENGTH
                 )
 
-            output = (
-                safe_getattr(event, "output")
-                or safe_getattr(event, "corrected_output")
-                or safe_getattr(event, "accepted_output")
-            )
-            if output:
+            output = safe_getattr(event, "output")
+            if output is None:
+                output = safe_getattr(event, "corrected_output")
+            if output is None:
+                output = safe_getattr(event, "accepted_output")
+            if output is not None:
                 extra["guardrail.output"] = truncate_str(str(output), MAX_TEXT_LENGTH)
 
             self._finish_guardrail_span(guardrail_id, ATTR_STATUS_SUCCESS, None, extra)

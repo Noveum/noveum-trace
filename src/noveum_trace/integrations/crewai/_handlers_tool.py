@@ -58,6 +58,7 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -72,8 +73,16 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
 
         def on_tool_usage_started(self, source, event): ...
 
-    ``source`` is the ``Agent`` executing the tool; ``event`` carries the
-    per-invocation payload.  Every method is fully exception-shielded.
+    The ``source`` argument is **not** always an ``Agent``: CrewAI may pass the
+    tool instance (or another object) as ``source`` depending on the callback.
+    Do not assume ``source`` exposes agent-only fields such as ``role``.  For
+    example, ``agent.role`` is populated via
+    ``safe_getattr(source, "role") or safe_getattr(event, "agent_role")`` —
+    ``safe_getattr`` reads ``source.role`` when the agent is ``source``, and
+    falls back to ``event.agent_role`` when ``source`` is the tool (or otherwise
+    lacks ``role``), so correlation still works without treating ``source`` as an
+    ``Agent``.  ``event`` carries the per-invocation payload.  Every method is
+    fully exception-shielded.
     """
 
     # =========================================================================
@@ -159,7 +168,9 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
             # Match the key that on_tool_usage_started wrote: started_event_id
             # on the finished event equals event_id on the started event.
             run_id = _resolve_finished_run_id(event, source)
-            output = safe_getattr(event, "output") or safe_getattr(event, "result")
+            output = safe_getattr(event, "output")
+            if output is None:
+                output = safe_getattr(event, "result")
             self._finish_tool_span(
                 run_id=run_id,
                 status=ATTR_STATUS_SUCCESS,
@@ -190,7 +201,9 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
             return
         try:
             run_id = _resolve_finished_run_id(event, source)
-            error = safe_getattr(event, "error") or safe_getattr(event, "exception")
+            error = safe_getattr(event, "error")
+            if error is None:
+                error = safe_getattr(event, "exception")
             self._finish_tool_span(
                 run_id=run_id,
                 status=ATTR_STATUS_ERROR,
@@ -218,10 +231,7 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
         try:
             run_id = _resolve_run_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            error = safe_getattr(event, "error") or safe_getattr(event, "exception")
-            error_str = (
-                str(error) if error else str(safe_getattr(event, "message") or "")
-            )
+            error, error_str = _tool_event_error_tuple(event)
 
             # Try the open tool span first; fall back to agent span
             span = self._get_tool_or_agent_span(run_id, agent_id)
@@ -263,10 +273,7 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
 
-            error = safe_getattr(event, "error") or safe_getattr(event, "exception")
-            error_str = (
-                str(error) if error else str(safe_getattr(event, "message") or "")
-            )
+            error, error_str = _tool_event_error_tuple(event)
             _annotate_span_error(span, "tool.selection_error", error_str, error)
 
             # The tool name the agent attempted to invoke (may be hallucinated)
@@ -303,10 +310,7 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
         try:
             run_id = _resolve_run_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            error = safe_getattr(event, "error") or safe_getattr(event, "exception")
-            error_str = (
-                str(error) if error else str(safe_getattr(event, "message") or "")
-            )
+            error, error_str = _tool_event_error_tuple(event)
 
             span = self._get_tool_or_agent_span(run_id, agent_id)
             if span is None:
@@ -378,20 +382,17 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
             if tb is not None:
                 attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
 
+        set_span_attributes(span, attrs)
+
+        if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
+            try:
+                from noveum_trace.core.span import SpanStatus
+
+                span.set_status(SpanStatus.ERROR, str(error) if error else "")
+            except Exception:
+                pass
+
         try:
-            if hasattr(span, "set_attributes"):
-                span.set_attributes(attrs)
-            elif hasattr(span, "attributes"):
-                span.attributes.update(attrs)
-
-            if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
-                try:
-                    from noveum_trace.core.span import SpanStatus
-
-                    span.set_status(SpanStatus.ERROR, str(error) if error else "")
-                except Exception:
-                    pass
-
             if hasattr(span, "finish"):
                 span.finish()
         except Exception:
@@ -406,6 +407,25 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
 # =============================================================================
 # Module-level helpers (pure functions — no state access)
 # =============================================================================
+
+
+def _tool_event_error_tuple(event: Any) -> tuple[Any, str]:
+    """
+    Return ``(error, error_str)`` for tool error / validation events.
+
+    Prefer ``event.error``, then ``event.exception``, using **only** ``None``
+    checks so falsy payloads (e.g. ``""``, ``0``) on the primary field are kept.
+    If both are ``None``, use ``event.message`` (again with a ``None`` check).
+    """
+    err = safe_getattr(event, "error")
+    if err is None:
+        err = safe_getattr(event, "exception")
+    if err is not None:
+        return err, str(err)
+    msg = safe_getattr(event, "message")
+    if msg is not None:
+        return None, str(msg)
+    return None, ""
 
 
 def _resolve_started_run_id(event: Any, source: Any) -> str:
@@ -563,7 +583,7 @@ def _annotate_span_error(
     Write a named error attribute onto *span*.
 
     Also writes ``{attr_key}.type`` when *error_obj* carries type information.
-    Uses ``set_attributes`` when available, falls back to direct dict write.
+    Delegates to :func:`~noveum_trace.integrations.crewai.crewai_utils.set_span_attributes`.
     """
     attrs: dict[str, Any] = {}
     if error_str:
@@ -573,21 +593,9 @@ def _annotate_span_error(
 
     if not attrs:
         return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_annotate_span_error failed: %s", exc)
+    set_span_attributes(span, attrs)
 
 
 def _set_span_attr(span: Any, key: str, value: Any) -> None:
     """Single-attribute write helper."""
-    try:
-        if hasattr(span, "set_attribute"):
-            span.set_attribute(key, value)
-        elif hasattr(span, "attributes"):
-            span.attributes[key] = value
-    except Exception as exc:
-        logger.debug("_set_span_attr failed key=%s: %s", key, exc)
+    set_span_attributes(span, {key: value})

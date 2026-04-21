@@ -889,7 +889,7 @@ def extract_tool_result(result: Any) -> str:
     Safely stringify a tool execution result for span attributes.
 
     Handles plain strings, dicts, Pydantic models, and arbitrary objects.
-    Result is truncated to 4 096 characters to avoid bloating spans.
+    Returns the full stringified / JSON form (no length cap).
     """
     try:
         if result is None:
@@ -899,7 +899,7 @@ def extract_tool_result(result: Any) -> str:
         return truncate_str(safe_json_dumps(result), 4096)
     except Exception as exc:
         logger.debug("extract_tool_result failed: %s", exc)
-        return str(result)[:4096]
+        return str(result)
 
 
 def extract_llm_model_from_agent(agent: Any) -> Optional[str]:

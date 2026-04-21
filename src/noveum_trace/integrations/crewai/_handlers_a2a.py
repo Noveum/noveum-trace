@@ -1356,13 +1356,14 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 new_size = len(acc) + len(chunk)
                 if new_size > MAX_A2A_IMAGE_BUFFER_BYTES:
                     logger.warning(
-                        "A2A image artifact buffer cap exceeded; dropping chunk (buf_key=%s, "
-                        "current_bytes=%d, incoming_bytes=%d, max_bytes=%d)",
+                        "A2A image artifact buffer cap exceeded; dropping chunk and buffer "
+                        "(buf_key=%s, current_bytes=%d, incoming_bytes=%d, max_bytes=%d)",
                         buf_key,
                         len(acc),
                         len(chunk),
                         MAX_A2A_IMAGE_BUFFER_BYTES,
                     )
+                    self._a2a_artifact_image_buffers.pop(buf_key, None)
                     return None
                 acc.extend(chunk)
                 return None
@@ -1375,6 +1376,15 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             parts.append(bytes(pending))
         parts.append(chunk)
         full = b"".join(parts)
+        if len(full) > MAX_A2A_IMAGE_BUFFER_BYTES:
+            logger.warning(
+                "A2A image artifact assembled payload exceeds cap; dropping export "
+                "(buf_key=%s, len=%d, max_bytes=%d)",
+                buf_key,
+                len(full),
+                MAX_A2A_IMAGE_BUFFER_BYTES,
+            )
+            return None
 
         from noveum_trace.utils.image_utils import generate_image_uuid
 
@@ -1492,6 +1502,29 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             # Post-close fallback
             if hasattr(span, "attributes"):
                 span.attributes.update(attrs)
+
+        if hasattr(span, "set_status"):
+            try:
+                from noveum_trace.core.span import SpanStatus
+
+                if status == ATTR_STATUS_ERROR:
+                    err_type = attrs.get(ATTR_ERROR_TYPE)
+                    err_msg = attrs.get(ATTR_ERROR_MESSAGE)
+                    detail_parts: list[str] = []
+                    if err_type:
+                        detail_parts.append(str(err_type))
+                    if err_msg:
+                        detail_parts.append(str(err_msg))
+                    status_msg = (
+                        ": ".join(detail_parts)
+                        if detail_parts
+                        else (str(error) if error else "")
+                    )
+                    span.set_status(SpanStatus.ERROR, status_msg or None)
+                else:
+                    span.set_status(SpanStatus.OK)
+            except Exception:
+                pass
 
         # Finish span
         try:

@@ -181,11 +181,11 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             op_id = _resolve_op_id(event, source)
             extra: dict[str, Any] = {}
 
-            results = (
-                safe_getattr(event, "results")
-                or safe_getattr(event, "content")
-                or safe_getattr(event, "chunks")
-            )
+            results = safe_getattr(event, "results")
+            if results is None:
+                results = safe_getattr(event, "content")
+            if results is None:
+                results = safe_getattr(event, "chunks")
             if results is not None:
                 _enrich_results(extra, results)
                 _enrich_scores(extra, results)
@@ -295,11 +295,11 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             op_id = _resolve_op_id(event, source)
             extra: dict[str, Any] = {}
 
-            results = (
-                safe_getattr(event, "results")
-                or safe_getattr(event, "chunks")
-                or safe_getattr(event, "documents")
-            )
+            results = safe_getattr(event, "results")
+            if results is None:
+                results = safe_getattr(event, "chunks")
+            if results is None:
+                results = safe_getattr(event, "documents")
             if results is not None:
                 _enrich_results(extra, results)
                 _enrich_scores(extra, results)
@@ -509,7 +509,7 @@ def _enrich_results(attrs: dict[str, Any], results: Any) -> None:
     """
     try:
         if isinstance(results, str):
-            attrs["memory.result_count"] = 1
+            attrs[ATTR_MEMORY_RESULT_COUNT] = 1
             attrs["knowledge.content_preview"] = results
             return
 
@@ -539,9 +539,9 @@ def _enrich_scores(attrs: dict[str, Any], results: Any) -> None:
         scores: list[float] = []
         per_result: list[Optional[float]] = []
         for item in results:
-            raw = safe_getattr(item, "score") or (
-                item.get("score") if isinstance(item, dict) else None
-            )
+            raw = safe_getattr(item, "score")
+            if raw is None and isinstance(item, dict):
+                raw = item.get("score")
             if raw is None:
                 per_result.append(None)
                 continue
