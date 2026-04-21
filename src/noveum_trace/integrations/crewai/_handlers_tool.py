@@ -104,7 +104,12 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
             # reliable start↔finish correlation without relying on id(event).
             run_id = _resolve_started_run_id(event, source)
             agent_id = _resolve_agent_id(source, event)
-            attrs = _build_tool_start_attributes(source, event, run_id)
+            attrs = _build_tool_start_attributes(
+                source,
+                event,
+                run_id,
+                capture_inputs=getattr(self, "capture_inputs", True),
+            )
             start_t = monotonic_now()
 
             # Parent: agent span (most common)
@@ -358,10 +363,12 @@ class _ToolHandlersMixin(_CrewAIObserverMixinBase):
         if start_t is not None:
             attrs[ATTR_TOOL_DURATION_MS] = duration_ms_monotonic(start_t)
 
-        if output is not None:
-            result_str = extract_tool_result(output)
-            if result_str:
-                attrs[ATTR_TOOL_OUTPUT] = result_str
+        attrs.update(
+            _build_tool_end_attributes(
+                output,
+                capture_outputs=getattr(self, "capture_outputs", True),
+            )
+        )
 
         if error is not None:
             attrs[ATTR_ERROR_TYPE] = type(error).__name__
@@ -445,7 +452,11 @@ def _resolve_run_id(event: Any, source: Any) -> str:
 
 
 def _build_tool_start_attributes(
-    source: Any, event: Any, run_id: str
+    source: Any,
+    event: Any,
+    run_id: str,
+    *,
+    capture_inputs: bool = True,
 ) -> dict[str, Any]:
     """Collect span attributes for the opening ``crewai.tool`` span."""
     attrs: dict[str, Any] = {ATTR_TOOL_RUN_ID: run_id}
@@ -475,19 +486,20 @@ def _build_tool_start_attributes(
         )
 
     # --- Tool arguments (input) ---------------------------------------------
-    args = (
-        safe_getattr(event, "tool_input")
-        or safe_getattr(event, "arguments")
-        or safe_getattr(event, "args")
-        or safe_getattr(event, "tool_args")
-    )
-    if args is not None:
-        if isinstance(args, str):
-            attrs[ATTR_TOOL_INPUT] = truncate_str(args, MAX_TEXT_LENGTH)
-        else:
-            attrs[ATTR_TOOL_INPUT] = truncate_str(
-                safe_json_dumps(args), MAX_TEXT_LENGTH
-            )
+    if capture_inputs:
+        args = (
+            safe_getattr(event, "tool_input")
+            or safe_getattr(event, "arguments")
+            or safe_getattr(event, "args")
+            or safe_getattr(event, "tool_args")
+        )
+        if args is not None:
+            if isinstance(args, str):
+                attrs[ATTR_TOOL_INPUT] = truncate_str(args, MAX_TEXT_LENGTH)
+            else:
+                attrs[ATTR_TOOL_INPUT] = truncate_str(
+                    safe_json_dumps(args), MAX_TEXT_LENGTH
+                )
 
     # --- Agent / task correlation -------------------------------------------
     agent_role = safe_getattr(source, "role") or safe_getattr(event, "agent_role")
@@ -524,6 +536,20 @@ def _build_tool_start_attributes(
         except (TypeError, ValueError):
             pass
 
+    return attrs
+
+
+def _build_tool_end_attributes(
+    output: Any,
+    *,
+    capture_outputs: bool = True,
+) -> dict[str, Any]:
+    """Collect end-of-span payload attrs (result/output), respecting capture flags."""
+    attrs: dict[str, Any] = {}
+    if output is not None and capture_outputs:
+        result_str = extract_tool_result(output)
+        if result_str:
+            attrs[ATTR_TOOL_OUTPUT] = result_str
     return attrs
 
 

@@ -118,7 +118,13 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             return
         try:
             flow_id = _resolve_flow_id(source, event)
-            attrs = _build_flow_start_attributes(source, event, flow_id)
+            attrs = _build_flow_start_attributes(
+                source,
+                event,
+                flow_id,
+                capture_inputs=getattr(self, "capture_inputs", True),
+                capture_outputs=getattr(self, "capture_outputs", True),
+            )
             start_t = monotonic_now()
 
             client = self._get_client()
@@ -184,7 +190,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             result = safe_getattr(event, "result") or safe_getattr(event, "output")
             state = safe_getattr(event, "state") or safe_getattr(source, "state")
             extra: dict[str, Any] = {}
-            if result is not None:
+            if result is not None and getattr(self, "capture_outputs", True):
                 extra["flow.result"] = truncate_str(
                     result if isinstance(result, str) else safe_json_dumps(result),
                     MAX_TEXT_LENGTH,
@@ -269,7 +275,14 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             method_id = _resolve_method_id(event)
             method_key = _make_method_key(flow_id, method_id)
 
-            attrs = _build_method_start_attributes(source, event, method_id)
+            attrs = _build_method_start_attributes(
+                source,
+                event,
+                method_id,
+                flow_id,
+                capture_inputs=getattr(self, "capture_inputs", True),
+                capture_outputs=getattr(self, "capture_outputs", True),
+            )
             start_t = monotonic_now()
 
             # Parent: flow span
@@ -457,7 +470,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             value = safe_getattr(event, "value")
             if value is None:
                 value = safe_getattr(event, "input")
-            if value is not None:
+            if value is not None and getattr(self, "capture_inputs", True):
                 raw = value if isinstance(value, str) else safe_json_dumps(value)
                 recv_attrs["flow.input_value"] = truncate_str(raw, 1024)
 
@@ -536,7 +549,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                     feedback = val
                     break
             recv_attrs: dict[str, Any] = {"flow.feedback_received": True}
-            if feedback is not None:
+            if feedback is not None and getattr(self, "capture_inputs", True):
                 raw = (
                     feedback if isinstance(feedback, str) else safe_json_dumps(feedback)
                 )
@@ -682,7 +695,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         if start_t is not None:
             attrs[ATTR_FLOW_METHOD_DURATION_MS] = duration_ms_monotonic(start_t)
 
-        if output is not None:
+        if output is not None and getattr(self, "capture_outputs", True):
             raw = output if isinstance(output, str) else safe_json_dumps(output)
             attrs["flow.method.output"] = truncate_str(raw, MAX_TEXT_LENGTH)
 
@@ -836,7 +849,12 @@ def _try_flow_structure_json(source: Any) -> Optional[str]:
 
 
 def _build_flow_start_attributes(
-    source: Any, event: Any, flow_id: str
+    source: Any,
+    event: Any,
+    flow_id: str,
+    *,
+    capture_inputs: bool = True,
+    capture_outputs: bool = True,
 ) -> dict[str, Any]:
     """Collect span attributes for the opening ``crewai.flow`` span."""
     attrs: dict[str, Any] = {ATTR_FLOW_ID: flow_id}
@@ -852,9 +870,12 @@ def _build_flow_start_attributes(
         attrs[ATTR_FLOW_NAME] = str(name)
 
     # Inputs passed to kickoff()
-    inputs = safe_getattr(event, "inputs") or safe_getattr(event, "kwargs")
-    if inputs is not None:
-        attrs["flow.inputs"] = truncate_str(safe_json_dumps(inputs), MAX_TEXT_LENGTH)
+    if capture_inputs:
+        inputs = safe_getattr(event, "inputs") or safe_getattr(event, "kwargs")
+        if inputs is not None:
+            attrs["flow.inputs"] = truncate_str(
+                safe_json_dumps(inputs), MAX_TEXT_LENGTH
+            )
 
     # Initial state snapshot
     state = safe_getattr(event, "state") or safe_getattr(source, "state")
@@ -869,7 +890,13 @@ def _build_flow_start_attributes(
 
 
 def _build_method_start_attributes(
-    source: Any, event: Any, method_id: str
+    source: Any,
+    event: Any,
+    method_id: str,
+    flow_id: str,
+    *,
+    capture_inputs: bool = True,
+    capture_outputs: bool = True,
 ) -> dict[str, Any]:
     """Collect span attributes for a ``crewai.flow.method`` span."""
     attrs: dict[str, Any] = {ATTR_FLOW_METHOD_ID: method_id}
@@ -926,14 +953,15 @@ def _build_method_start_attributes(
         attrs[ATTR_FLOW_METHOD_TRIGGER] = truncate_str(str(trigger), 256)
 
     # Method call parameters
-    params = (
-        safe_getattr(event, "params")
-        or safe_getattr(event, "kwargs")
-        or safe_getattr(event, "arguments")
-    )
-    if params is not None:
-        attrs["flow.method.params"] = truncate_str(
-            safe_json_dumps(params), MAX_DESCRIPTION_LENGTH
+    if capture_inputs:
+        params = (
+            safe_getattr(event, "params")
+            or safe_getattr(event, "kwargs")
+            or safe_getattr(event, "arguments")
         )
+        if params is not None:
+            attrs["flow.method.params"] = truncate_str(
+                safe_json_dumps(params), MAX_DESCRIPTION_LENGTH
+            )
 
     return attrs

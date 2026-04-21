@@ -39,6 +39,7 @@ State consumed / mutated (declared in _CrewAIObserverState):
 from __future__ import annotations
 
 import logging
+import re
 import traceback
 from typing import Any, Optional
 
@@ -486,25 +487,67 @@ _SENSITIVE_CONFIG_KEY_MARKERS = (
     "token",
 )
 
+_HIGH_RISK_CONTAINER_KEYS = frozenset(
+    {"args", "command", "headers", "env", "environment", "params", "options"}
+)
+_CLI_SECRET_FLAG_RE = re.compile(r"^--(token|key|secret|password)$", re.IGNORECASE)
+_HEADER_SECRET_RE = re.compile(r"(authorization\s*:|bearer\s+)", re.IGNORECASE)
+_INLINE_SECRET_RE = re.compile(r"(token|key|secret|password)\s*=", re.IGNORECASE)
 
-def _redact_config(value: Any) -> Any:
+
+def _is_credential_like_string(value: str) -> bool:
+    low = value.casefold()
+    if any(marker in low for marker in _SENSITIVE_CONFIG_KEY_MARKERS):
+        return True
+    if _HEADER_SECRET_RE.search(value):
+        return True
+    if _INLINE_SECRET_RE.search(value):
+        return True
+    return False
+
+
+def _redact_sequence(seq: Any, *, scan_strings: bool = False) -> Any:
+    out: list[Any] = []
+    redact_next = False
+    for item in seq:
+        if isinstance(item, str):
+            if redact_next or _is_credential_like_string(item):
+                out.append("<redacted>")
+            else:
+                out.append(item)
+            redact_next = _CLI_SECRET_FLAG_RE.match(item.strip()) is not None
+            continue
+
+        out.append(_redact_config(item, scan_strings=scan_strings))
+        redact_next = False
+
+    if isinstance(seq, tuple):
+        return tuple(out)
+    return out
+
+
+def _redact_config(value: Any, *, scan_strings: bool = False) -> Any:
     """
     Recursively copy *value*, replacing dict entries whose keys look like
     credentials with ``\"<redacted>\"`` so MCP configs can be logged safely.
     """
     if isinstance(value, dict):
-        return {
-            str(k): (
-                "<redacted>"
-                if any(m in str(k).lower() for m in _SENSITIVE_CONFIG_KEY_MARKERS)
-                else _redact_config(v)
-            )
-            for k, v in value.items()
-        }
+        redacted: dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k)
+            key_low = key.casefold()
+            if any(m in key_low for m in _SENSITIVE_CONFIG_KEY_MARKERS):
+                redacted[key] = "<redacted>"
+                continue
+            child_scan = scan_strings or key_low in _HIGH_RISK_CONTAINER_KEYS
+            redacted[key] = _redact_config(v, scan_strings=child_scan)
+        return redacted
     if isinstance(value, list):
-        return [_redact_config(item) for item in value]
+        return _redact_sequence(value, scan_strings=scan_strings)
     if isinstance(value, tuple):
-        return tuple(_redact_config(item) for item in value)
+        return _redact_sequence(value, scan_strings=scan_strings)
+    if isinstance(value, str) and scan_strings and _is_credential_like_string(value):
+        return "<redacted>"
     return value
 
 

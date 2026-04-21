@@ -98,7 +98,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
         - ``llm.call_id``           — call_id of the LLM call being guarded
         - ``agent.role``            — executing agent's role (correlation)
         """
-        if not self._is_active():
+        if not self._is_active() or not getattr(self, "capture_guardrails", False):
             return
         try:
             guardrail_id = _resolve_guardrail_id(event, source)
@@ -154,7 +154,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
         - ``guardrail.status``             — ``"success"`` (span ran without error)
         - ``guardrail.duration_ms``        — wall-clock duration of the check
         """
-        if not self._is_active():
+        if not self._is_active() or not getattr(self, "capture_guardrails", False):
             return
         try:
             guardrail_id = _resolve_guardrail_id(event, source)
@@ -224,7 +224,7 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
         - ``guardrail.status``     — ``"error"``
         - ``guardrail.duration_ms``— wall-clock duration
         """
-        if not self._is_active():
+        if not self._is_active() or not getattr(self, "capture_guardrails", False):
             return
         try:
             guardrail_id = _resolve_guardrail_id(event, source)
@@ -316,10 +316,10 @@ def _resolve_guardrail_id(event: Any, source: Any) -> str:
 
     raw = (
         safe_getattr(event, "guardrail_id")
+        or safe_getattr(event, "event_id")
         or safe_getattr(event, "check_id")
         or safe_getattr(event, "id")
         or safe_getattr(event, "run_id")
-        or safe_getattr(event, "event_id")
         or id(event)
     )
     return str(raw)

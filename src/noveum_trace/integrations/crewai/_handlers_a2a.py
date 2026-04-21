@@ -73,6 +73,7 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     MAX_A2A_CONVERSATION_MESSAGES,
+    MAX_A2A_IMAGE_BUFFER_BYTES,
     MAX_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
     SPAN_A2A_CONVERSATION,
@@ -224,6 +225,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             agent_id = _resolve_agent_id(source, event)
@@ -271,6 +274,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         with ``event.error`` when present.
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -321,6 +326,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
@@ -350,6 +357,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.protocol_version``— protocol version in use
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -397,6 +406,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             raw_status = safe_getattr(event, "status")
@@ -442,6 +453,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """Close the conversation span as ERROR."""
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
@@ -472,6 +485,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.message_type``     — message type (e.g., "query", "response")
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -524,6 +539,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             turn_number = safe_getattr(event, "turn_number")
@@ -572,6 +589,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         with ``type`` = ``response_received`` and optional ``status`` / ``final`` fields.
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -647,6 +666,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """Initialize raw streaming chunk buffer (separate from message dict buffer)."""
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
@@ -668,6 +689,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.is_final_chunk``  — bool: is this the final chunk?
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -706,6 +729,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """Flush raw streaming chunks to the span (message buffer is left intact)."""
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             self._flush_a2a_streaming_chunks_for_context(context_id)
@@ -722,6 +747,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     def on_a2a_polling_started(self, source: Any, event: Any) -> None:
         """Record polling start for async delegation."""
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -759,6 +786,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.polling_message``   — status message (truncated)
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -824,6 +853,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                                           bytes are queued via ``export_image`` and this UUID is set
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -990,6 +1021,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """``A2AServerTaskStartedEvent``: task_id, context_id, metadata on delegation span."""
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             attrs = self._server_task_base_attrs(source, event, context_id)
@@ -1003,6 +1036,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     def on_a2a_server_task_completed(self, source: Any, event: Any) -> None:
         """``A2AServerTaskCompletedEvent``: includes string ``result`` when provided."""
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -1023,6 +1058,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """``A2AServerTaskFailedEvent``: records ``error`` string."""
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             attrs = self._server_task_base_attrs(source, event, context_id)
@@ -1039,6 +1076,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     def on_a2a_server_task_canceled(self, source: Any, event: Any) -> None:
         """``A2AServerTaskCanceledEvent``."""
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -1085,6 +1124,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         """
         if not self._is_active():
             return
+        if not getattr(self, "capture_a2a", False):
+            return
         try:
             context_id = _resolve_context_id(event, source)
             event_type = safe_getattr(event, "type") or type(event).__name__
@@ -1129,6 +1170,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.auth_server``      — server where auth failed
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -1196,6 +1239,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         - ``a2a.connection_attempt`` — retry attempt number
         """
         if not self._is_active():
+            return
+        if not getattr(self, "capture_a2a", False):
             return
         try:
             context_id = _resolve_context_id(event, source)
@@ -1308,6 +1353,17 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     )
                     return None
                 acc = self._a2a_artifact_image_buffers.setdefault(buf_key, bytearray())
+                new_size = len(acc) + len(chunk)
+                if new_size > MAX_A2A_IMAGE_BUFFER_BYTES:
+                    logger.warning(
+                        "A2A image artifact buffer cap exceeded; dropping chunk (buf_key=%s, "
+                        "current_bytes=%d, incoming_bytes=%d, max_bytes=%d)",
+                        buf_key,
+                        len(acc),
+                        len(chunk),
+                        MAX_A2A_IMAGE_BUFFER_BYTES,
+                    )
+                    return None
                 acc.extend(chunk)
                 return None
             pending: Optional[bytearray] = None

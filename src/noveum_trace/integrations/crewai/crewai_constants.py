@@ -253,6 +253,8 @@ MAX_SYSTEM_PROMPT_LENGTH = 4_096  # system prompt stored in span attribute
 
 # Max buffered sent/received message dicts per A2A conversation (``_a2a_stream_buffers``).
 MAX_A2A_CONVERSATION_MESSAGES = 1_000
+# Max bytes buffered for a non-final chunked A2A image artifact.
+MAX_A2A_IMAGE_BUFFER_BYTES = 10 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Numeric defaults

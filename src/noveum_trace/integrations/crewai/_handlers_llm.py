@@ -526,8 +526,13 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             attrs["llm.call_type"] = ct_str
 
         # --- Response text ---------------------------------------------------
+        capture_outputs = getattr(self, "capture_outputs", True)
         response_obj = safe_getattr(event, "response")
-        if status == ATTR_STATUS_SUCCESS and response_obj is not None:
+        if (
+            capture_outputs
+            and status == ATTR_STATUS_SUCCESS
+            and response_obj is not None
+        ):
             resp_text = _extract_llm_response_text(response_obj, event)
             if resp_text:
                 attrs[ATTR_LLM_OUTPUT_TEXT] = truncate_str(resp_text, MAX_TEXT_LENGTH)
@@ -539,7 +544,7 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
             attrs[ATTR_LLM_FINISH_REASON] = str(finish_reason)
 
         # --- Streaming text --------------------------------------------------
-        if stream_chunks and self.capture_streaming:
+        if capture_outputs and stream_chunks and self.capture_streaming:
             attrs["llm.streaming_response"] = truncate_str(
                 "".join(stream_chunks), MAX_TEXT_LENGTH
             )

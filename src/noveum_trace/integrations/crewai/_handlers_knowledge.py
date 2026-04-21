@@ -488,11 +488,11 @@ def _resolve_op_id(event: Any, source: Any) -> str:
     if isinstance(started_link, str) and started_link.strip():
         return started_link
     return str(
-        safe_getattr(event, "knowledge_op_id")
+        safe_getattr(event, "event_id")
+        or safe_getattr(event, "knowledge_op_id")
         or safe_getattr(event, "op_id")
         or safe_getattr(event, "query_id")
         or safe_getattr(event, "run_id")
-        or safe_getattr(event, "event_id")
         or id(event)
     )
 

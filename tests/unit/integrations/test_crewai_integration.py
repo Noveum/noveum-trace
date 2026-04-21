@@ -37,6 +37,8 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+pytest.importorskip("crewai", reason="requires optional 'crewai' extra")
+
 _src = Path(__file__).parents[3] / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
