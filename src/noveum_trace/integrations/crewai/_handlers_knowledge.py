@@ -14,23 +14,24 @@ Handles CrewAI ``BaseEventListener`` knowledge events:
                                              ``memory.operation = "retrieval"``;
                                              capture agent_role, task context
   - ``on_knowledge_retrieval_completed``  → close as SUCCESS; write sources list,
-                                             result_count, content_preview
+                                             result_count, full retrieved content,
+                                             score min/max and per-result ``scores`` when present
 
   Query (targeted search within the knowledge base):
   - ``on_knowledge_query_started``        → open span;
                                              capture query text, sources filter,
                                              top_k parameter
   - ``on_knowledge_query_completed``      → close as SUCCESS; write results,
-                                             result_count, score_range, duration_ms
+                                             result_count, score min/max / per-result scores, duration_ms
   - ``on_knowledge_query_failed``         → close as ERROR
 
   Search-query failure (variant fired by the search layer, not the query layer):
   - ``on_knowledge_search_query_failed``  → annotate nearest open knowledge span
                                              or agent span with search error details
 
-All knowledge spans use ``SPAN_MEMORY_OP`` (``crewai.memory_op``) with
-``memory.type = "knowledge"`` so knowledge and memory ops share a single
-span type and can be compared in dashboards without schema divergence.
+All knowledge spans use ``SPAN_KNOWLEDGE`` (``crewai.knowledge``) so
+knowledge operations are distinguishable from memory operations while still
+emitting ``memory.*`` attributes for compatibility.
 
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown,
@@ -45,9 +46,7 @@ from typing import Any, Optional
 
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_AGENT_ROLE,
-    ATTR_ERROR_MESSAGE,
     ATTR_ERROR_STACKTRACE,
-    ATTR_ERROR_TYPE,
     ATTR_MEMORY_DURATION_MS,
     ATTR_MEMORY_OP_ID,
     ATTR_MEMORY_OPERATION,
@@ -58,14 +57,20 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     MAX_DESCRIPTION_LENGTH,
-    SPAN_MEMORY_OP,
+    SPAN_KNOWLEDGE,
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
-    duration_ms_monotonic,
+    finish_span_common,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -77,11 +82,6 @@ _KNOWLEDGE_TYPE = "knowledge"
 # Operation strings
 _OP_RETRIEVAL = "retrieval"
 _OP_QUERY = "query"
-
-# Preview limits (knowledge results can be large embeddings / long documents)
-_RESULT_PREVIEW_LEN = 2_048
-_CONTENT_PREVIEW_LEN = 2_048
-_SOURCE_LIST_LEN = 1_024
 
 
 class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
@@ -147,9 +147,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 or safe_getattr(source, "sources")
             )
             if sources is not None:
-                attrs["knowledge.sources"] = truncate_str(
-                    safe_json_dumps(sources), _SOURCE_LIST_LEN
-                )
+                attrs["knowledge.sources"] = safe_json_dumps(sources)
 
             self._open_knowledge_span(op_id, agent_id, attrs)
             logger.debug(
@@ -164,14 +162,17 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_knowledge_retrieval_completed(self, source: Any, event: Any) -> None:
         """
-        Close the knowledge retrieval span as SUCCESS.
+        Close the knowledge retrieval span as OK.
 
         Attributes written
         ------------------
         - ``memory.result_count``         — number of chunks / documents returned
-        - ``knowledge.content_preview``   — truncated preview of retrieved content
+        - ``knowledge.content_preview``   — full retrieved text (string results)
+        - ``knowledge.results_preview``   — full JSON-serialized results (structured results)
+        - ``knowledge.score_min`` / ``max`` / ``scores`` — relevance rollups and
+          per-result scores (JSON list, ``null`` when a row has no score)
         - ``knowledge.sources_used``      — JSON list of sources that returned results
-        - ``memory.status``               — ``"success"``
+        - ``memory.status``               — ``"ok"``
         - ``memory.duration_ms``          — wall-clock duration
         """
         if not self._is_active():
@@ -187,14 +188,13 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             )
             if results is not None:
                 _enrich_results(extra, results)
+                _enrich_scores(extra, results)
 
             sources_used = safe_getattr(event, "sources_used") or safe_getattr(
                 event, "matched_sources"
             )
             if sources_used is not None:
-                extra["knowledge.sources_used"] = truncate_str(
-                    safe_json_dumps(sources_used), _SOURCE_LIST_LEN
-                )
+                extra["knowledge.sources_used"] = safe_json_dumps(sources_used)
 
             self._finish_knowledge_span(op_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
@@ -251,9 +251,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                 event, "knowledge_sources"
             )
             if sources is not None:
-                attrs["knowledge.sources"] = truncate_str(
-                    safe_json_dumps(sources), _SOURCE_LIST_LEN
-                )
+                attrs["knowledge.sources"] = safe_json_dumps(sources)
 
             top_k = safe_getattr(event, "top_k") or safe_getattr(event, "limit")
             if top_k is not None:
@@ -277,15 +275,18 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_knowledge_query_completed(self, source: Any, event: Any) -> None:
         """
-        Close the knowledge query span as SUCCESS.
+        Close the knowledge query span as OK.
 
         Attributes written
         ------------------
         - ``memory.result_count``       — number of results returned
-        - ``knowledge.results_preview`` — truncated JSON of top results
+        - ``knowledge.content_preview`` — full retrieved text (string results)
+        - ``knowledge.results_preview`` — full JSON-serialized results (structured results)
         - ``knowledge.score_min``       — lowest relevance score in results
         - ``knowledge.score_max``       — highest relevance score in results
-        - ``memory.status``             — ``"success"``
+        - ``knowledge.scores``          — JSON list of scores, one per result in order
+                                          (``null`` entries when a row has no ``score``)
+        - ``memory.status``             — ``"ok"``
         - ``memory.duration_ms``        — wall-clock duration
         """
         if not self._is_active():
@@ -378,7 +379,7 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
                     str(query), MAX_DESCRIPTION_LENGTH
                 )
 
-            _set_span_attributes(span, search_attrs)
+            set_span_attributes(span, search_attrs)
             logger.debug(
                 "knowledge.search_error attached: op_id=%s agent_id=%s",
                 op_id,
@@ -400,12 +401,12 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
         agent_id: Optional[str],
         attrs: dict[str, Any],
     ) -> None:
-        """Create a knowledge ``crewai.memory_op`` span and register it."""
+        """Create a knowledge ``crewai.knowledge`` span and register it."""
         start_t = monotonic_now()
         parent_span = self._best_parent_for_knowledge(agent_id)
 
         span = self._create_child_span(
-            SPAN_MEMORY_OP,
+            SPAN_KNOWLEDGE,
             parent_span=parent_span,
             attributes=attrs,
         )
@@ -418,15 +419,17 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
         """
         Return the most contextually appropriate parent span.
 
-        Priority: agent span → any open task span → None.
+        Priority: agent span → None.
         Knowledge ops are agent-initiated (an agent queries its knowledge base
         for the current task).
         """
         with self._lock:
             if agent_id and agent_id in self._agent_spans:
                 return self._agent_spans[agent_id]
-            for span in self._task_spans.values():
-                return span
+            logger.debug(
+                "_best_parent_for_knowledge: no matching agent span for agent_id=%s",
+                agent_id,
+            )
         return None
 
     def _get_knowledge_or_agent_span(self, op_id: str, agent_id: Optional[str]) -> Any:
@@ -455,42 +458,16 @@ class _KnowledgeHandlersMixin(_CrewAIObserverMixinBase):
             logger.debug("_finish_knowledge_span: no open span for op_id=%s", op_id)
             return
 
-        attrs: dict[str, Any] = {ATTR_MEMORY_STATUS: status}
-
-        if start_t is not None:
-            attrs[ATTR_MEMORY_DURATION_MS] = duration_ms_monotonic(start_t)
-
-        if error is not None:
-            attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
-            tb = getattr(error, "__traceback__", None)
-            if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
-
-        if extra_attrs:
-            attrs.update(extra_attrs)
-
-        try:
-            if hasattr(span, "set_attributes"):
-                span.set_attributes(attrs)
-            elif hasattr(span, "attributes"):
-                span.attributes.update(attrs)
-
-            if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
-                try:
-                    from noveum_trace.core.span import SpanStatus
-
-                    span.set_status(SpanStatus.ERROR, str(error) if error else "")
-                except Exception:
-                    pass
-
-            if hasattr(span, "finish"):
-                span.finish()
-        except Exception:
-            logger.debug(
-                "_finish_knowledge_span span.finish() error:\n%s",
-                traceback.format_exc(),
-            )
+        finish_span_common(
+            span,
+            start_t=start_t,
+            status=status,
+            status_attr=ATTR_MEMORY_STATUS,
+            duration_attr=ATTR_MEMORY_DURATION_MS,
+            error=error,
+            extra_attrs=extra_attrs,
+            log_label="_finish_knowledge_span",
+        )
 
         logger.debug("Knowledge span closed: op_id=%s status=%s", op_id, status)
 
@@ -520,19 +497,12 @@ def _resolve_op_id(event: Any, source: Any) -> str:
     )
 
 
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id for this knowledge event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
-
-
 def _enrich_results(attrs: dict[str, Any], results: Any) -> None:
     """
-    Write ``memory.result_count`` and ``knowledge.results_preview`` into *attrs*.
+    Write ``memory.result_count`` and the full retrieved payload into *attrs*.
+
+    String results go to ``knowledge.content_preview``; structured results to
+    ``knowledge.results_preview``. Neither field is truncated.
 
     Handles list/tuple of chunks, a plain string, or an unknown object
     without raising.
@@ -540,59 +510,51 @@ def _enrich_results(attrs: dict[str, Any], results: Any) -> None:
     try:
         if isinstance(results, str):
             attrs["memory.result_count"] = 1
-            attrs["knowledge.content_preview"] = truncate_str(
-                results, _CONTENT_PREVIEW_LEN
-            )
+            attrs["knowledge.content_preview"] = results
             return
 
         if hasattr(results, "__len__"):
             attrs[ATTR_MEMORY_RESULT_COUNT] = len(results)
 
-        preview = safe_json_dumps(results)
-        if preview:
-            attrs["knowledge.results_preview"] = truncate_str(
-                preview, _RESULT_PREVIEW_LEN
-            )
+        serialized = safe_json_dumps(results)
+        if serialized:
+            attrs["knowledge.results_preview"] = serialized
     except Exception as exc:
         logger.debug("_enrich_results failed: %s", exc)
 
 
 def _enrich_scores(attrs: dict[str, Any], results: Any) -> None:
     """
-    Extract relevance scores from the results list and write min/max.
+    Extract relevance scores from the results list and write min/max plus
+    ``knowledge.scores`` — a JSON array aligned with *results* order.
 
     CrewAI knowledge results are typically
     ``[{"content": "...", "score": 0.87}, ...]``
-    but the exact schema varies by knowledge source.
+    but the exact schema varies by knowledge source.  Rows without a numeric
+    ``score`` become JSON ``null`` so indices still line up with ``results``.
     """
     try:
         if not isinstance(results, (list, tuple)):
             return
-        scores = []
+        scores: list[float] = []
+        per_result: list[Optional[float]] = []
         for item in results:
-            score = safe_getattr(item, "score") or (
+            raw = safe_getattr(item, "score") or (
                 item.get("score") if isinstance(item, dict) else None
             )
-            if score is not None:
-                try:
-                    scores.append(float(score))
-                except (TypeError, ValueError):
-                    pass
+            if raw is None:
+                per_result.append(None)
+                continue
+            try:
+                f = float(raw)
+                scores.append(f)
+                per_result.append(f)
+            except (TypeError, ValueError):
+                per_result.append(None)
+        if per_result and any(s is not None for s in per_result):
+            attrs["knowledge.scores"] = safe_json_dumps(per_result)
         if scores:
             attrs["knowledge.score_min"] = round(min(scores), 6)
             attrs["knowledge.score_max"] = round(max(scores), 6)
     except Exception as exc:
         logger.debug("_enrich_scores failed: %s", exc)
-
-
-def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
-    """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""
-    if not attrs or span is None:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_set_span_attributes failed: %s", exc)

@@ -40,6 +40,7 @@ SPAN_FLOW_METHOD = "crewai.flow.method"
 SPAN_MEMORY_QUERY = "crewai.memory.query"
 SPAN_MEMORY_SAVE = "crewai.memory.save"
 SPAN_MEMORY_RETRIEVAL = "crewai.memory.retrieval"
+SPAN_KNOWLEDGE = "crewai.knowledge"
 # Legacy alias kept so that any code referencing SPAN_MEMORY_OP still compiles;
 # handlers must use the sub-type constants above.
 SPAN_MEMORY_OP = SPAN_MEMORY_QUERY
@@ -47,14 +48,10 @@ SPAN_MEMORY_OP = SPAN_MEMORY_QUERY
 # A2A spans — one per interaction sub-type
 SPAN_A2A_DELEGATION = "crewai.a2a.delegation"
 SPAN_A2A_CONVERSATION = "crewai.a2a.conversation"
-# Legacy alias
-SPAN_A2A = SPAN_A2A_DELEGATION
 
 # MCP spans — one per operation sub-type
 SPAN_MCP_CONNECTION = "crewai.mcp.connection"
 SPAN_MCP_TOOL = "crewai.mcp.tool"
-# Legacy alias
-SPAN_MCP = SPAN_MCP_CONNECTION
 
 # ---------------------------------------------------------------------------
 # Crew-level attribute keys   (prefix: crew.*)
@@ -66,6 +63,8 @@ ATTR_CREW_PROCESS = "crew.process"  # "sequential" | "hierarchical"
 ATTR_CREW_AGENT_COUNT = "crew.agent_count"
 ATTR_CREW_TASK_COUNT = "crew.task_count"
 ATTR_CREW_AGENT_ROLES = "crew.agent_roles"  # JSON list of role strings
+ATTR_CREW_AVAILABLE_AGENTS = "crew.available_agents"  # JSON list of role/name/id labels
+ATTR_CREW_AVAILABLE_AGENT_COUNT = "crew.available_agent_count"
 ATTR_CREW_MEMORY = "crew.memory"  # bool
 ATTR_CREW_VERBOSE = "crew.verbose"  # bool
 ATTR_CREW_MAX_RPM = "crew.max_rpm"
@@ -73,7 +72,7 @@ ATTR_CREW_OUTPUT = "crew.output"  # final crew result (truncated)
 ATTR_CREW_TOTAL_TOKENS = "crew.total_tokens"
 ATTR_CREW_TOTAL_COST = "crew.total_cost"
 ATTR_CREW_DURATION_MS = "crew.duration_ms"
-ATTR_CREW_STATUS = "crew.status"  # "success" | "error"
+ATTR_CREW_STATUS = "crew.status"  # "ok" | "error"
 
 # ---------------------------------------------------------------------------
 # Task-level attribute keys   (prefix: task.*)
@@ -89,7 +88,7 @@ ATTR_TASK_OUTPUT_FILE = "task.output_file"
 ATTR_TASK_HUMAN_INPUT = "task.human_input"  # bool
 ATTR_TASK_ASYNC = "task.async_execution"  # bool
 ATTR_TASK_DURATION_MS = "task.duration_ms"
-ATTR_TASK_STATUS = "task.status"  # "success" | "error"
+ATTR_TASK_STATUS = "task.status"  # "ok" | "error"
 ATTR_TASK_CONTEXT = (
     "task.context_tasks"  # JSON list of upstream task descriptions (RAG chain)
 )
@@ -109,7 +108,7 @@ ATTR_AGENT_MAX_ITER = "agent.max_iter"
 ATTR_AGENT_MAX_RPM = "agent.max_rpm"
 ATTR_AGENT_STEP = "agent.step"  # current reasoning iteration
 ATTR_AGENT_DURATION_MS = "agent.duration_ms"
-ATTR_AGENT_STATUS = "agent.status"  # "success" | "error"
+ATTR_AGENT_STATUS = "agent.status"  # "ok" | "error"
 
 # ---------------------------------------------------------------------------
 # LLM-call attribute keys     (prefix: llm.*)
@@ -152,7 +151,7 @@ ATTR_TOOL_INPUT = "tool.input"  # JSON / str
 ATTR_TOOL_OUTPUT = "tool.output"  # JSON / str (truncated)
 ATTR_TOOL_RUN_ID = "tool.run_id"
 ATTR_TOOL_DURATION_MS = "tool.duration_ms"
-ATTR_TOOL_STATUS = "tool.status"  # "success" | "error"
+ATTR_TOOL_STATUS = "tool.status"  # "ok" | "error"
 ATTR_TOOL_ERROR = "tool.error"  # error message on failure
 
 # ---------------------------------------------------------------------------
@@ -162,8 +161,14 @@ ATTR_TOOL_ERROR = "tool.error"  # error message on failure
 ATTR_FLOW_ID = "flow.id"
 ATTR_FLOW_NAME = "flow.name"
 ATTR_FLOW_STATE = "flow.state"  # JSON snapshot of Flow state
+ATTR_FLOW_STRUCTURE = (
+    "flow.structure"  # JSON graph: nodes, edges, start_methods, router_methods
+)
+ATTR_FLOW_PLOT_EMITTED = (
+    "flow.plot_emitted"  # set when FlowPlotEvent fires (e.g. flow.plot())
+)
 ATTR_FLOW_DURATION_MS = "flow.duration_ms"
-ATTR_FLOW_STATUS = "flow.status"  # "success" | "error"
+ATTR_FLOW_STATUS = "flow.status"  # "ok" | "error"
 
 # Flow method (@start / @listen decorated method)
 ATTR_FLOW_METHOD_NAME = "flow.method.name"
@@ -191,9 +196,7 @@ ATTR_MEMORY_STATUS = "memory.status"
 ATTR_A2A_CONTEXT_ID = "a2a.context_id"
 ATTR_A2A_DELEGATING_AGENT = "a2a.delegating_agent"  # role of the delegator
 ATTR_A2A_RECEIVING_AGENT = "a2a.receiving_agent"  # role of the receiver
-ATTR_A2A_TASK_DESCRIPTION = "a2a.task_description"  # delegated task (truncated)
 ATTR_A2A_RESULT = "a2a.result"  # delegated task result
-ATTR_A2A_DURATION_MS = "a2a.duration_ms"
 ATTR_A2A_STATUS = "a2a.status"
 
 # ---------------------------------------------------------------------------
@@ -257,4 +260,3 @@ MAX_A2A_CONVERSATION_MESSAGES = 1_000
 
 DEFAULT_LLM_MODEL = "unknown"
 DEFAULT_LLM_PROVIDER = "unknown"
-DEFAULT_CREW_PROCESS = "sequential"

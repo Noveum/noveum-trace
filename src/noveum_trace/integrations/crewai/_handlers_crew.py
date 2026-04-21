@@ -11,12 +11,14 @@ Handles the top-level Crew events emitted by CrewAI's ``BaseEventListener``:
                                      aggregated token/cost totals
   - ``on_crew_kickoff_failed``    → close trace as ERROR; attach exception details
 
-  - ``on_crew_test_started``      → mark span as a test run
+  - ``on_crew_test_started``      → mark span as a test run; optional ``crew.test.inputs``,
+                                     ``crew.test.crew_name``
   - ``on_crew_test_completed``    → close test span as SUCCESS
-  - ``on_crew_test_iteration_*``  → record per-iteration metrics
-  - ``on_crew_train_started``     → mark span as a training run
-  - ``on_crew_train_completed``   → close training span as SUCCESS
-  - ``on_crew_train_* handlers``  → record per-iteration training metrics
+  - ``on_crew_train_started``     → mark span as a training run; optional ``crew.train.crew_name``,
+                                     ``crew.train.inputs``
+  - ``on_crew_train_completed``   → close training span as SUCCESS; may set
+                                     ``crew.train.n_iterations`` / ``crew.train.filename``
+                                     from the completion event when not set earlier
 
 State consumed / mutated (all declared in _CrewAIObserverState):
     _lock, _is_shutdown, _crew_spans,
@@ -33,6 +35,8 @@ from typing import Any, Optional
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_CREW_AGENT_COUNT,
     ATTR_CREW_AGENT_ROLES,
+    ATTR_CREW_AVAILABLE_AGENT_COUNT,
+    ATTR_CREW_AVAILABLE_AGENTS,
     ATTR_CREW_DURATION_MS,
     ATTR_CREW_ID,
     ATTR_CREW_MAX_RPM,
@@ -68,6 +72,13 @@ logger = logging.getLogger(__name__)
 
 # Sentinel for ``_finish_crew_span(..., finish_trace_client=...)`` default only.
 _FINISH_TRACE_CLIENT_UNSPECIFIED = object()
+
+
+def _maybe_set_event_crew_name(span: Any, event: Any, attr_key: str) -> None:
+    """Copy ``CrewBaseEvent.crew_name`` onto the span when present and non-empty."""
+    cn = safe_getattr(event, "crew_name")
+    if cn is not None and str(cn).strip() != "":
+        span.set_attribute(attr_key, str(cn))
 
 
 class _CrewHandlersMixin(_CrewAIObserverMixinBase):
@@ -239,6 +250,13 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
 
         Records ``crew.mode = "test"`` and, when available,
         ``crew.test.n_iterations`` on the open crew span.
+
+        When ``capture_inputs`` is true and ``event.inputs`` is set, writes
+        ``crew.test.inputs`` (JSON, truncated like ``crew.inputs`` on kickoff)
+        so test-run inputs are distinguishable from kickoff ``crew.inputs``.
+
+        When ``CrewBaseEvent.crew_name`` is set, writes ``crew.test.crew_name``
+        (event label; kickoff may already have ``crew.name`` from ``source``).
         """
         if not self._is_active():
             return
@@ -252,12 +270,20 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
             span.set_attribute("crew.mode", "test")
+            _maybe_set_event_crew_name(span, event, "crew.test.crew_name")
             n_iter = safe_getattr(event, "n_iterations")
             if n_iter is not None:
                 span.set_attribute("crew.test.n_iterations", int(n_iter))
             eval_llm = safe_getattr(event, "eval_llm")
             if eval_llm:
                 span.set_attribute("crew.test.eval_llm", str(eval_llm))
+            if self.capture_inputs:
+                test_inputs = safe_getattr(event, "inputs")
+                if test_inputs is not None:
+                    span.set_attribute(
+                        "crew.test.inputs",
+                        truncate_str(safe_json_dumps(test_inputs), MAX_TEXT_LENGTH),
+                    )
         except Exception:
             logger.debug("on_crew_test_started error:\n%s", traceback.format_exc())
 
@@ -292,7 +318,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
           - ``quality``           — float score (0–10)
           - ``execution_duration``— float seconds
           - ``model``             — the evaluator LLM model string
-          - ``crew_name``         — str
+          - ``crew_name``         — str (written as ``crew.test.crew_name``)
 
         Fires *before* ``CrewTestCompletedEvent``, so the span is still open.
         """
@@ -307,6 +333,7 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             span = self._get_crew_span(crew_id)
             if span is None:
                 return
+            _maybe_set_event_crew_name(span, event, "crew.test.crew_name")
             quality = safe_getattr(event, "quality")
             if quality is not None:
                 try:
@@ -327,60 +354,18 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
         except Exception:
             logger.debug("on_crew_test_result error:\n%s", traceback.format_exc())
 
-    def on_crew_test_iteration_started(self, source: Any, event: Any) -> None:
-        """Record the current test iteration number."""
-        if not self._is_active():
-            return
-        try:
-            crew_id = str(
-                safe_getattr(event, "crew_id")
-                or safe_getattr(source, "id")
-                or id(source)
-            )
-            span = self._get_crew_span(crew_id)
-            if span is None:
-                return
-            iteration = safe_getattr(event, "iteration")
-            if iteration is not None:
-                span.set_attribute("crew.test.current_iteration", int(iteration))
-        except Exception:
-            logger.debug(
-                "on_crew_test_iteration_started error:\n%s", traceback.format_exc()
-            )
-
-    def on_crew_test_iteration_completed(self, source: Any, event: Any) -> None:
-        """Record per-iteration score."""
-        if not self._is_active():
-            return
-        try:
-            crew_id = str(
-                safe_getattr(event, "crew_id")
-                or safe_getattr(source, "id")
-                or id(source)
-            )
-            span = self._get_crew_span(crew_id)
-            if span is None:
-                return
-            iteration = safe_getattr(event, "iteration")
-            score = safe_getattr(event, "score")
-            if iteration is not None and score is not None:
-                try:
-                    span.set_attribute(
-                        f"crew.test.iteration_{int(iteration)}.score", float(score)
-                    )
-                except (TypeError, ValueError):
-                    pass
-        except Exception:
-            logger.debug(
-                "on_crew_test_iteration_completed error:\n%s", traceback.format_exc()
-            )
-
     # =========================================================================
     # Training handlers
     # =========================================================================
 
     def on_crew_train_started(self, source: Any, event: Any) -> None:
-        """``CrewTrainStarted``: annotate the crew span as a training run."""
+        """``CrewTrainStarted``: annotate the crew span as a training run.
+
+        When ``CrewBaseEvent.crew_name`` is set, writes ``crew.train.crew_name``.
+
+        When ``capture_inputs`` is true and ``event.inputs`` is set, writes
+        ``crew.train.inputs`` (JSON, truncated like ``crew.test.inputs``).
+        """
         if not self._is_active():
             return
         try:
@@ -393,17 +378,30 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             if span is None:
                 return
             span.set_attribute("crew.mode", "train")
+            _maybe_set_event_crew_name(span, event, "crew.train.crew_name")
             n_iter = safe_getattr(event, "n_iterations")
             if n_iter is not None:
                 span.set_attribute("crew.train.n_iterations", int(n_iter))
             filename = safe_getattr(event, "filename")
             if filename:
                 span.set_attribute("crew.train.filename", str(filename))
+            if self.capture_inputs:
+                train_inputs = safe_getattr(event, "inputs")
+                if train_inputs is not None:
+                    span.set_attribute(
+                        "crew.train.inputs",
+                        truncate_str(safe_json_dumps(train_inputs), MAX_TEXT_LENGTH),
+                    )
         except Exception:
             logger.debug("on_crew_train_started error:\n%s", traceback.format_exc())
 
     def on_crew_train_completed(self, source: Any, event: Any) -> None:
-        """``CrewTrainCompleted``: close the crew span as SUCCESS."""
+        """``CrewTrainCompleted``: close the crew span as SUCCESS.
+
+        Copies ``n_iterations`` and ``filename`` from the completion event onto
+        the span (with ``crew.mode = "train"``) so values are present even when
+        ``on_crew_train_started`` did not run or could not attach to a span.
+        """
         if not self._is_active():
             return
         try:
@@ -412,12 +410,22 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
                 or safe_getattr(source, "id")
                 or id(source)
             )
+            extra_attrs: dict[str, Any] = {"crew.mode": "train"}
+            n_iter = safe_getattr(event, "n_iterations")
+            if n_iter is not None:
+                try:
+                    extra_attrs["crew.train.n_iterations"] = int(n_iter)
+                except (TypeError, ValueError):
+                    pass
+            filename = safe_getattr(event, "filename")
+            if filename:
+                extra_attrs["crew.train.filename"] = str(filename)
             self._finish_crew_span(
                 crew_id=crew_id,
                 status=ATTR_STATUS_SUCCESS,
                 output=None,
                 error=None,
-                extra_attrs={"crew.mode": "train"},
+                extra_attrs=extra_attrs,
             )
         except Exception:
             logger.debug("on_crew_train_completed error:\n%s", traceback.format_exc())
@@ -442,56 +450,6 @@ class _CrewHandlersMixin(_CrewAIObserverMixinBase):
             )
         except Exception:
             logger.debug("on_crew_train_failed error:\n%s", traceback.format_exc())
-
-    def on_crew_train_iteration_started(self, source: Any, event: Any) -> None:
-        """Record current training iteration number."""
-        if not self._is_active():
-            return
-        try:
-            crew_id = str(
-                safe_getattr(event, "crew_id")
-                or safe_getattr(source, "id")
-                or id(source)
-            )
-            span = self._get_crew_span(crew_id)
-            if span is None:
-                return
-            iteration = safe_getattr(event, "iteration")
-            if iteration is not None:
-                span.set_attribute("crew.train.current_iteration", int(iteration))
-        except Exception:
-            logger.debug(
-                "on_crew_train_iteration_started error:\n%s", traceback.format_exc()
-            )
-
-    def on_crew_train_iteration_completed(self, source: Any, event: Any) -> None:
-        """Record per-iteration training loss / score when provided."""
-        if not self._is_active():
-            return
-        try:
-            crew_id = str(
-                safe_getattr(event, "crew_id")
-                or safe_getattr(source, "id")
-                or id(source)
-            )
-            span = self._get_crew_span(crew_id)
-            if span is None:
-                return
-            iteration = safe_getattr(event, "iteration")
-            for metric in ("loss", "score", "reward"):
-                val = safe_getattr(event, metric)
-                if val is not None and iteration is not None:
-                    try:
-                        span.set_attribute(
-                            f"crew.train.iteration_{int(iteration)}.{metric}",
-                            float(val),
-                        )
-                    except (TypeError, ValueError):
-                        pass
-        except Exception:
-            logger.debug(
-                "on_crew_train_iteration_completed error:\n%s", traceback.format_exc()
-            )
 
     # =========================================================================
     # Internal helpers
@@ -717,11 +675,20 @@ def _build_crew_attributes(
             attrs[ATTR_CREW_AGENT_COUNT] = len(agents)
             agents_snapshot = []
             roles = []
+            available_agents: list[str] = []
             for agent in agents:
                 role = safe_getattr(agent, "role")
                 entry: dict[str, Any] = {}
                 if safe_getattr(agent, "id") is not None:
                     entry["id"] = str(safe_getattr(agent, "id"))
+                # Stable "available agent" label for quick scanning/filtering.
+                label = (
+                    safe_getattr(agent, "role")
+                    or safe_getattr(agent, "name")
+                    or safe_getattr(agent, "id")
+                )
+                if label is not None:
+                    available_agents.append(str(label))
                 if role:
                     entry["role"] = str(role)
                     roles.append(str(role))
@@ -747,6 +714,9 @@ def _build_crew_attributes(
                 )
             if roles:
                 attrs[ATTR_CREW_AGENT_ROLES] = safe_json_dumps(roles)
+            if available_agents:
+                attrs[ATTR_CREW_AVAILABLE_AGENTS] = safe_json_dumps(available_agents)
+                attrs[ATTR_CREW_AVAILABLE_AGENT_COUNT] = len(available_agents)
 
     # --- Task list — crew.tasks_snapshot JSON array -----------------------
     if capture_crew_snapshot:

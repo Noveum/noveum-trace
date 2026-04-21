@@ -9,9 +9,8 @@ Handles CrewAI ``BaseEventListener`` LLM events:
                                   extracted separately as ``llm.system_prompt``,
                                   tool definitions as ``llm.tools``;
                                   ``llm.available_tools.*`` (count, names,
-                                  descriptions, schemas); available
-                                  functions as ``llm.available_functions``; plus
-                                  ``agent.role`` and ``task.name`` for correlation.
+                                  descriptions, schemas); plus ``agent.role`` and
+                                  ``task.name`` for correlation.
                                   NOTE: ``call_type`` is NOT available here — it
                                   arrives only with the completed event.
 
@@ -92,9 +91,14 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     merge_available_tools_attributes,
     messages_to_json,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
-    safe_json_dumps,
     serialize_tool_schema,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -235,7 +239,6 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         - ``llm.messages``           — full messages list serialized as JSON
         - ``llm.tools``              — tool schema JSON (when tools provided)
         - ``llm.available_tools.*``  — count, names, descriptions, schemas JSON
-        - ``llm.available_functions``— function names list JSON
         - ``agent.role``             — role of the executing agent (correlation)
         - ``task.name``              — name/description of the current task
         - ``llm.streaming``          — bool, True when streaming mode detected
@@ -629,7 +632,7 @@ class _LLMHandlersMixin(_CrewAIObserverMixinBase):
         # might already be in a "finished" state (some proxy patterns call
         # finish() before firing the completed event).  Both paths are safe:
         # set_attributes() on a live span and dict update on a closed one.
-        _write_attrs_to_span(span, attrs)
+        set_span_attributes(span, attrs)
 
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
@@ -675,15 +678,6 @@ def _resolve_call_id(event: Any) -> str:
         or safe_getattr(event, "run_id")
         or id(event)
     )
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
 
 
 def _resolve_crew_id(source: Any, event: Any) -> Optional[str]:
@@ -764,7 +758,7 @@ def _build_llm_start_attributes(
             if msgs_json:
                 attrs[ATTR_LLM_INPUT_MESSAGES] = msgs_json
 
-    # --- Tools / functions --------------------------------------------------
+    # --- Tools --------------------------------------------------------------
     if capture_tool_schemas:
         # CrewAI often puts ``tools`` on ``event.inputs`` when ``source`` is the LLM
         # object (no ``.tools``), matching how ``messages`` may appear only in inputs.
@@ -776,28 +770,6 @@ def _build_llm_start_attributes(
             if tool_json:
                 attrs[ATTR_LLM_TOOLS] = tool_json
             merge_available_tools_attributes(attrs, tools, "llm")
-
-        available_functions = safe_getattr(
-            event, "available_functions"
-        ) or safe_getattr(event, "functions")
-        if not available_functions and isinstance(_event_inputs, dict):
-            available_functions = _event_inputs.get(
-                "available_functions"
-            ) or _event_inputs.get("functions")
-        if available_functions:
-            try:
-                if isinstance(available_functions, (list, tuple)):
-                    fn_names = []
-                    for fn in available_functions:
-                        name = safe_getattr(fn, "name") or (
-                            fn if isinstance(fn, str) else str(fn)
-                        )
-                        fn_names.append(name)
-                    attrs["llm.available_functions"] = safe_json_dumps(fn_names)
-                else:
-                    attrs["llm.available_functions"] = str(available_functions)
-            except Exception:
-                pass
 
     # --- Agent / task correlation -------------------------------------------
     agent_role = safe_getattr(event, "agent_role") or safe_getattr(source, "role")
@@ -962,31 +934,6 @@ def _extract_finish_reason_from_response(response_obj: Any) -> Optional[str]:
         if reason:
             return str(reason)
     return None
-
-
-def _write_attrs_to_span(span: Any, attrs: dict[str, Any]) -> None:
-    """
-    Write *attrs* to *span*.
-
-    Attempts ``span.set_attributes()`` first (live span).  If the span is
-    already finished or does not implement ``set_attributes``, falls back to
-    writing directly into ``span.attributes`` dict so token counts and cost
-    are never silently dropped.
-    """
-    if not attrs or span is None:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-            return
-    except Exception:
-        pass
-    # Direct dict write — works on finished Span objects
-    try:
-        if hasattr(span, "attributes") and isinstance(span.attributes, dict):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_write_attrs_to_span fallback failed: %s", exc)
 
 
 def _extract_provider_token_extras(

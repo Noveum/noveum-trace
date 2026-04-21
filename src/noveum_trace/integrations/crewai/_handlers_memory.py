@@ -39,9 +39,6 @@ from typing import Any, Optional
 
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_AGENT_ROLE,
-    ATTR_ERROR_MESSAGE,
-    ATTR_ERROR_STACKTRACE,
-    ATTR_ERROR_TYPE,
     ATTR_MEMORY_DURATION_MS,
     ATTR_MEMORY_OP_ID,
     ATTR_MEMORY_OPERATION,
@@ -58,8 +55,13 @@ from noveum_trace.integrations.crewai.crewai_constants import (
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
-    duration_ms_monotonic,
+    finish_span_common,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
     truncate_str,
@@ -494,42 +496,16 @@ class _MemoryHandlersMixin(_CrewAIObserverMixinBase):
             logger.debug("_finish_memory_span: no open span for op_id=%s", op_id)
             return
 
-        attrs: dict[str, Any] = {ATTR_MEMORY_STATUS: status}
-
-        if start_t is not None:
-            attrs[ATTR_MEMORY_DURATION_MS] = duration_ms_monotonic(start_t)
-
-        if error is not None:
-            attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
-            tb = getattr(error, "__traceback__", None)
-            if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
-
-        if extra_attrs:
-            attrs.update(extra_attrs)
-
-        try:
-            if hasattr(span, "set_attributes"):
-                span.set_attributes(attrs)
-            elif hasattr(span, "attributes"):
-                span.attributes.update(attrs)
-
-            if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
-                try:
-                    from noveum_trace.core.span import SpanStatus
-
-                    span.set_status(SpanStatus.ERROR, str(error) if error else "")
-                except Exception:
-                    pass
-
-            if hasattr(span, "finish"):
-                span.finish()
-        except Exception:
-            logger.debug(
-                "_finish_memory_span span.finish() error:\n%s",
-                traceback.format_exc(),
-            )
+        finish_span_common(
+            span,
+            start_t=start_t,
+            status=status,
+            status_attr=ATTR_MEMORY_STATUS,
+            duration_attr=ATTR_MEMORY_DURATION_MS,
+            error=error,
+            extra_attrs=extra_attrs,
+            log_label="_finish_memory_span",
+        )
 
         logger.debug("Memory op span closed: op_id=%s status=%s", op_id, status)
 
@@ -561,16 +537,6 @@ def _resolve_op_id(event: Any, source: Any) -> str:
         or safe_getattr(event, "event_id")
         or id(event)
     )
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id associated with this memory event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
 
 
 def _resolve_memory_task_id(source: Any, event: Any) -> Optional[str]:

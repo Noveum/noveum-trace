@@ -8,14 +8,15 @@ Handles CrewAI A2A events across multiple span types:
                                         current agent/task; capture delegating agent,
                                         receiving agent, task description, endpoint,
                                         context_id, protocol version
-  - ``on_a2a_delegation_completed``  → close as SUCCESS; write result text,
-                                        total turns, duration
+  - ``on_a2a_delegation_completed``  → close delegation span; write result / error
+                                        from ``status`` (``failed`` → ERROR span)
   - ``on_a2a_delegation_failed``     → close as ERROR; attach exception details
 
   Conversation lifecycle:
   - ``on_a2a_conversation_started``  → open ``crewai.a2a.conversation`` span;
                                         capture participants, context_id
-  - ``on_a2a_conversation_completed``→ close as SUCCESS; write final context
+  - ``on_a2a_conversation_completed``→ close conversation span; ``status=failed``
+                                        closes as ERROR with ``event.error``
   - ``on_a2a_conversation_failed``   → close as ERROR
 
   Message-level events (no span lifecycle — annotate open conversation):
@@ -24,19 +25,27 @@ Handles CrewAI A2A events across multiple span types:
 
   Streaming (raw chunks, separate from message dict buffer):
   - ``on_a2a_streaming_started``     → initialize ``_a2a_streaming_chunks`` for conversation
-  - ``on_a2a_streaming_chunk``       → append string chunk to ``_a2a_streaming_chunks``
-  - ``on_a2a_streaming_completed``   → flush chunks to ``a2a.streaming_content`` on the span
+  - ``on_a2a_streaming_chunk``       → append chunk; flush early when ``final`` /
+                                        ``is_final`` is true (CrewAI streaming)
+  - ``on_a2a_streaming_completed``   → flush chunks (also wired if ``A2AStreamingCompletedEvent`` exists)
 
   Polling (status polling for async delegation):
   - ``on_a2a_polling_started``       → record polling start
   - ``on_a2a_polling_status``        → update status in span
 
   Other:
-  - ``on_a2a_artifact_received``     → record received artifact metadata
-  - ``on_a2a_server_task``           → MCP server task within A2A context
-  - ``on_a2a_context_updated``       → record context changes
+  - ``on_a2a_artifact_received``     → record received artifact metadata; for ``image/*``
+                                        payloads (bytes or base64 on the event / metadata),
+                                        queue an image upload via ``NoveumClient.export_image``
+  - ``on_a2a_server_task_*``         → A2A server task lifecycle (started / completed /
+                                        failed / canceled; CrewAI ``A2AServerTask*Event``)
+  - ``on_a2a_response_received``     → buffer inbound A2A agent text (``A2AResponseReceivedEvent``)
+  - ``on_a2a_context_lifecycle_event``→ context created / completed / expired / idle / pruned
   - ``on_a2a_auth_failed``           → authentication error
   - ``on_a2a_connection_error``      → connection failure
+
+  ``setup_listeners()`` wires CrewAI event classes to these handlers where the installed
+  CrewAI version exports them (each subscription is isolated in ``ImportError`` blocks).
 
 State consumed / mutated (declared in _CrewAIObserverState):
     _lock, _is_shutdown, _agent_spans, _task_spans,
@@ -47,6 +56,7 @@ State consumed / mutated (declared in _CrewAIObserverState):
 
 from __future__ import annotations
 
+import base64
 import logging
 import traceback
 from typing import Any, Optional
@@ -72,6 +82,11 @@ from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBa
 from noveum_trace.integrations.crewai.crewai_utils import (
     duration_ms_monotonic,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
     truncate_str,
@@ -87,6 +102,93 @@ _A2A_SPAN_CONVERSATION = "conversation"
 
 def _a2a_entry_key(context_id: str, span_type: str) -> tuple[str, str]:
     return (context_id, span_type)
+
+
+def _a2a_artifact_image_buffer_key(context_id: str, artifact_id: Any) -> Optional[str]:
+    if artifact_id is None or str(artifact_id).strip() == "":
+        return None
+    return f"{context_id}::{artifact_id}"
+
+
+def _mime_type_is_image(mime: Any) -> bool:
+    if not isinstance(mime, str):
+        return False
+    return mime.lower().strip().startswith("image/")
+
+
+def _image_subtype_from_mime(mime: Optional[str]) -> str:
+    if isinstance(mime, str) and "/" in mime:
+        sub = mime.split("/", 1)[1].split(";")[0].strip().lower()
+        if sub:
+            return sub
+    return "png"
+
+
+def _artifact_last_chunk_is_final(last_chunk: Any) -> bool:
+    """Treat absent ``last_chunk`` as a single final chunk (CrewAI one-shot artifacts)."""
+    if last_chunk is None:
+        return True
+    return bool(last_chunk)
+
+
+def _coerce_artifact_bytes(value: Any) -> Optional[bytes]:
+    if value is None:
+        return None
+    if isinstance(value, memoryview):
+        try:
+            return value.tobytes()
+        except Exception:
+            return None
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if s.startswith("data:image/"):
+            try:
+                from noveum_trace.utils.image_utils import parse_base64_image
+
+                return parse_base64_image(s)["image_data"]
+            except Exception:
+                return None
+        try:
+            return base64.b64decode(s, validate=False)
+        except Exception:
+            return None
+    return None
+
+
+def _extract_a2a_artifact_binary_payload(event: Any) -> Optional[bytes]:
+    """Best-effort binary payload for artifact upload (field names vary by CrewAI / runtime)."""
+    for name in (
+        "artifact_content",
+        "artifact_bytes",
+        "content",
+        "data",
+        "bytes",
+        "body",
+        "chunk",
+        "raw",
+        "payload",
+    ):
+        got = _coerce_artifact_bytes(safe_getattr(event, name))
+        if got:
+            return got
+    meta = safe_getattr(event, "metadata")
+    if isinstance(meta, dict):
+        for key in (
+            "content",
+            "data",
+            "bytes",
+            "artifact_bytes",
+            "image",
+            "base64",
+            "body",
+        ):
+            if key in meta:
+                got = _coerce_artifact_bytes(meta.get(key))
+                if got:
+                    return got
+    return None
 
 
 class _A2AHandlersMixin(_CrewAIObserverMixinBase):
@@ -162,27 +264,31 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_a2a_delegation_completed(self, source: Any, event: Any) -> None:
         """
-        Close the ``crewai.a2a.delegation`` span as SUCCESS.
+        Close the ``crewai.a2a.delegation`` span when delegation ends.
 
-        Attributes written
-        ------------------
-        - ``a2a.status``         — ``"completed"`` or ``"input_required"``
-        - ``a2a.result``         — delegated task result (truncated)
-        - ``a2a.total_turns``    — total conversation turns/iterations
-        - ``a2a.duration_ms``    — wall-clock duration
+        ``A2ADelegationCompletedEvent`` may report ``status`` of ``completed``,
+        ``input_required``, ``failed``, etc. Failed statuses are closed as ERROR
+        with ``event.error`` when present.
         """
         if not self._is_active():
             return
         try:
             context_id = _resolve_context_id(event, source)
             status = safe_getattr(event, "status") or ATTR_STATUS_SUCCESS
+            status_lower = str(status).lower()
+            is_failed = status_lower == "failed"
 
             result = safe_getattr(event, "result")
+            err_msg = safe_getattr(event, "error")
             total_turns = safe_getattr(event, "total_turns")
             extra: dict[str, Any] = {}
 
-            if result:
+            if result and not is_failed:
                 extra[ATTR_A2A_RESULT] = truncate_str(str(result), MAX_TEXT_LENGTH)
+            if is_failed and err_msg:
+                extra["a2a.delegation_error"] = truncate_str(
+                    str(err_msg), MAX_DESCRIPTION_LENGTH
+                )
             if total_turns is not None:
                 try:
                     extra["a2a.total_turns"] = int(total_turns)
@@ -192,8 +298,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             self._finish_a2a_span(
                 context_id=context_id,
                 span_type=_A2A_SPAN_DELEGATION,
-                status=status,
-                error=None,
+                status=ATTR_STATUS_ERROR if is_failed else status,
+                error=err_msg if is_failed else None,
                 extra_attrs=extra,
             )
         except Exception:
@@ -283,11 +389,20 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             )
 
     def on_a2a_conversation_completed(self, source: Any, event: Any) -> None:
-        """Close the conversation span as SUCCESS."""
+        """
+        Close the conversation span when CrewAI reports conversation end.
+
+        ``A2AConversationCompletedEvent`` uses ``status`` of ``completed`` or ``failed``;
+        failed runs are finished as ERROR with ``event.error`` when present.
+        """
         if not self._is_active():
             return
         try:
             context_id = _resolve_context_id(event, source)
+            raw_status = safe_getattr(event, "status")
+            status_str = str(raw_status).lower() if raw_status is not None else ""
+            is_failed = status_str == "failed"
+
             total_turns = safe_getattr(event, "total_turns")
             extra: dict[str, Any] = {}
 
@@ -297,11 +412,25 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 except (TypeError, ValueError):
                     pass
 
+            final_result = safe_getattr(event, "final_result")
+            if final_result is not None and not is_failed:
+                extra["a2a.final_result"] = truncate_str(
+                    str(final_result), MAX_TEXT_LENGTH
+                )
+
+            err_msg = safe_getattr(event, "error")
+            if is_failed and err_msg:
+                extra["a2a.conversation_error"] = truncate_str(
+                    str(err_msg), MAX_DESCRIPTION_LENGTH
+                )
+
+            self._flush_a2a_streaming_chunks_for_context(context_id)
+
             self._finish_a2a_span(
                 context_id=context_id,
                 span_type=_A2A_SPAN_CONVERSATION,
-                status=ATTR_STATUS_SUCCESS,
-                error=None,
+                status=ATTR_STATUS_ERROR if is_failed else ATTR_STATUS_SUCCESS,
+                error=err_msg if is_failed else None,
                 extra_attrs=extra,
             )
         except Exception:
@@ -435,9 +564,84 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
         except Exception:
             logger.debug("on_a2a_message_received error:\n%s", traceback.format_exc())
 
+    def on_a2a_response_received(self, source: Any, event: Any) -> None:
+        """
+        Buffer an inbound response from the remote A2A agent (``A2AResponseReceivedEvent``).
+
+        Writes the same conversation message buffer as ``on_a2a_message_received``,
+        with ``type`` = ``response_received`` and optional ``status`` / ``final`` fields.
+        """
+        if not self._is_active():
+            return
+        try:
+            context_id = _resolve_context_id(event, source)
+            turn_number = safe_getattr(event, "turn_number")
+            text = safe_getattr(event, "response") or safe_getattr(event, "message")
+            sender = safe_getattr(event, "agent_role") or safe_getattr(
+                event, "a2a_agent_name"
+            )
+            status = safe_getattr(event, "status")
+            final = safe_getattr(event, "final")
+
+            msg_entry: dict[str, Any] = {
+                "type": "response_received",
+                "turn_number": turn_number,
+                "content": (
+                    truncate_str(str(text), MAX_TEXT_LENGTH) if text is not None else ""
+                ),
+                "sender": str(sender) if sender else "a2a_agent",
+            }
+            if status is not None:
+                msg_entry["status"] = truncate_str(str(status), 256)
+            if final is not None:
+                msg_entry["final"] = bool(final)
+
+            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
+            with self._lock:
+                buf = self._a2a_stream_buffers.get(ck, [])
+                if len(buf) < MAX_A2A_CONVERSATION_MESSAGES:
+                    buf.append(msg_entry)
+                    self._a2a_stream_buffers[ck] = buf
+
+            logger.debug(
+                "A2A response received: context_id=%s turn=%s",
+                context_id,
+                turn_number,
+            )
+        except Exception:
+            logger.debug("on_a2a_response_received error:\n%s", traceback.format_exc())
+
     # =========================================================================
     # STREAMING — started / chunk / completed
     # =========================================================================
+
+    def _flush_a2a_streaming_chunks_for_context(self, context_id: str) -> None:
+        """Join buffered streaming chunks onto the open conversation span (if any)."""
+        ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
+        with self._lock:
+            raw_chunks = self._a2a_streaming_chunks.pop(ck, [])
+            self._a2a_streaming_lengths.pop(ck, None)
+            span_entry = self._a2a_spans.get(ck)
+
+        if not span_entry or not raw_chunks:
+            return
+
+        span = span_entry.get("span")
+        if span is None:
+            return
+
+        content = truncate_str("".join(raw_chunks), MAX_TEXT_LENGTH)
+        try:
+            span.set_attribute("a2a.streaming_content", content)
+        except Exception:
+            if hasattr(span, "attributes"):
+                span.attributes["a2a.streaming_content"] = content
+
+        logger.debug(
+            "A2A streaming flushed: context_id=%s content_len=%d",
+            context_id,
+            len(content),
+        )
 
     def on_a2a_streaming_started(self, source: Any, event: Any) -> None:
         """Initialize raw streaming chunk buffer (separate from message dict buffer)."""
@@ -473,7 +677,11 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                 or safe_getattr(event, "delta")
                 or ""
             )
-            is_final = safe_getattr(event, "is_final") or False
+            is_final = bool(
+                safe_getattr(event, "is_final")
+                or safe_getattr(event, "final")
+                or safe_getattr(event, "is_final_chunk")
+            )
             chunk_str = str(chunk)
 
             ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
@@ -486,7 +694,10 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     self._a2a_streaming_lengths[ck] = current_len + add_len
 
             if is_final:
-                logger.debug("A2A streaming final chunk: context_id=%s", context_id)
+                logger.debug(
+                    "A2A streaming final chunk: context_id=%s (flush)", context_id
+                )
+                self._flush_a2a_streaming_chunks_for_context(context_id)
 
         except Exception:
             logger.debug("on_a2a_streaming_chunk error:\n%s", traceback.format_exc())
@@ -497,35 +708,8 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             return
         try:
             context_id = _resolve_context_id(event, source)
-
-            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
-            with self._lock:
-                raw_chunks = self._a2a_streaming_chunks.pop(ck, [])
-                self._a2a_streaming_lengths.pop(ck, None)
-                span_entry = self._a2a_spans.get(ck)
-
-            if not span_entry:
-                return
-
-            span = span_entry.get("span")
-            if not span or not raw_chunks:
-                return
-
-            content = truncate_str("".join(raw_chunks), MAX_TEXT_LENGTH)
-
-            try:
-                span.set_attribute("a2a.streaming_content", content)
-            except Exception:
-                # Fallback: direct dict write (post-close)
-                if hasattr(span, "attributes"):
-                    span.attributes["a2a.streaming_content"] = content
-
-            logger.debug(
-                "A2A streaming completed: context_id=%s content_len=%d",
-                context_id,
-                len(content),
-            )
-
+            self._flush_a2a_streaming_chunks_for_context(context_id)
+            logger.debug("A2A streaming completed: context_id=%s", context_id)
         except Exception:
             logger.debug(
                 "on_a2a_streaming_completed error:\n%s", traceback.format_exc()
@@ -631,10 +815,13 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
 
         Attributes written
         ------------------
-        - ``a2a.artifact_name``      — artifact name/filename
-        - ``a2a.artifact_mime_type`` — MIME type (e.g., "application/json")
-        - ``a2a.artifact_size_bytes``— size in bytes
-        - ``a2a.artifact_id``        — unique artifact identifier
+        - ``a2a.artifact_name``         — artifact name/filename
+        - ``a2a.artifact_mime_type``    — MIME type (e.g., ``image/png``)
+        - ``a2a.artifact_size_bytes``   — size in bytes
+        - ``a2a.artifact_id``             — unique artifact identifier
+        - ``a2a.artifact_image_uuid``   — when ``mime_type`` is ``image/*`` and binary
+                                          payload is present on the event (or in ``metadata``),
+                                          bytes are queued via ``export_image`` and this UUID is set
         """
         if not self._is_active():
             return
@@ -664,6 +851,14 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             artifact_id = safe_getattr(event, "artifact_id") or safe_getattr(
                 event, "id"
             )
+            artifact_desc = safe_getattr(event, "artifact_description")
+            task_id_art = safe_getattr(event, "task_id")
+            endpoint_art = safe_getattr(event, "endpoint")
+            a2a_agent = safe_getattr(event, "a2a_agent_name")
+            turn_art = safe_getattr(event, "turn_number")
+            is_multi = safe_getattr(event, "is_multiturn")
+            append = safe_getattr(event, "append")
+            last_chunk = safe_getattr(event, "last_chunk")
 
             attrs: dict[str, Any] = {}
             if artifact_name:
@@ -677,6 +872,40 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     pass
             if artifact_id:
                 attrs["a2a.artifact_id"] = str(artifact_id)
+            if artifact_desc:
+                attrs["a2a.artifact_description"] = truncate_str(
+                    str(artifact_desc), MAX_DESCRIPTION_LENGTH
+                )
+            if task_id_art:
+                attrs["a2a.artifact_task_id"] = str(task_id_art)
+            if endpoint_art:
+                attrs["a2a.artifact_endpoint"] = truncate_str(str(endpoint_art), 512)
+            if a2a_agent:
+                attrs["a2a.artifact_a2a_agent_name"] = truncate_str(str(a2a_agent), 256)
+            if turn_art is not None:
+                try:
+                    attrs["a2a.artifact_turn_number"] = int(turn_art)
+                except (TypeError, ValueError):
+                    attrs["a2a.artifact_turn_number"] = str(turn_art)
+            if is_multi is not None:
+                attrs["a2a.artifact_is_multiturn"] = bool(is_multi)
+            if append is not None:
+                attrs["a2a.artifact_append"] = bool(append)
+            if last_chunk is not None:
+                attrs["a2a.artifact_last_chunk"] = bool(last_chunk)
+
+            if _mime_type_is_image(mime_type):
+                image_uuid = self._maybe_export_a2a_artifact_image(
+                    context_id=context_id,
+                    span=span,
+                    event=event,
+                    mime_type=mime_type,
+                    artifact_id=artifact_id,
+                    artifact_name=artifact_name,
+                    last_chunk=last_chunk,
+                )
+                if image_uuid:
+                    attrs["a2a.artifact_image_uuid"] = image_uuid
 
             try:
                 if hasattr(span, "set_attributes"):
@@ -689,154 +918,153 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
                     span.attributes.update(attrs)
 
             logger.debug(
-                "A2A artifact received: context_id=%s name=%s size=%s",
+                "A2A artifact received: context_id=%s name=%s size=%s image_uuid=%s",
                 context_id,
                 artifact_name,
                 size_bytes,
+                attrs.get("a2a.artifact_image_uuid"),
             )
 
         except Exception:
             logger.debug("on_a2a_artifact_received error:\n%s", traceback.format_exc())
 
     # =========================================================================
-    # SERVER TASK — MCP server-side task within A2A context
+    # SERVER TASK — A2A server-side task lifecycle (CrewAI A2AServerTask*Event)
     # =========================================================================
 
-    def on_a2a_server_task(self, source: Any, event: Any) -> None:
-        """
-        Record an MCP server task executed as part of A2A delegation.
-
-        Attributes written
-        ------------------
-        - ``a2a.server_task_name`` — task name
-        - ``a2a.server_task_input``— input JSON (truncated)
-        - ``a2a.server_task_result`` — result (truncated)
-        - ``a2a.server_task_status`` — "success" or "failed"
-        """
-        if not self._is_active():
+    def _write_attrs_on_open_delegation_span(
+        self, context_id: str, attrs: dict[str, Any]
+    ) -> None:
+        """Merge *attrs* onto the open ``crewai.a2a.delegation`` span for *context_id*."""
+        dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
+        with self._lock:
+            span_entry = self._a2a_spans.get(dk)
+        if not span_entry:
+            return
+        span = span_entry.get("span")
+        if not span or not attrs:
             return
         try:
-            context_id = _resolve_context_id(event, source)
-
-            dk = _a2a_entry_key(context_id, _A2A_SPAN_DELEGATION)
-            with self._lock:
-                span_entry = self._a2a_spans.get(dk)
-
-            if not span_entry:
-                return
-
-            span = span_entry.get("span")
-            if not span:
-                return
-
-            task_name = safe_getattr(event, "task_name") or safe_getattr(event, "name")
-            task_input = safe_getattr(event, "input")
-            task_result = safe_getattr(event, "result") or safe_getattr(event, "output")
-            task_status = safe_getattr(event, "status") or "unknown"
-
-            attrs: dict[str, Any] = {}
-            if task_name:
-                attrs["a2a.server_task_name"] = str(task_name)
-            if task_input:
-                attrs["a2a.server_task_input"] = truncate_str(
-                    safe_json_dumps(task_input), MAX_DESCRIPTION_LENGTH
-                )
-            if task_result:
-                attrs["a2a.server_task_result"] = truncate_str(
-                    safe_json_dumps(task_result), MAX_TEXT_LENGTH
-                )
-            attrs["a2a.server_task_status"] = str(task_status)
-
-            try:
-                if hasattr(span, "set_attributes"):
-                    span.set_attributes(attrs)
-                else:
-                    for k, v in attrs.items():
-                        span.set_attribute(k, v)
-            except Exception:
-                if hasattr(span, "attributes"):
-                    span.attributes.update(attrs)
-
+            if hasattr(span, "set_attributes"):
+                span.set_attributes(attrs)
+            else:
+                for k, v in attrs.items():
+                    span.set_attribute(k, v)
         except Exception:
-            logger.debug("on_a2a_server_task error:\n%s", traceback.format_exc())
+            if hasattr(span, "attributes"):
+                span.attributes.update(attrs)
 
-    # =========================================================================
-    # CONTEXT — updated / shared
-    # =========================================================================
-
-    def on_a2a_context_updated(self, source: Any, event: Any) -> None:
-        """Record context state changes during A2A conversation."""
-        if not self._is_active():
-            return
-        try:
-            context_id = _resolve_context_id(event, source)
-
-            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
-            with self._lock:
-                span_entry = self._a2a_spans.get(ck)
-
-            if not span_entry:
-                return
-
-            span = span_entry.get("span")
-            if not span:
-                return
-
-            context_update = safe_getattr(event, "context") or safe_getattr(
-                event, "update"
+    def _server_task_base_attrs(
+        self, source: Any, event: Any, context_id: Optional[str]
+    ) -> dict[str, Any]:
+        tid = safe_getattr(event, "task_id")
+        meta = safe_getattr(event, "metadata")
+        attrs: dict[str, Any] = {}
+        if context_id:
+            attrs["a2a.context_id"] = str(context_id)
+        if tid is not None:
+            attrs["a2a.server_task.task_id"] = str(tid)
+        if meta is not None:
+            attrs["a2a.server_task.metadata"] = truncate_str(
+                safe_json_dumps(meta), MAX_DESCRIPTION_LENGTH
             )
-            reason = safe_getattr(event, "reason")
+        # Best-effort extras: these are not guaranteed by A2AServerTask* events,
+        # but some runtimes/adapters may attach them.
+        endpoint = safe_getattr(event, "endpoint") or safe_getattr(source, "endpoint")
+        if endpoint:
+            attrs["a2a.server_task.endpoint"] = truncate_str(str(endpoint), 512)
+        task_name = safe_getattr(event, "task_name") or safe_getattr(event, "name")
+        if task_name:
+            attrs["a2a.server_task.task_name"] = truncate_str(str(task_name), 256)
+        input_payload = safe_getattr(event, "input") or safe_getattr(event, "payload")
+        if input_payload is not None:
+            raw = (
+                input_payload
+                if isinstance(input_payload, str)
+                else safe_json_dumps(input_payload)
+            )
+            attrs["a2a.server_task.input"] = truncate_str(raw, MAX_TEXT_LENGTH)
+        return attrs
 
-            attrs: dict[str, Any] = {}
-            if context_update:
-                attrs["a2a.context_update"] = truncate_str(
-                    safe_json_dumps(context_update), MAX_TEXT_LENGTH
-                )
-            if reason:
-                attrs["a2a.context_update_reason"] = str(reason)
-
-            try:
-                if hasattr(span, "set_attributes"):
-                    span.set_attributes(attrs)
-                else:
-                    for k, v in attrs.items():
-                        span.set_attribute(k, v)
-            except Exception:
-                if hasattr(span, "attributes"):
-                    span.attributes.update(attrs)
-
-        except Exception:
-            logger.debug("on_a2a_context_updated error:\n%s", traceback.format_exc())
-
-    def on_a2a_context_shared(self, source: Any, event: Any) -> None:
-        """Record context shared between agents."""
+    def on_a2a_server_task_started(self, source: Any, event: Any) -> None:
+        """``A2AServerTaskStartedEvent``: task_id, context_id, metadata on delegation span."""
         if not self._is_active():
             return
         try:
             context_id = _resolve_context_id(event, source)
+            attrs = self._server_task_base_attrs(source, event, context_id)
+            attrs["a2a.server_task.phase"] = "started"
+            self._write_attrs_on_open_delegation_span(context_id, attrs)
+        except Exception:
+            logger.debug(
+                "on_a2a_server_task_started error:\n%s", traceback.format_exc()
+            )
 
-            ck = _a2a_entry_key(context_id, _A2A_SPAN_CONVERSATION)
+    def on_a2a_server_task_completed(self, source: Any, event: Any) -> None:
+        """``A2AServerTaskCompletedEvent``: includes string ``result`` when provided."""
+        if not self._is_active():
+            return
+        try:
+            context_id = _resolve_context_id(event, source)
+            attrs = self._server_task_base_attrs(source, event, context_id)
+            attrs["a2a.server_task.phase"] = "completed"
+            res = safe_getattr(event, "result")
+            if res is not None:
+                attrs["a2a.server_task.result"] = truncate_str(
+                    str(res), MAX_TEXT_LENGTH
+                )
+            self._write_attrs_on_open_delegation_span(context_id, attrs)
+        except Exception:
+            logger.debug(
+                "on_a2a_server_task_completed error:\n%s", traceback.format_exc()
+            )
+
+    def on_a2a_server_task_failed(self, source: Any, event: Any) -> None:
+        """``A2AServerTaskFailedEvent``: records ``error`` string."""
+        if not self._is_active():
+            return
+        try:
+            context_id = _resolve_context_id(event, source)
+            attrs = self._server_task_base_attrs(source, event, context_id)
+            attrs["a2a.server_task.phase"] = "failed"
+            err = safe_getattr(event, "error")
+            if err is not None:
+                attrs["a2a.server_task.error"] = truncate_str(
+                    str(err), MAX_DESCRIPTION_LENGTH
+                )
+            self._write_attrs_on_open_delegation_span(context_id, attrs)
+        except Exception:
+            logger.debug("on_a2a_server_task_failed error:\n%s", traceback.format_exc())
+
+    def on_a2a_server_task_canceled(self, source: Any, event: Any) -> None:
+        """``A2AServerTaskCanceledEvent``."""
+        if not self._is_active():
+            return
+        try:
+            context_id = _resolve_context_id(event, source)
+            attrs = self._server_task_base_attrs(source, event, context_id)
+            attrs["a2a.server_task.phase"] = "canceled"
+            self._write_attrs_on_open_delegation_span(context_id, attrs)
+        except Exception:
+            logger.debug(
+                "on_a2a_server_task_canceled error:\n%s", traceback.format_exc()
+            )
+
+    def _write_attrs_on_open_conversation_or_delegation(
+        self, context_id: str, attrs: dict[str, Any]
+    ) -> None:
+        """Apply *attrs* to the first open A2A span: conversation, else delegation."""
+        if not attrs:
+            return
+        for span_type in (_A2A_SPAN_CONVERSATION, _A2A_SPAN_DELEGATION):
+            key = _a2a_entry_key(context_id, span_type)
             with self._lock:
-                span_entry = self._a2a_spans.get(ck)
-
+                span_entry = self._a2a_spans.get(key)
             if not span_entry:
-                return
-
+                continue
             span = span_entry.get("span")
             if not span:
-                return
-
-            shared_with = safe_getattr(event, "shared_with")
-            shared_data = safe_getattr(event, "data")
-
-            attrs: dict[str, Any] = {}
-            if shared_with:
-                attrs["a2a.context_shared_with"] = str(shared_with)
-            if shared_data:
-                attrs["a2a.context_shared_data_size"] = len(
-                    safe_json_dumps(shared_data)
-                )
-
+                continue
             try:
                 if hasattr(span, "set_attributes"):
                     span.set_attributes(attrs)
@@ -846,9 +1074,45 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             except Exception:
                 if hasattr(span, "attributes"):
                     span.attributes.update(attrs)
+            return
 
+    def on_a2a_context_lifecycle_event(self, source: Any, event: Any) -> None:
+        """
+        Record CrewAI A2A context lifecycle (created / completed / expired / idle / pruned).
+
+        Subscribed from ``setup_listeners()`` for each concrete event class that exists
+        in the installed CrewAI version.
+        """
+        if not self._is_active():
+            return
+        try:
+            context_id = _resolve_context_id(event, source)
+            event_type = safe_getattr(event, "type") or type(event).__name__
+            snap: dict[str, Any] = {"event_type": str(event_type)}
+            for key in (
+                "context_id",
+                "created_at",
+                "total_tasks",
+                "duration_seconds",
+                "age_seconds",
+                "task_count",
+                "idle_seconds",
+                "metadata",
+            ):
+                val = safe_getattr(event, key)
+                if val is not None:
+                    snap[key] = val
+            attrs = {
+                "a2a.context_lifecycle.type": str(event_type),
+                "a2a.context_lifecycle.snapshot": truncate_str(
+                    safe_json_dumps(snap), MAX_TEXT_LENGTH
+                ),
+            }
+            self._write_attrs_on_open_conversation_or_delegation(context_id, attrs)
         except Exception:
-            logger.debug("on_a2a_context_shared error:\n%s", traceback.format_exc())
+            logger.debug(
+                "on_a2a_context_lifecycle_event error:\n%s", traceback.format_exc()
+            )
 
     # =========================================================================
     # ERROR HANDLING — authentication / connection
@@ -994,6 +1258,95 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
     # Internal helpers
     # =========================================================================
 
+    def _clear_a2a_artifact_image_buffers_for_context(self, context_id: str) -> None:
+        """Drop incomplete chunked image buffers when the A2A delegation span closes."""
+        prefix = f"{context_id}::"
+        with self._lock:
+            dead = [k for k in self._a2a_artifact_image_buffers if k.startswith(prefix)]
+            for k in dead:
+                self._a2a_artifact_image_buffers.pop(k, None)
+
+    def _maybe_export_a2a_artifact_image(
+        self,
+        *,
+        context_id: str,
+        span: Any,
+        event: Any,
+        mime_type: Any,
+        artifact_id: Any,
+        artifact_name: Any,
+        last_chunk: Any,
+    ) -> Optional[str]:
+        """
+        If the event carries image bytes, call ``client.export_image`` and return UUID.
+
+        Chunked artifacts: when ``last_chunk`` is false, bytes are accumulated under
+        ``_a2a_artifact_image_buffers`` until a final chunk arrives (requires ``artifact_id``).
+        """
+        chunk = _extract_a2a_artifact_binary_payload(event)
+        if not chunk:
+            return None
+        client = self._get_client()
+        if client is None:
+            return None
+        # ``MagicMock`` makes bare ``getattr(..., False)`` truthy; only skip real shutdown.
+        if getattr(client, "_shutdown", False) is True:
+            return None
+        trace_id = getattr(span, "trace_id", None)
+        span_id = getattr(span, "span_id", None)
+        if not trace_id or not span_id:
+            return None
+
+        final = _artifact_last_chunk_is_final(last_chunk)
+        buf_key = _a2a_artifact_image_buffer_key(context_id, artifact_id)
+
+        with self._lock:
+            if not final:
+                if buf_key is None:
+                    logger.debug(
+                        "A2A image artifact non-final chunk without artifact_id; cannot buffer"
+                    )
+                    return None
+                acc = self._a2a_artifact_image_buffers.setdefault(buf_key, bytearray())
+                acc.extend(chunk)
+                return None
+            pending: Optional[bytearray] = None
+            if buf_key is not None:
+                pending = self._a2a_artifact_image_buffers.pop(buf_key, None)
+
+        parts: list[bytes] = []
+        if pending:
+            parts.append(bytes(pending))
+        parts.append(chunk)
+        full = b"".join(parts)
+
+        from noveum_trace.utils.image_utils import generate_image_uuid
+
+        image_uuid = generate_image_uuid()
+        fmt = _image_subtype_from_mime(
+            mime_type if isinstance(mime_type, str) else None
+        )
+        meta: dict[str, Any] = {
+            "format": fmt,
+            "source": "crewai.a2a.artifact",
+        }
+        if artifact_id is not None:
+            meta["artifact_id"] = str(artifact_id)
+        if artifact_name:
+            meta["artifact_name"] = str(artifact_name)
+        try:
+            client.export_image(
+                image_data=full,
+                trace_id=str(trace_id),
+                span_id=str(span_id),
+                image_uuid=image_uuid,
+                metadata=meta,
+            )
+        except Exception:
+            logger.debug("A2A artifact image export_image failed", exc_info=True)
+            return None
+        return image_uuid
+
     def _finish_a2a_span(
         self,
         context_id: str,
@@ -1019,6 +1372,9 @@ class _A2AHandlersMixin(_CrewAIObserverMixinBase):
             buf = self._a2a_stream_buffers.pop(key, None)
             stream_chunks = self._a2a_streaming_chunks.pop(key, None)
             self._a2a_streaming_lengths.pop(key, None)
+
+        if span_type == _A2A_SPAN_DELEGATION:
+            self._clear_a2a_artifact_image_buffers_for_context(context_id)
 
         if entry is None:
             logger.debug(
@@ -1115,16 +1471,6 @@ def _resolve_context_id(event: Any, source: Any) -> str:
     return str(context_id) if context_id else f"a2a_{id(event)}"
 
 
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Extract agent ID from delegating agent."""
-    agent_id = (
-        safe_getattr(source, "id")
-        or safe_getattr(event, "agent_id")
-        or safe_getattr(event, "delegating_agent_id")
-    )
-    return str(agent_id) if agent_id else None
-
-
 def _resolve_task_id(source: Any, event: Any) -> Optional[str]:
     """Extract task ID from context."""
     task_id = safe_getattr(event, "task_id") or safe_getattr(source, "task_id")
@@ -1134,20 +1480,34 @@ def _resolve_task_id(source: Any, event: Any) -> Optional[str]:
 def _build_a2a_delegation_start_attributes(
     source: Any, event: Any, context_id: str
 ) -> dict[str, Any]:
-    """Build attributes for delegation start."""
+    """Build attributes for delegation / conversation start (CrewAI A2A event fields)."""
     attrs: dict[str, Any] = {
         ATTR_A2A_CONTEXT_ID: context_id,
     }
 
-    delegating = safe_getattr(event, "delegating_agent") or safe_getattr(source, "role")
+    delegating = (
+        safe_getattr(event, "delegating_agent")
+        or safe_getattr(event, "agent_role")
+        or safe_getattr(source, "role")
+    )
     if delegating:
         attrs[ATTR_A2A_DELEGATING_AGENT] = str(delegating)
 
-    receiving = safe_getattr(event, "receiving_agent") or safe_getattr(
-        event, "target_agent"
+    receiving = (
+        safe_getattr(event, "receiving_agent")
+        or safe_getattr(event, "target_agent")
+        or safe_getattr(event, "a2a_agent_name")
     )
     if receiving:
         attrs[ATTR_A2A_RECEIVING_AGENT] = str(receiving)
+
+    remote_agent_id = safe_getattr(event, "agent_id")
+    if remote_agent_id:
+        attrs["a2a.remote_agent_id"] = str(remote_agent_id)
+
+    a2a_name = safe_getattr(event, "a2a_agent_name")
+    if a2a_name:
+        attrs["a2a.a2a_agent_name"] = truncate_str(str(a2a_name), 256)
 
     endpoint = safe_getattr(event, "endpoint") or safe_getattr(event, "server")
     if endpoint:
@@ -1168,12 +1528,43 @@ def _build_a2a_delegation_start_attributes(
     provider_info = safe_getattr(event, "provider_info") or safe_getattr(
         event, "provider"
     )
-    if provider_info:
-        attrs["a2a.provider_info"] = str(provider_info)
+    if provider_info is not None:
+        if isinstance(provider_info, (dict, list)):
+            attrs["a2a.provider_info"] = truncate_str(
+                safe_json_dumps(provider_info), MAX_DESCRIPTION_LENGTH
+            )
+        else:
+            attrs["a2a.provider_info"] = truncate_str(
+                str(provider_info), MAX_DESCRIPTION_LENGTH
+            )
 
     skill_id = safe_getattr(event, "skill_id")
     if skill_id:
         attrs["a2a.skill_id"] = str(skill_id)
+
+    agent_card = safe_getattr(event, "agent_card")
+    if agent_card is not None:
+        attrs["a2a.agent_card"] = truncate_str(
+            safe_json_dumps(agent_card), MAX_TEXT_LENGTH
+        )
+
+    ref_ids = safe_getattr(event, "reference_task_ids")
+    if ref_ids is not None:
+        attrs["a2a.reference_task_ids"] = truncate_str(
+            safe_json_dumps(ref_ids), MAX_DESCRIPTION_LENGTH
+        )
+
+    meta = safe_getattr(event, "metadata")
+    if meta is not None:
+        attrs["a2a.metadata"] = truncate_str(
+            safe_json_dumps(meta), MAX_DESCRIPTION_LENGTH
+        )
+
+    extensions = safe_getattr(event, "extensions")
+    if extensions is not None:
+        attrs["a2a.extensions"] = truncate_str(
+            safe_json_dumps(extensions), MAX_DESCRIPTION_LENGTH
+        )
 
     return attrs
 

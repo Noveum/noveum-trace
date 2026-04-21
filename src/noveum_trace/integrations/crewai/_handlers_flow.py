@@ -14,9 +14,10 @@ Event families handled:
 
   Flow lifecycle:
   - ``on_flow_started``                → open ``crewai.flow`` span;
-                                          capture flow_name, flow_id, inputs
+                                          capture flow_name, flow_id, inputs, structure
   - ``on_flow_finished``               → close as SUCCESS; write result
   - ``on_flow_failed``                 → close as ERROR
+  - ``on_flow_plot``                   → annotate open flow span (plot marker + structure)
 
   Method execution (per decorated method):
   - ``on_method_execution_started``    → open ``crewai.flow.method`` child span;
@@ -56,8 +57,10 @@ from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_FLOW_METHOD_STATUS,
     ATTR_FLOW_METHOD_TRIGGER,
     ATTR_FLOW_NAME,
+    ATTR_FLOW_PLOT_EMITTED,
     ATTR_FLOW_STATE,
     ATTR_FLOW_STATUS,
+    ATTR_FLOW_STRUCTURE,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
     MAX_DESCRIPTION_LENGTH,
@@ -71,6 +74,7 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     monotonic_now,
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -106,8 +110,9 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         ---------------------------
         - ``flow.id``      — unique flow run identifier
         - ``flow.name``    — Flow class name or configured name
-        - ``flow.inputs``  — JSON of initial inputs passed to ``kickoff()``
-        - ``flow.state``   — JSON snapshot of the initial Flow state object
+        - ``flow.inputs``     — JSON of initial inputs passed to ``kickoff()``
+        - ``flow.state``      — JSON snapshot of the initial Flow state object
+        - ``flow.structure``  — JSON graph from ``build_flow_structure`` (nodes, edges, …)
         """
         if not self._is_active():
             return
@@ -212,6 +217,33 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             self._finish_flow_span(flow_id, ATTR_STATUS_ERROR, error)
         except Exception:
             logger.debug("on_flow_failed error:\n%s", traceback.format_exc())
+
+    def on_flow_plot(self, source: Any, event: Any) -> None:
+        """
+        Annotate the open ``crewai.flow`` span when CrewAI emits ``FlowPlotEvent``.
+
+        ``FlowPlotEvent`` does not carry graph data; we still attach a fresh
+        ``flow.structure`` from ``build_flow_structure(source)`` when available,
+        and set ``flow.plot_emitted`` so backends can tell ``plot()`` ran.
+        """
+        if not self._is_active():
+            return
+        try:
+            flow_id = _resolve_flow_id(source, event)
+            with self._lock:
+                entry = self._flow_spans.get(flow_id)
+            if not entry:
+                return
+            span = entry.get("span")
+            if span is None:
+                return
+            payload: dict[str, Any] = {ATTR_FLOW_PLOT_EMITTED: True}
+            structure_json = _try_flow_structure_json(source)
+            if structure_json:
+                payload[ATTR_FLOW_STRUCTURE] = structure_json
+            set_span_attributes(span, payload)
+        except Exception:
+            logger.debug("on_flow_plot error:\n%s", traceback.format_exc())
 
     # =========================================================================
     # Method execution — started / finished / failed
@@ -356,7 +388,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                 except Exception:
                     pause_attrs["flow.pause_possible_outcomes"] = str(outcomes)
 
-            _set_span_attributes(span, pause_attrs)
+            set_span_attributes(span, pause_attrs)
             logger.debug("Flow paused: flow_id=%s", flow_id)
         except Exception:
             logger.debug("on_flow_paused error:\n%s", traceback.format_exc())
@@ -398,7 +430,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             if field:
                 req_attrs["flow.input_field"] = str(field)
 
-            _set_span_attributes(span, req_attrs)
+            set_span_attributes(span, req_attrs)
         except Exception:
             logger.debug("on_flow_input_requested error:\n%s", traceback.format_exc())
 
@@ -433,7 +465,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
             if field:
                 recv_attrs["flow.input_field"] = str(field)
 
-            _set_span_attributes(span, recv_attrs)
+            set_span_attributes(span, recv_attrs)
         except Exception:
             logger.debug("on_flow_input_received error:\n%s", traceback.format_exc())
 
@@ -473,7 +505,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                     safe_json_dumps(context), 1024
                 )
 
-            _set_span_attributes(span, fb_attrs)
+            set_span_attributes(span, fb_attrs)
         except Exception:
             logger.debug(
                 "on_human_feedback_requested error:\n%s", traceback.format_exc()
@@ -519,7 +551,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                     1024,
                 )
 
-            _set_span_attributes(span, recv_attrs)
+            set_span_attributes(span, recv_attrs)
         except Exception:
             logger.debug(
                 "on_human_feedback_received error:\n%s", traceback.format_exc()
@@ -592,7 +624,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
         if extra_attrs:
             attrs.update(extra_attrs)
 
-        _set_span_attributes(span, attrs)
+        set_span_attributes(span, attrs)
 
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
@@ -664,7 +696,7 @@ class _FlowHandlersMixin(_CrewAIObserverMixinBase):
                     MAX_TEXT_LENGTH,
                 )
 
-        _set_span_attributes(span, attrs)
+        set_span_attributes(span, attrs)
 
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
@@ -727,6 +759,82 @@ def _make_method_key(flow_id: str, method_id: str) -> str:
     return f"{flow_id}{_METHOD_KEY_SEP}{method_id}"
 
 
+_HEAVY_FLOW_NODE_KEYS = frozenset({"source_code", "source_lines", "source_start_line"})
+_MAX_METHOD_SIGNATURE_CHARS = 2000
+
+
+def _flow_structure_to_plain(structure: Any) -> dict[str, Any]:
+    """Turn CrewAI ``FlowStructure`` (or dict) into a plain dict for JSON."""
+    if structure is None:
+        return {}
+    md = getattr(structure, "model_dump", None)
+    if callable(md):
+        try:
+            out = md()
+            return out if isinstance(out, dict) else {}
+        except Exception:
+            return {}
+    legacy_dict = getattr(structure, "dict", None)
+    if callable(legacy_dict):
+        try:
+            out = legacy_dict()
+            return out if isinstance(out, dict) else {}
+        except Exception:
+            return {}
+    if isinstance(structure, dict):
+        return dict(structure)
+    try:
+        out = dict(structure)
+        return out if isinstance(out, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sanitize_flow_structure_for_trace(structure: Any) -> dict[str, Any]:
+    """Drop heavy per-node fields before serializing to a span attribute."""
+    data = _flow_structure_to_plain(structure)
+    if not data:
+        return {}
+
+    nodes = data.get("nodes")
+    if isinstance(nodes, dict):
+        slim_nodes: dict[str, Any] = {}
+        for key, meta in nodes.items():
+            if isinstance(meta, dict):
+                slim = {k: v for k, v in meta.items() if k not in _HEAVY_FLOW_NODE_KEYS}
+                sig = slim.get("method_signature")
+                if isinstance(sig, str) and len(sig) > _MAX_METHOD_SIGNATURE_CHARS:
+                    slim["method_signature"] = sig[:_MAX_METHOD_SIGNATURE_CHARS] + "..."
+                slim_nodes[key] = slim
+            else:
+                slim_nodes[key] = meta
+        data = {**data, "nodes": slim_nodes}
+    return data
+
+
+def _try_flow_structure_json(source: Any) -> Optional[str]:
+    """Return truncated JSON for ``flow.structure``, or ``None`` if unavailable."""
+    try:
+        from crewai.flow.visualization import build_flow_structure
+    except ImportError:
+        return None
+    try:
+        built = build_flow_structure(source)
+    except Exception:
+        logger.debug("build_flow_structure failed", exc_info=True)
+        return None
+    slim = _sanitize_flow_structure_for_trace(built)
+    if not slim:
+        return None
+    try:
+        raw = safe_json_dumps(slim)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    return truncate_str(raw, MAX_TEXT_LENGTH)
+
+
 def _build_flow_start_attributes(
     source: Any, event: Any, flow_id: str
 ) -> dict[str, Any]:
@@ -752,6 +860,10 @@ def _build_flow_start_attributes(
     state = safe_getattr(event, "state") or safe_getattr(source, "state")
     if state is not None:
         attrs[ATTR_FLOW_STATE] = truncate_str(safe_json_dumps(state), MAX_TEXT_LENGTH)
+
+    structure_json = _try_flow_structure_json(source)
+    if structure_json:
+        attrs[ATTR_FLOW_STRUCTURE] = structure_json
 
     return attrs
 
@@ -825,16 +937,3 @@ def _build_method_start_attributes(
         )
 
     return attrs
-
-
-def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
-    """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""
-    if not attrs or span is None:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_set_span_attributes failed: %s", exc)

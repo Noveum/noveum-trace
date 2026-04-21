@@ -186,6 +186,10 @@ class _CrewAIObserverState:
     #: (updated under ``_lock`` with every append / pop; avoids O(n) re-sums).
     _a2a_streaming_lengths: dict[tuple[str, str], int]
 
+    #: ``f"{context_id}::{artifact_id}"`` → accumulated ``image/*`` artifact bytes
+    #: until ``last_chunk`` is true (A2A chunked artifacts).
+    _a2a_artifact_image_buffers: dict[str, bytearray]
+
     # =========================================================================
     # Token tracking (monkey-patch buffer)
     # =========================================================================

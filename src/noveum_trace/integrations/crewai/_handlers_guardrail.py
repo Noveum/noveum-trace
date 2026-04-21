@@ -41,9 +41,6 @@ from typing import Any, Optional
 
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_AGENT_ROLE,
-    ATTR_ERROR_MESSAGE,
-    ATTR_ERROR_STACKTRACE,
-    ATTR_ERROR_TYPE,
     ATTR_LLM_CALL_ID,
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
@@ -52,8 +49,13 @@ from noveum_trace.integrations.crewai.crewai_constants import (
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
-    duration_ms_monotonic,
+    finish_span_common,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
     truncate_str,
@@ -274,42 +276,16 @@ class _GuardrailHandlersMixin(_CrewAIObserverMixinBase):
             )
             return
 
-        attrs: dict[str, Any] = {"guardrail.status": status}
-
-        if start_t is not None:
-            attrs["guardrail.duration_ms"] = duration_ms_monotonic(start_t)
-
-        if error is not None:
-            attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
-            tb = getattr(error, "__traceback__", None)
-            if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
-
-        if extra_attrs:
-            attrs.update(extra_attrs)
-
-        try:
-            if hasattr(span, "set_attributes"):
-                span.set_attributes(attrs)
-            elif hasattr(span, "attributes"):
-                span.attributes.update(attrs)
-
-            if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
-                try:
-                    from noveum_trace.core.span import SpanStatus
-
-                    span.set_status(SpanStatus.ERROR, str(error) if error else "")
-                except Exception:
-                    pass
-
-            if hasattr(span, "finish"):
-                span.finish()
-        except Exception:
-            logger.debug(
-                "_finish_guardrail_span span.finish() error:\n%s",
-                traceback.format_exc(),
-            )
+        attrs = finish_span_common(
+            span,
+            start_t=start_t,
+            status=status,
+            status_attr="guardrail.status",
+            duration_attr="guardrail.duration_ms",
+            error=error,
+            extra_attrs=extra_attrs,
+            log_label="_finish_guardrail_span",
+        )
 
         logger.debug(
             "Guardrail span closed: guardrail_id=%s status=%s validation=%s",
@@ -355,16 +331,6 @@ def _resolve_call_id(event: Any) -> Optional[str]:
         safe_getattr(event, "call_id")
         or safe_getattr(event, "llm_call_id")
         or safe_getattr(event, "run_id")
-    )
-    return str(raw) if raw is not None else None
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id for this guardrail event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
     )
     return str(raw) if raw is not None else None
 

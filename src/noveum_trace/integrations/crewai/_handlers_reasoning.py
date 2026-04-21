@@ -23,11 +23,13 @@ Reasoning events:
 Step/observation events:
   - ``on_step_observation_started``   → open ``crewai.step_observation`` child span;
                                          capture step index, action name, action input
-  - ``on_step_observation_completed`` → close as SUCCESS; write observation text
+  - ``on_step_observation_completed`` → close as SUCCESS; write observation text,
+                                         optional ``step.suggested_refinements`` (pre-refinement hints)
   - ``on_step_observation_failed``    → close as ERROR; write error
 
 Mid-reasoning annotations (no span lifecycle — annotate open reasoning span):
-  - ``on_plan_refinement``            → write refined_steps list, refinement_count
+  - ``on_plan_refinement``            → write refined step strings, counts (see handler docstring;
+                                         CrewAI has no ``before`` plan snapshot on this event)
   - ``on_plan_replan_triggered``      → write replan reason, replan_count,
                                          completed_steps summary
   - ``on_goal_achieved_early``        → write steps_remaining, early_exit flag
@@ -63,8 +65,14 @@ from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBa
 from noveum_trace.integrations.crewai.crewai_utils import (
     duration_ms_monotonic,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -274,9 +282,13 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
 
         Attributes written
         ------------------
-        - ``step.observation``     — observation text returned by the tool / env
-        - ``step.status``          — ``"success"``
-        - ``step.duration_ms``     — wall-clock duration
+        - ``step.observation``              — observation text returned by the tool / env
+        - ``step.suggested_refinements``    — JSON list from ``StepObservationCompletedEvent`` when
+                                              the planner suggests wording changes before a lightweight
+                                              ``PlanRefinementEvent`` (closest public signal to a
+                                              "before" refinement hint; not a full plan snapshot)
+        - ``step.status``                   — ``"success"``
+        - ``step.duration_ms``              — wall-clock duration
         """
         if not self._is_active():
             return
@@ -298,6 +310,16 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                     else safe_json_dumps(observation)
                 )
                 extra["step.observation"] = truncate_str(raw, MAX_TEXT_LENGTH)
+
+            suggested = safe_getattr(event, "suggested_refinements")
+            if isinstance(suggested, (list, tuple)) and suggested:
+                extra["step.suggested_refinements"] = truncate_str(
+                    safe_json_dumps(list(suggested)), MAX_TEXT_LENGTH
+                )
+            elif isinstance(suggested, str) and suggested.strip():
+                extra["step.suggested_refinements"] = truncate_str(
+                    suggested, MAX_TEXT_LENGTH
+                )
 
             self._finish_observation_span(obs_id, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
@@ -331,11 +353,20 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         Plan refinement happens when the agent revises its next steps without
         triggering a full replan (e.g. after a partial tool result).
 
+        CrewAI's ``PlanRefinementEvent`` (see ``crewai.events.types.observation_events``)
+        exposes ``refinements: list[str]`` (updated step descriptions) and
+        ``refined_step_count: int``. It does **not** include a separate "plan before"
+        payload. For hints that precede refinement, see ``step.suggested_refinements`` on
+        the preceding ``StepObservationCompletedEvent`` span when the runtime emits it.
+
         Attributes written
         ------------------
-        - ``reasoning.refined_steps``      — JSON list of updated planned steps
-        - ``reasoning.refinement_count``   — cumulative refinements in this attempt
-        - ``reasoning.refinement_reason``  — why the plan was refined (if provided)
+        - ``reasoning.refined_steps``        — JSON list: ``event.refinements`` when present,
+                                               else ``refined_steps`` / ``steps`` / ``plan``
+        - ``reasoning.refined_step_count``   — from ``PlanRefinementEvent.refined_step_count``,
+                                               or length of ``refinements`` when count is absent
+        - ``reasoning.refinement_count``     — only when ``event.refinement_count`` is set (legacy / custom)
+        - ``reasoning.refinement_reason``    — from ``reason`` / ``message`` when provided
         """
         if not self._is_active():
             return
@@ -352,11 +383,16 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
 
             attrs: dict[str, Any] = {}
 
-            refined_steps = _first_non_none(
-                safe_getattr(event, "refined_steps"),
-                safe_getattr(event, "steps"),
-                safe_getattr(event, "plan"),
-            )
+            refinements_list = safe_getattr(event, "refinements")
+            refined_steps = None
+            if isinstance(refinements_list, (list, tuple)) and refinements_list:
+                refined_steps = list(refinements_list)
+            if refined_steps is None:
+                refined_steps = _first_non_none(
+                    safe_getattr(event, "refined_steps"),
+                    safe_getattr(event, "steps"),
+                    safe_getattr(event, "plan"),
+                )
             if refined_steps is not None:
                 if isinstance(refined_steps, (list, tuple)):
                     attrs["reasoning.refined_steps"] = truncate_str(
@@ -367,13 +403,19 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                         str(refined_steps), MAX_TEXT_LENGTH
                     )
 
-            refinements = _first_non_none(
-                safe_getattr(event, "refinements"),
-                safe_getattr(event, "refinement_count"),
-            )
-            if refinements is not None:
+            rsc = safe_getattr(event, "refined_step_count")
+            if rsc is not None:
                 try:
-                    attrs["reasoning.refinement_count"] = int(refinements)
+                    attrs["reasoning.refined_step_count"] = int(rsc)
+                except (TypeError, ValueError):
+                    pass
+            elif isinstance(refinements_list, (list, tuple)):
+                attrs["reasoning.refined_step_count"] = len(refinements_list)
+
+            legacy_count = safe_getattr(event, "refinement_count")
+            if legacy_count is not None:
+                try:
+                    attrs["reasoning.refinement_count"] = int(legacy_count)
                 except (TypeError, ValueError):
                     pass
 
@@ -385,7 +427,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                     str(reason), MAX_DESCRIPTION_LENGTH
                 )
 
-            _set_span_attributes(span, attrs)
+            set_span_attributes(span, attrs)
             logger.debug("Plan refinement annotated: reasoning_id=%s", reasoning_id)
         except Exception:
             logger.debug("on_plan_refinement error:\n%s", traceback.format_exc())
@@ -453,7 +495,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                         str(completed), MAX_TEXT_LENGTH
                     )
 
-            _set_span_attributes(span, attrs)
+            set_span_attributes(span, attrs)
             logger.debug(
                 "Replan triggered annotation: reasoning_id=%s count=%s",
                 reasoning_id,
@@ -522,7 +564,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
                     str(reason), MAX_DESCRIPTION_LENGTH
                 )
 
-            _set_span_attributes(span, attrs)
+            set_span_attributes(span, attrs)
             logger.debug(
                 "Goal achieved early: reasoning_id=%s steps_remaining=%s",
                 reasoning_id,
@@ -639,7 +681,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         if extra_attrs:
             attrs.update(extra_attrs)
 
-        _set_span_attributes(span, attrs)
+        set_span_attributes(span, attrs)
 
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
@@ -690,7 +732,7 @@ class _ReasoningHandlersMixin(_CrewAIObserverMixinBase):
         if extra_attrs:
             attrs.update(extra_attrs)
 
-        _set_span_attributes(span, attrs)
+        set_span_attributes(span, attrs)
 
         if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
             try:
@@ -751,16 +793,6 @@ def _resolve_obs_id(event: Any, source: Any) -> str:
         safe_getattr(event, "id"),
     )
     return str(raw) if raw is not None else str(id(event))
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id for this reasoning event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
 
 
 def _build_reasoning_start_attributes(
@@ -922,16 +954,3 @@ def _build_observation_start_attributes(
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
     return attrs
-
-
-def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
-    """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""
-    if not attrs or span is None:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_set_span_attributes failed: %s", exc)

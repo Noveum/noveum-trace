@@ -51,6 +51,11 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     duration_ms_monotonic,
     extract_tool_result,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
     truncate_str,
@@ -437,16 +442,6 @@ def _resolve_finished_run_id(event: Any, source: Any) -> str:
 def _resolve_run_id(event: Any, source: Any) -> str:
     """Legacy alias — used only by error-annotation helpers that don't open spans."""
     return _resolve_finished_run_id(event, source)
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id associated with this tool event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
 
 
 def _build_tool_start_attributes(

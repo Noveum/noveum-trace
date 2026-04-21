@@ -22,7 +22,8 @@ Events handled:
 
   Tool execution:
   - ``on_mcp_tool_execution_started``   → open ``crewai.mcp`` span;
-                                           capture server_name, tool_name, arguments
+                                           capture server_name, tool_name, arguments,
+                                           ``mcp.available_tools.*`` when tools are present
   - ``on_mcp_tool_execution_completed`` → close as SUCCESS; write result, duration_ms
   - ``on_mcp_tool_execution_failed``    → close as ERROR; write error_type, message
 
@@ -43,9 +44,7 @@ from typing import Any, Optional
 
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_AGENT_ROLE,
-    ATTR_ERROR_MESSAGE,
     ATTR_ERROR_STACKTRACE,
-    ATTR_ERROR_TYPE,
     ATTR_MCP_DURATION_MS,
     ATTR_MCP_INPUT,
     ATTR_MCP_KEY,
@@ -62,10 +61,17 @@ from noveum_trace.integrations.crewai.crewai_constants import (
 )
 from noveum_trace.integrations.crewai.crewai_state import _CrewAIObserverMixinBase
 from noveum_trace.integrations.crewai.crewai_utils import (
-    duration_ms_monotonic,
+    finish_span_common,
+    merge_available_tools_attributes,
     monotonic_now,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
+    resolve_agent_id as _resolve_agent_id,
+)
+from noveum_trace.integrations.crewai.crewai_utils import (
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -146,13 +152,13 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_mcp_connection_completed(self, source: Any, event: Any) -> None:
         """
-        Close the MCP connection span as SUCCESS.
+        Close the MCP connection span as OK.
 
         Attributes written
         ------------------
         - ``mcp.available_tools``  — JSON list of tool names exposed by the server
         - ``mcp.tool_count``       — number of tools available after connection
-        - ``mcp.status``           — ``"success"``
+        - ``mcp.status``           — ``"ok"``
         - ``mcp.duration_ms``      — wall-clock duration of the connection handshake
         """
         if not self._is_active() or not self.capture_mcp:
@@ -170,8 +176,12 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
                     tool_names = [str(safe_getattr(t, "name") or t) for t in tool_list]
                     extra["mcp.available_tools"] = safe_json_dumps(tool_names)
                     extra["mcp.tool_count"] = len(tool_names)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "on_mcp_connection_completed: failed to serialize tools for mcp_key=%s: %s",
+                        mcp_key,
+                        exc,
+                    )
 
             self._finish_mcp_span(mcp_key, ATTR_STATUS_SUCCESS, None, extra)
         except Exception:
@@ -227,6 +237,8 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         - ``mcp.tool_name``     — name of the tool being invoked
         - ``mcp.input``         — JSON of arguments passed to the tool
         - ``agent.role``        — role of the invoking agent (correlation)
+        - ``mcp.available_tools.*`` — count, names, descriptions, schemas when
+          ``tools`` / ``available_tools`` are present on *event* or *source*
         """
         if not self._is_active() or not self.capture_mcp:
             return
@@ -268,13 +280,13 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
 
     def on_mcp_tool_execution_completed(self, source: Any, event: Any) -> None:
         """
-        Close the MCP tool execution span as SUCCESS.
+        Close the MCP tool execution span as OK.
 
         Attributes written
         ------------------
         - ``mcp.output``       — tool result text / JSON (≤ MAX_TOOL_OUTPUT_LENGTH)
         - ``mcp.result_type``  — type name of the result object (for schema tracking)
-        - ``mcp.status``       — ``"success"``
+        - ``mcp.status``       — ``"ok"``
         - ``mcp.duration_ms``  — wall-clock duration of the tool call
         """
         if not self._is_active() or not self.capture_mcp:
@@ -396,7 +408,7 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
                     safe_json_dumps(_redact_config(config)), 512
                 )
 
-            _set_span_attributes(span, err_attrs)
+            set_span_attributes(span, err_attrs)
             logger.debug(
                 "mcp.config_fetch_failed annotated on span: agent_id=%s server=%s",
                 agent_id,
@@ -414,16 +426,18 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
     def _get_agent_or_crew_span(
         self, agent_id: Optional[str], crew_id: Optional[str] = None
     ) -> Optional[Any]:
-        """Return the best available parent span: agent → specific crew → any crew."""
+        """Return the best available parent span: agent → specific crew."""
         with self._lock:
             if agent_id and agent_id in self._agent_spans:
                 return self._agent_spans[agent_id]
             if crew_id and crew_id in self._crew_spans:
                 entry = self._crew_spans[crew_id]
                 return entry.get("span") if isinstance(entry, dict) else None
-            # Fall back to any open crew span
-            for entry in self._crew_spans.values():
-                return entry.get("span")
+            logger.debug(
+                "_get_agent_or_crew_span: no matching parent (agent_id=%s crew_id=%s)",
+                agent_id,
+                crew_id,
+            )
         return None
 
     def _finish_mcp_span(
@@ -444,42 +458,16 @@ class _MCPHandlersMixin(_CrewAIObserverMixinBase):
         span = entry["span"]
         start_t = entry.get("start_t")
 
-        attrs: dict[str, Any] = {ATTR_MCP_STATUS: status}
-
-        if start_t is not None:
-            attrs[ATTR_MCP_DURATION_MS] = duration_ms_monotonic(start_t)
-
-        if error is not None:
-            attrs[ATTR_ERROR_TYPE] = type(error).__name__
-            attrs[ATTR_ERROR_MESSAGE] = str(error)
-            tb = getattr(error, "__traceback__", None)
-            if tb is not None:
-                attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
-
-        if extra_attrs:
-            attrs.update(extra_attrs)
-
-        try:
-            if hasattr(span, "set_attributes"):
-                span.set_attributes(attrs)
-            elif hasattr(span, "attributes"):
-                span.attributes.update(attrs)
-
-            if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
-                try:
-                    from noveum_trace.core.span import SpanStatus
-
-                    span.set_status(SpanStatus.ERROR, str(error) if error else "")
-                except Exception:
-                    pass
-
-            if hasattr(span, "finish"):
-                span.finish()
-        except Exception:
-            logger.debug(
-                "_finish_mcp_span span.finish() error:\n%s",
-                traceback.format_exc(),
-            )
+        finish_span_common(
+            span,
+            start_t=start_t,
+            status=status,
+            status_attr=ATTR_MCP_STATUS,
+            duration_attr=ATTR_MCP_DURATION_MS,
+            error=error,
+            extra_attrs=extra_attrs,
+            log_label="_finish_mcp_span",
+        )
 
         logger.debug("MCP span closed: mcp_key=%s status=%s", mcp_key, status)
 
@@ -537,16 +525,6 @@ def _resolve_mcp_key(event: Any, source: Any) -> str:
         or safe_getattr(event, "run_id")
         or id(event)
     )
-
-
-def _resolve_agent_id(source: Any, event: Any) -> Optional[str]:
-    """Return the agent_id for this MCP event, or ``None``."""
-    raw = (
-        safe_getattr(event, "agent_id")
-        or safe_getattr(source, "id")
-        or safe_getattr(source, "agent_id")
-    )
-    return str(raw) if raw is not None else None
 
 
 def _populate_connection_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None:
@@ -618,15 +596,11 @@ def _populate_tool_attrs(attrs: dict[str, Any], source: Any, event: Any) -> None
     if agent_role:
         attrs[ATTR_AGENT_ROLE] = truncate_str(str(agent_role), 256)
 
-
-def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
-    """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""
-    if not attrs or span is None:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_set_span_attributes failed: %s", exc)
+    tools = (
+        safe_getattr(event, "tools")
+        or safe_getattr(event, "available_tools")
+        or safe_getattr(source, "tools")
+        or safe_getattr(source, "available_tools")
+    )
+    if tools is not None:
+        merge_available_tools_attributes(attrs, tools, "mcp")

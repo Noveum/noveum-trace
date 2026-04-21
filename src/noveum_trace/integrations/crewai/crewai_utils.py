@@ -4,7 +4,8 @@ Utility functions for CrewAI integration.
 Safe serialization helpers, provider-agnostic
 token extraction from LLM response objects, system-prompt extraction from a messages
 list, tool-schema serialisation, duration helpers, a calculate_llm_cost wrapper,
-and safe_getattr.
+:func:`resolve_agent_id`, :func:`set_span_attributes`, :func:`finish_span_common`
+for handler mixins, and safe_getattr.
 
 All helpers are designed to be zero-impact — every public function absorbs
 exceptions internally and returns a sensible default so that a crashing utility
@@ -16,7 +17,15 @@ from __future__ import annotations
 import json
 import logging
 import time
+import traceback
 from typing import Any, Optional
+
+from noveum_trace.integrations.crewai.crewai_constants import (
+    ATTR_ERROR_MESSAGE,
+    ATTR_ERROR_STACKTRACE,
+    ATTR_ERROR_TYPE,
+    ATTR_STATUS_ERROR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,12 +179,10 @@ def safe_json_dumps(value: Any, *, fallback: str = "{}") -> str:
 
 
 def truncate_str(text: str, max_len: int = 8192) -> str:
-    """Truncate a string to *max_len* characters, appending ``…`` if clipped."""
+    """Return full string content"""
     if not isinstance(text, str):
         text = str(text)
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +499,8 @@ def merge_available_tools_attributes(
     """
     Populate ``{prefix}.available_tools.count|names|descriptions|schemas`` on *attrs*.
 
-    *prefix* is typically ``\"agent\"`` or ``\"llm\"`` so keys match other integrations
-    (e.g. LangChain ``llm.available_tools.names``).
+    *prefix* is typically ``\"agent\"``, ``\"llm\"``, or ``\"mcp\"`` so keys match
+    other integrations (e.g. LangChain ``llm.available_tools.names``).
     """
     serialised = serialise_tools_list(tools)
     if not serialised:
@@ -609,6 +616,108 @@ def duration_ms_monotonic(start: float, end: Optional[float] = None) -> float:
         end = time.monotonic()
     delta = max(0.0, end - start) * 1000.0
     return round(delta, 3)
+
+
+# ---------------------------------------------------------------------------
+# Span helpers (shared across CrewAI handler mixins)
+# ---------------------------------------------------------------------------
+
+
+def resolve_agent_id(source: Any, event: Any) -> Optional[str]:
+    """
+    Return ``event.agent_id`` or ``source.id`` / ``source.agent_id``, else ``None``.
+
+    Also checks ``event.delegating_agent_id`` (A2A) after ``event.agent_id``.
+
+    Contract matches the duplicated module-level helpers on memory, knowledge,
+    MCP, guardrail, tool, reasoning, LLM, and A2A handler modules (not the
+    :func:`noveum_trace.integrations.crewai._handlers_agent._resolve_agent_id`
+    variant, which falls back to ``id(source)``).
+    """
+    raw = (
+        safe_getattr(event, "agent_id")
+        or safe_getattr(event, "delegating_agent_id")
+        or safe_getattr(source, "id")
+        or safe_getattr(source, "agent_id")
+    )
+    return str(raw) if raw is not None else None
+
+
+def set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
+    """
+    Write *attrs* onto *span*.
+
+    Tries ``span.set_attributes`` first; on failure or absence, updates
+    ``span.attributes`` when it supports ``.update`` (covers finished spans).
+    """
+    if not attrs or span is None:
+        return
+    try:
+        if hasattr(span, "set_attributes"):
+            span.set_attributes(attrs)
+            return
+    except Exception:
+        pass
+    try:
+        attr_store = getattr(span, "attributes", None)
+        if attr_store is not None and hasattr(attr_store, "update"):
+            attr_store.update(attrs)
+    except Exception as exc:
+        logger.debug("set_span_attributes failed: %s", exc)
+
+
+def finish_span_common(
+    span: Any,
+    *,
+    start_t: Any,
+    status: str,
+    status_attr: str,
+    duration_attr: str,
+    error: Any,
+    extra_attrs: Optional[dict[str, Any]] = None,
+    log_label: str = "finish_span_common",
+) -> dict[str, Any]:
+    """
+    Build terminal attributes, write them, optionally mark span ERROR, then finish.
+
+    Returns the merged attribute dict for callers that need to log derived keys.
+    """
+    attrs: dict[str, Any] = {status_attr: status}
+
+    if start_t is not None:
+        attrs[duration_attr] = duration_ms_monotonic(start_t)
+
+    if error is not None:
+        attrs[ATTR_ERROR_TYPE] = type(error).__name__
+        attrs[ATTR_ERROR_MESSAGE] = str(error)
+        tb = getattr(error, "__traceback__", None)
+        if tb is not None:
+            attrs[ATTR_ERROR_STACKTRACE] = "".join(traceback.format_tb(tb))
+
+    if extra_attrs:
+        attrs.update(extra_attrs)
+
+    try:
+        set_span_attributes(span, attrs)
+
+        if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
+            try:
+                from noveum_trace.core.span import SpanStatus
+
+                span.set_status(SpanStatus.ERROR, str(error) if error else "")
+            except Exception:
+                pass
+
+        if hasattr(span, "finish"):
+            span.finish()
+    except Exception:
+        logger.debug(
+            "%s span.finish error:\n%s",
+            log_label,
+            traceback.format_exc(),
+        )
+
+    return attrs
 
 
 # ---------------------------------------------------------------------------

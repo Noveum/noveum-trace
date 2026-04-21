@@ -58,7 +58,7 @@ langchain = [
 ]
 livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 pipecat = ["pipecat-ai>=0.0.50"]
-crewai = ["crewai>=0.86.0"]
+crewai = ["crewai>=0.177.0"]
 
 # Development dependencies
 dev = [
@@ -91,6 +91,7 @@ dev = [
     "openai>=1.0.0",
     "anthropic>=0.3.0",
     "langchain-core>=0.1.0",
+    "crewai>=0.177.0",
 
     # Development utilities
     "pre-commit>=3.0.0",
@@ -104,6 +105,7 @@ test = [
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
     "pytest-asyncio>=0.21.0",
+    "crewai>=0.177.0",
 ]
 
 # Linting dependencies

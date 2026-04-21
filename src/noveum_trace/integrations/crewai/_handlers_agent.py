@@ -62,6 +62,7 @@ from noveum_trace.integrations.crewai.crewai_utils import (
     monotonic_now,
     safe_getattr,
     safe_json_dumps,
+    set_span_attributes,
     truncate_str,
 )
 
@@ -299,7 +300,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
                     except Exception:
                         pass
 
-            _set_span_attributes(span, eval_attrs)
+            set_span_attributes(span, eval_attrs)
         except Exception:
             logger.debug(
                 "on_agent_evaluation_started error:\n%s", traceback.format_exc()
@@ -334,7 +335,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
             eval_attrs = _extract_agent_evaluation_attributes(
                 event, capture_outputs=self.capture_outputs
             )
-            _set_span_attributes(span, eval_attrs)
+            set_span_attributes(span, eval_attrs)
         except Exception:
             logger.debug(
                 "on_agent_evaluation_completed error:\n%s", traceback.format_exc()
@@ -352,7 +353,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
 
             error = safe_getattr(event, "error") or safe_getattr(event, "exception")
             if error:
-                _set_span_attributes(
+                set_span_attributes(
                     span,
                     {
                         "agent.evaluation.error": str(error),
@@ -541,7 +542,7 @@ class _AgentHandlersMixin(_CrewAIObserverMixinBase):
             attrs.update(extra_attrs)
 
         try:
-            _set_span_attributes(span, attrs)
+            set_span_attributes(span, attrs)
 
             if status == ATTR_STATUS_ERROR and hasattr(span, "set_status"):
                 try:
@@ -807,16 +808,3 @@ def _extract_output_text(output: Any) -> Optional[str]:
         return str(output)
     except Exception:
         return None
-
-
-def _set_span_attributes(span: Any, attrs: dict[str, Any]) -> None:
-    """Write *attrs* to *span* via ``set_attributes`` or direct dict update."""
-    if not attrs:
-        return
-    try:
-        if hasattr(span, "set_attributes"):
-            span.set_attributes(attrs)
-        elif hasattr(span, "attributes"):
-            span.attributes.update(attrs)
-    except Exception as exc:
-        logger.debug("_set_span_attributes failed: %s", exc)

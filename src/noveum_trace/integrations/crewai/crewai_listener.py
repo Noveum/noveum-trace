@@ -223,6 +223,7 @@ class NoveumCrewAIListener(
         self._a2a_stream_buffers: dict[tuple[str, str], list[Any]] = {}
         self._a2a_streaming_chunks: dict[tuple[str, str], list[str]] = {}
         self._a2a_streaming_lengths: dict[tuple[str, str], int] = {}
+        self._a2a_artifact_image_buffers: dict[str, bytearray] = {}
 
         # =====================================================================
         # Pending metadata stash
@@ -408,6 +409,7 @@ class NoveumCrewAIListener(
             self._a2a_stream_buffers.clear()
             self._a2a_streaming_chunks.clear()
             self._a2a_streaming_lengths.clear()
+            self._a2a_artifact_image_buffers.clear()
             self._token_buffer.clear()
             self._llm_usage_by_call_id.clear()
             self._pending_llm_metadata.clear()
@@ -624,6 +626,32 @@ class NoveumCrewAIListener(
 
         return None
 
+    def _lookup_trace_by_id(self, client: Any, trace_id: str) -> Any:
+        """
+        Best-effort lookup of an active trace by id without hard-coding internals.
+
+        Returns ``None`` when the client does not expose an active-trace registry.
+        """
+        traces_map = getattr(client, "_active_traces", None)
+        if traces_map is None:
+            logger.debug(
+                "_lookup_trace_by_id: client has no active trace registry for trace_id=%s",
+                trace_id,
+            )
+            return None
+
+        lock = getattr(client, "_lock", None)
+        try:
+            if lock is not None:
+                with lock:
+                    return traces_map.get(trace_id)
+            return traces_map.get(trace_id)
+        except Exception as exc:
+            logger.debug(
+                "_lookup_trace_by_id failed for trace_id=%s: %s", trace_id, exc
+            )
+            return None
+
     def _create_child_span(
         self,
         span_name: str,
@@ -659,12 +687,7 @@ class NoveumCrewAIListener(
             parent_span_id = getattr(parent_span, "span_id", None)
             trace_id = getattr(parent_span, "trace_id", None)
             if trace_id:
-                # Look in client's registry (no new internal API needed)
-                try:
-                    with client._lock:
-                        trace = client._active_traces.get(trace_id)
-                except Exception:
-                    pass
+                trace = self._lookup_trace_by_id(client, trace_id)
 
         if trace is None:
             # --- Resolve trace by crew_id hint or task→crew reverse map ------
@@ -1117,6 +1140,13 @@ class NoveumCrewAIListener(
             except ImportError:
                 pass
 
+            try:
+                from crewai.events.types.flow_events import FlowPlotEvent
+
+                _sub(FlowPlotEvent, self.on_flow_plot)
+            except ImportError:
+                pass
+
         # ── Reasoning ─────────────────────────────────────────────────────
         # AgentReasoning* is in crewai.events.types.reasoning_events;
         # Observation/Planning events are in crewai.events.types.observation_events.
@@ -1225,9 +1255,8 @@ class NoveumCrewAIListener(
                 pass
 
         # ── A2A ───────────────────────────────────────────────────────────
-        # Each import is isolated: some classes (e.g. A2ADelegationFailedEvent,
-        # A2AConversationFailedEvent, A2AMessageReceivedEvent) do not exist in
-        # CrewAI 1.x and must not be bundled with events that do.
+        # Each import is isolated: some classes do not exist in older CrewAI
+        # versions and must not be bundled with events that do.
         if self.capture_a2a:
             try:
                 from crewai.events.types.a2a_events import (
@@ -1259,9 +1288,30 @@ class NoveumCrewAIListener(
                 pass
 
             try:
+                from crewai.events.types.a2a_events import A2AConversationFailedEvent
+
+                _sub(A2AConversationFailedEvent, self.on_a2a_conversation_failed)
+            except ImportError:
+                pass
+
+            try:
                 from crewai.events.types.a2a_events import A2AMessageSentEvent
 
                 _sub(A2AMessageSentEvent, self.on_a2a_message_sent)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AMessageReceivedEvent
+
+                _sub(A2AMessageReceivedEvent, self.on_a2a_message_received)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AResponseReceivedEvent
+
+                _sub(A2AResponseReceivedEvent, self.on_a2a_response_received)
             except ImportError:
                 pass
 
@@ -1273,6 +1323,13 @@ class NoveumCrewAIListener(
 
                 _sub(A2AStreamingStartedEvent, self.on_a2a_streaming_started)
                 _sub(A2AStreamingChunkEvent, self.on_a2a_streaming_chunk)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AStreamingCompletedEvent
+
+                _sub(A2AStreamingCompletedEvent, self.on_a2a_streaming_completed)
             except ImportError:
                 pass
 
@@ -1291,6 +1348,69 @@ class NoveumCrewAIListener(
                 from crewai.events.types.a2a_events import A2AArtifactReceivedEvent
 
                 _sub(A2AArtifactReceivedEvent, self.on_a2a_artifact_received)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AServerTaskStartedEvent
+
+                _sub(A2AServerTaskStartedEvent, self.on_a2a_server_task_started)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AServerTaskCompletedEvent
+
+                _sub(A2AServerTaskCompletedEvent, self.on_a2a_server_task_completed)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AServerTaskFailedEvent
+
+                _sub(A2AServerTaskFailedEvent, self.on_a2a_server_task_failed)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AServerTaskCanceledEvent
+
+                _sub(A2AServerTaskCanceledEvent, self.on_a2a_server_task_canceled)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AContextCompletedEvent
+
+                _sub(A2AContextCompletedEvent, self.on_a2a_context_lifecycle_event)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AContextCreatedEvent
+
+                _sub(A2AContextCreatedEvent, self.on_a2a_context_lifecycle_event)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AContextExpiredEvent
+
+                _sub(A2AContextExpiredEvent, self.on_a2a_context_lifecycle_event)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AContextIdleEvent
+
+                _sub(A2AContextIdleEvent, self.on_a2a_context_lifecycle_event)
+            except ImportError:
+                pass
+
+            try:
+                from crewai.events.types.a2a_events import A2AContextPrunedEvent
+
+                _sub(A2AContextPrunedEvent, self.on_a2a_context_lifecycle_event)
             except ImportError:
                 pass
 
