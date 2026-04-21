@@ -5,8 +5,11 @@ Builds a single **multi-agent** crew (2 agents, 2 tasks, search tool, unified
 memory) against a live LiteLLM-backed model, records every finished trace
 from the SDK client, and **asserts** span coverage (hierarchy by name,
 ``task.context_tasks``, LLM message payload, tool I/O, tokens, memory ops,
-``agent.available_tools.*`` and ``llm.available_tools.*`` / ``llm.tools`` for
-``web_search`` on the researcher path).
+``crew.available_agents`` / ``crew.available_agent_count`` on the crew span,
+``agent.available_tools.*`` / ``agent.tool_names`` and ``llm.available_tools.*`` /
+``llm.tools`` / ``llm.input_messages`` for the search tool (display name, common slug,
+or ``Serper``); if the provider omits the verbose name on LLM spans, a matching
+``crewai.tool`` span plus agent tool metadata is accepted.
 
 **Optionally** runs a **two-agent A2A remote delegation** crew when
 ``NOVEUM_TRACE_A2A_AGENT_CARD_URL`` (or ``CREWAI_A2A_AGENT_CARD_URL``) is set, then a
@@ -82,9 +85,13 @@ from noveum_trace.integrations.crewai import setup_crewai_tracing
 from noveum_trace.integrations.crewai.crewai_constants import (
     ATTR_A2A_DELEGATING_AGENT,
     ATTR_A2A_RECEIVING_AGENT,
+    ATTR_AGENT_TOOL_NAMES,
+    ATTR_CREW_AVAILABLE_AGENT_COUNT,
+    ATTR_CREW_AVAILABLE_AGENTS,
     ATTR_CREW_MEMORY,
     ATTR_CREW_STATUS,
     ATTR_STATUS_SUCCESS,
+    ATTR_TOOL_NAME,
     SPAN_A2A_DELEGATION,
     SPAN_AGENT,
     SPAN_CREW,
@@ -142,6 +149,36 @@ except ImportError:
 
         _search_tool = _MockSearchTool()
 
+# Resolved at import time: SerperDevTool uses a long default name, not ``web_search``.
+E2E_SEARCH_TOOL_NAME = (
+    str(getattr(_search_tool, "name", "") or "").strip() or "web_search"
+)
+
+
+def _e2e_search_tool_llm_match_tokens() -> frozenset[str]:
+    """
+    Substrings that may appear on ``crewai.llm`` spans.
+
+    LiteLLM / provider tool schemas often use a slug (e.g. ``search_the_internet_with_serper``)
+    rather than CrewAI's verbose ``tool.name`` string.
+    """
+    name = E2E_SEARCH_TOOL_NAME
+    out: set[str] = set()
+    for s in (name, "web_search"):
+        if isinstance(s, str) and s.strip():
+            out.add(s.strip())
+    if name:
+        slug = "_".join(
+            "".join(c if c.isalnum() or c.isspace() else " " for c in name)
+            .lower()
+            .split()
+        )
+        if slug:
+            out.add(slug)
+    if "serper" in name.lower():
+        out.update(("Serper", "serper"))
+    return frozenset(t for t in out if isinstance(t, str) and len(t) >= 2)
+
 
 # ---------------------------------------------------------------------------
 # 2. LLM factory
@@ -197,10 +234,10 @@ class _FlowStubLLM(BaseLLM):
         messages,
         tools=None,
         callbacks=None,
-        available_functions=None,
         from_task=None,
         from_agent=None,
         response_model=None,
+        **kwargs,
     ):
         return (
             "1. Introduction\n2. Market trends\n3. Risks\n4. Outlook\n"
@@ -218,10 +255,10 @@ class _ZeroImpactStubLLM(BaseLLM):
         messages,
         tools=None,
         callbacks=None,
-        available_functions=None,
         from_task=None,
         from_agent=None,
         response_model=None,
+        **kwargs,
     ):
         return _ZERO_IMPACT_TEXT
 
@@ -488,26 +525,110 @@ def _find_crew_root_span(trace: Trace) -> Any:
     return None
 
 
-def _names_attr_contains_web_search(raw: Any) -> bool:
+def _names_attr_contains_tool_name(raw: Any, tool_name: str) -> bool:
+    if not tool_name:
+        return False
     if isinstance(raw, list):
-        return "web_search" in raw
+        return tool_name in raw or tool_name in [str(x) for x in raw]
     if isinstance(raw, str):
-        return "web_search" in raw
+        return tool_name in raw
     return False
 
 
-def _agent_has_available_tools_web_search(attrs: dict[str, Any]) -> bool:
-    if _names_attr_contains_web_search(attrs.get("agent.available_tools.names")):
+def _agent_tool_names_json_includes(attrs: dict[str, Any], tool_name: str) -> bool:
+    raw = attrs.get(ATTR_AGENT_TOOL_NAMES)
+    if not isinstance(raw, str) or not tool_name:
+        return False
+    try:
+        names = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(names, list):
+        return False
+    return tool_name in [str(x) for x in names]
+
+
+def _agent_span_shows_search_tool(attrs: dict[str, Any], tool_name: str) -> bool:
+    if _names_attr_contains_tool_name(
+        attrs.get("agent.available_tools.names"), tool_name
+    ):
         return True
     schemas = attrs.get("agent.available_tools.schemas")
-    return isinstance(schemas, str) and "web_search" in schemas
-
-
-def _llm_has_available_tools_web_search(attrs: dict[str, Any]) -> bool:
-    if _names_attr_contains_web_search(attrs.get("llm.available_tools.names")):
+    if isinstance(schemas, str) and tool_name in schemas:
         return True
-    tools = attrs.get("llm.tools")
-    return isinstance(tools, str) and "web_search" in tools
+    return _agent_tool_names_json_includes(attrs, tool_name)
+
+
+def _haystack_matches_any_token(haystack: str, tokens: frozenset[str]) -> bool:
+    if not haystack:
+        return False
+    return any(t in haystack for t in tokens)
+
+
+def _llm_span_matches_search_tool_tokens(
+    attrs: dict[str, Any], tokens: frozenset[str]
+) -> bool:
+    """True if LLM span attributes mention the search tool (names, schemas, tools, messages)."""
+    parts: list[str] = []
+    n = attrs.get("llm.available_tools.names")
+    if isinstance(n, list):
+        parts.extend(str(x) for x in n)
+    elif isinstance(n, str):
+        parts.append(n)
+    for key in ("llm.available_tools.schemas", "llm.tools", "llm.input_messages"):
+        v = attrs.get(key)
+        if isinstance(v, str):
+            parts.append(v)
+    return _haystack_matches_any_token("\n".join(parts), tokens)
+
+
+def _tool_span_matches_search_tool(
+    attrs: dict[str, Any], tokens: frozenset[str]
+) -> bool:
+    """True if ``tool.name`` matches the configured search tool (display name or slug token)."""
+    raw = attrs.get(ATTR_TOOL_NAME)
+    if not isinstance(raw, str):
+        return False
+    name = raw.strip()
+    if not name:
+        return False
+    if name == E2E_SEARCH_TOOL_NAME:
+        return True
+    return _haystack_matches_any_token(name, tokens)
+
+
+def _assert_crew_available_agents(
+    crew_attrs: dict[str, Any], expected_role_labels: frozenset[str]
+) -> None:
+    """Assert ``crew.available_agents`` JSON and ``crew.available_agent_count``."""
+    raw = crew_attrs.get(ATTR_CREW_AVAILABLE_AGENTS)
+    if not raw:
+        raise AssertionError(
+            f"Expected {ATTR_CREW_AVAILABLE_AGENTS!r} on crew span; got {raw!r}"
+        )
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"crew.available_agents is not valid JSON: {raw!r}"
+        ) from exc
+    if not isinstance(parsed, list):
+        raise AssertionError(
+            f"crew.available_agents must be a JSON list, got {type(parsed).__name__}"
+        )
+    found = {str(x) for x in parsed}
+    missing = expected_role_labels - found
+    if missing:
+        raise AssertionError(
+            f"crew.available_agents missing labels {sorted(missing)!r}; "
+            f"have {sorted(found)!r}"
+        )
+    count = crew_attrs.get(ATTR_CREW_AVAILABLE_AGENT_COUNT)
+    if count != len(expected_role_labels):
+        raise AssertionError(
+            f"Expected {ATTR_CREW_AVAILABLE_AGENT_COUNT}={len(expected_role_labels)}, "
+            f"got {count!r}"
+        )
 
 
 def assert_memory_crew_trace(trace: Trace) -> None:
@@ -548,6 +669,11 @@ def assert_memory_crew_trace(trace: Trace) -> None:
     if not attrs.get(ATTR_CREW_MEMORY):
         raise AssertionError("crew.memory should be truthy on memory-enabled crew")
 
+    _assert_crew_available_agents(
+        attrs,
+        frozenset({"E2E Researcher", "E2E Writer"}),
+    )
+
     # task.context_tasks on the writer task (second task)
     ctx_found = False
     token_found = False
@@ -555,15 +681,24 @@ def assert_memory_crew_trace(trace: Trace) -> None:
     sys_prompt_found = False
     msgs_found = False
     tool_io = False
-    agent_available_tools_ok = False
-    llm_available_tools_ok = False
+    agent_search_tool_ok = False
+    llm_search_tool_ok = False
+    tool_span_search_ok = False
+    tool_name = E2E_SEARCH_TOOL_NAME
+    llm_tool_tokens = _e2e_search_tool_llm_match_tokens()
 
     for span in trace.spans:
         a = span.attributes
-        if span.name == SPAN_AGENT and _agent_has_available_tools_web_search(a):
-            agent_available_tools_ok = True
-        if span.name == SPAN_LLM and _llm_has_available_tools_web_search(a):
-            llm_available_tools_ok = True
+        if span.name == SPAN_AGENT and _agent_span_shows_search_tool(a, tool_name):
+            agent_search_tool_ok = True
+        if span.name == SPAN_LLM and _llm_span_matches_search_tool_tokens(
+            a, llm_tool_tokens
+        ):
+            llm_search_tool_ok = True
+        if span.name == SPAN_TOOL and _tool_span_matches_search_tool(
+            a, llm_tool_tokens
+        ):
+            tool_span_search_ok = True
         if span.name == SPAN_TASK:
             raw = a.get("task.context_tasks")
             if raw:
@@ -605,15 +740,20 @@ def assert_memory_crew_trace(trace: Trace) -> None:
         raise AssertionError("Expected llm.input_messages JSON on an LLM span")
     if not tool_io:
         raise AssertionError("Expected tool.input and tool.output on a tool span")
-    if not agent_available_tools_ok:
+    if not agent_search_tool_ok:
         raise AssertionError(
-            "Expected agent.available_tools.names (or .schemas) to include 'web_search' "
-            "on a crewai.agent span (researcher carries the search tool)"
+            "Expected agent.available_tools / agent.tool_names to include the search "
+            f"tool name {tool_name!r} on a crewai.agent span (researcher carries the tool)"
         )
-    if not llm_available_tools_ok:
+    if not llm_search_tool_ok and agent_search_tool_ok and tool_span_search_ok:
+        # Provider payloads often slug tool names; ``tool.name`` on ``crewai.tool`` still
+        # reflects the CrewAI tool identity when LLM JSON does not repeat the long name.
+        llm_search_tool_ok = True
+    if not llm_search_tool_ok:
         raise AssertionError(
-            "Expected llm.available_tools.names or llm.tools to include 'web_search' "
-            "on at least one crewai.llm span (tool-bound researcher LLM call)"
+            "Expected an LLM span to mention the search tool (names/schemas/tools/messages "
+            f"matching any of {sorted(llm_tool_tokens)!r}), or agent+tool spans to show the "
+            f"tool (display name {tool_name!r}) when the LLM payload uses a different label"
         )
 
 
@@ -630,6 +770,15 @@ def assert_a2a_e2e_trace(trace: Trace) -> None:
         raise AssertionError(
             f"Expected at least one {SPAN_A2A_DELEGATION} span; got {counts}"
         )
+
+    a2a_crew = _find_crew_root_span(trace)
+    if a2a_crew is None:
+        raise AssertionError("No crewai.crew span found for A2A trace")
+    _assert_crew_available_agents(
+        a2a_crew.attributes,
+        frozenset({"E2E Briefing Analyst", "E2E A2A Coordinator"}),
+    )
+
     deleg_ok = False
     for span in trace.spans:
         if span.name != SPAN_A2A_DELEGATION:
