@@ -5,6 +5,10 @@ This package contains integration modules that provide seamless tracing
 capabilities for popular frameworks and libraries used in LLM applications.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 __all__ = []
 
 # Conditional imports based on available dependencies
