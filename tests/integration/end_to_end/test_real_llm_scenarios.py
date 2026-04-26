@@ -263,7 +263,7 @@ LLM_MODELS = [
         marks=pytest.mark.skipif(
             not should_test_anthropic(), reason="Anthropic API key not available"
         ),
-        id="anthropic-claude3-haiku",
+        id="anthropic-claude-haiku-4-5",
     ),
 ]
 
