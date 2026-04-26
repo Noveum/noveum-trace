@@ -582,7 +582,7 @@ await observer.attach_to_task(task)   # auto-wires audio_buffer
 ```
 
 **Span hierarchy produced:**
-```
+```text
 Trace: pipecat.conversation
   Span: pipecat.turn           (one per conversation turn)
     Span: pipecat.stt

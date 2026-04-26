@@ -39,7 +39,7 @@ src/noveum_trace/
 │   ├── context.py     # Context propagation (contextvars-based)
 │   ├── span.py        # Span implementation and SpanStatus enum
 │   └── trace.py       # Trace implementation
-├── context_managers.py # trace_llm, trace_agent, trace_operation context managers
+├── context_managers.py # trace_llm_call, trace_agent_operation, trace_operation context managers
 ├── agents/            # Agent registry, AgentGraph, AgentWorkflow
 ├── streaming/         # StreamingSpanManager, streaming callbacks
 ├── threads/           # ThreadContext, multi-turn conversation tracking
