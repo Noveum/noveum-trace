@@ -258,7 +258,7 @@ LLM_MODELS = [
     ),
     pytest.param(
         "anthropic",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         get_anthropic_client,
         marks=pytest.mark.skipif(
             not should_test_anthropic(), reason="Anthropic API key not available"
