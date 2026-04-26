@@ -4,7 +4,7 @@
 [![Release](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml/badge.svg)](https://github.com/Noveum/noveum-trace/actions/workflows/release.yml)
 [![codecov](https://codecov.io/gh/Noveum/noveum-trace/branch/main/graph/badge.svg)](https://codecov.io/gh/Noveum/noveum-trace)
 [![PyPI version](https://badge.fury.io/py/noveum-trace.svg)](https://badge.fury.io/py/noveum-trace)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **Simple, intuitive tracing SDK for LLM applications and multi-agent systems.**
@@ -17,7 +17,7 @@ Noveum Trace provides an easy way to add observability to your LLM applications.
 - **🤖 Multi-Agent Support** - Built for multi-agent systems and workflows
 - **☁️ Cloud Integration** - Send traces to Noveum platform or custom endpoints
 - **🔌 Framework Agnostic** - Works with any Python LLM framework
-- **🚀 Zero Configuration** - Works out of the box with sensible defaults
+- **🚀 Minimal Setup** - Get started in minutes with sensible defaults
 - **📊 Comprehensive Tracing** - Capture function calls, LLM interactions, and agent workflows
 - **🔄 Flexible Integration** - Context managers for granular control
 
@@ -51,7 +51,7 @@ def process_document(document_id: str) -> dict:
 def call_openai(prompt: str) -> str:
     import openai
     client = openai.OpenAI()
-    
+
     with noveum_trace.trace_llm_call(model="gpt-4", provider="openai") as span:
         response = client.chat.completions.create(
             model="gpt-4",
@@ -146,6 +146,9 @@ from noveum_trace.core.client import NoveumClient
 | Context manager | `from noveum_trace import trace_context` | `import noveum_trace` then `noveum_trace.trace_context()` |
 | Client class | `from noveum_trace import NoveumClient` | `from noveum_trace.core.client import NoveumClient` |
 | LangChain integration | `from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler` | `from noveum_trace.integrations import NoveumTraceCallbackHandler` (also works) |
+| LiveKit integration | `from noveum_trace.integrations.livekit import setup_livekit_tracing` | `from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper` |
+| Pipecat integration | `from noveum_trace.integrations.pipecat import NoveumTraceObserver, setup_pipecat_tracing` | requires `pip install "noveum-trace[pipecat]"` |
+| CrewAI integration | `from noveum_trace.integrations.crewai import NoveumCrewAIListener, setup_crewai_tracing` | requires Python 3.10+, `pip install "noveum-trace[crewai]"` |
 
 ## ⚙️ Setup
 
@@ -177,9 +180,12 @@ For a complete list of all available environment variables including debug setti
 ```
 noveum_trace/
 ├── core/              # Core tracing primitives (Trace, Span, Context)
-├── context_managers/  # Context managers for inline tracing
+├── context_managers.py # Context managers for inline tracing
+├── agents/            # Agent registry and workflow management
+├── streaming/         # Streaming LLM response support
+├── threads/           # Conversation thread management
 ├── transport/         # HTTP transport and batch processing
-├── integrations/      # Framework integrations (LangChain, LiveKit, etc.)
+├── integrations/      # Framework integrations (LangChain, LiveKit, Pipecat, CrewAI)
 └── utils/             # Utilities (exceptions, serialization, etc.)
 ```
 
@@ -300,7 +306,7 @@ response = llm.invoke("What is the capital of France?")
 ### What Gets Traced
 
 - **LLM Calls**: Model, prompts, responses, token usage
-- **Chains**: Input/output flow, execution steps  
+- **Chains**: Input/output flow, execution steps
 - **Agents**: Decision-making, tool usage, reasoning
 - **Tools**: Function calls, inputs, outputs
 - **LangGraph Nodes**: Graph execution, node transitions
@@ -339,20 +345,20 @@ async def agent_entrypoint(ctx: JobContext):
         session_id=ctx.job.id,
         job_context={"job_id": ctx.job.id, "room": ctx.room.name}
     )
-    
+
     traced_tts = LiveKitTTSWrapper(
         tts=cartesia.TTS(model="sonic-english"),
         session_id=ctx.job.id,
         job_context={"job_id": ctx.job.id}
     )
-    
+
     # Create session with traced providers
     session = AgentSession(stt=traced_stt, tts=traced_tts)
-    
+
     # Enable session tracing for automatic event tracking
     # This creates the trace automatically - no need for start_trace()
     setup_livekit_tracing(session)
-    
+
     agent = Agent(instructions="You are a helpful assistant.")
     await ctx.connect()
     await session.start(agent)  # Complete tracing active!
@@ -383,6 +389,78 @@ async def agent_entrypoint(ctx: JobContext):
 For step-by-step setup instructions, see the [LiveKit Integration Guide](docs/LIVEKIT_INTEGRATION_GUIDE.md).
 
 For detailed API documentation, see the [LiveKit Integration Docs](docs/LIVEKIT_INTEGRATION.md).
+
+## 🤖 Pipecat Integration
+
+Automatically trace Pipecat voice agent pipelines:
+
+```python
+import noveum_trace
+from noveum_trace.integrations.pipecat import NoveumTraceObserver, setup_pipecat_tracing
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineTask
+
+# Initialize Noveum Trace
+noveum_trace.init(project="pipecat-agent", api_key="your-api-key")
+
+async def run_agent():
+    pipeline = Pipeline([...])  # Your Pipecat pipeline
+
+    # Create observer using factory
+    observer = setup_pipecat_tracing(trace_name_prefix="my-bot")
+
+    task = PipelineTask(pipeline, observers=[observer])
+    await observer.attach_to_task(task)  # Wires turn tracking
+
+    runner = PipelineRunner()
+    await runner.run(task)
+```
+
+### Installation
+
+```bash
+pip install "noveum-trace[pipecat]"
+```
+
+For full documentation, see the [Pipecat Integration Guide](docs/PIPECAT_INTEGRATION.md).
+
+## 🤝 CrewAI Integration
+
+Trace CrewAI crews, agents, tasks, and tools automatically:
+
+```python
+import noveum_trace
+from noveum_trace.integrations.crewai import NoveumCrewAIListener, setup_crewai_tracing
+from crewai import Crew, Agent, Task
+
+# Initialize Noveum Trace (Python 3.10+ required for CrewAI)
+noveum_trace.init(project="crewai-app", api_key="your-api-key")
+
+# Create your crew
+crew = Crew(agents=[...], tasks=[...])
+
+# Option 1: Using the setup factory (recommended)
+listener = setup_crewai_tracing()
+crew.callback_function = listener
+result = crew.kickoff()
+
+# Option 2: Manual instantiation with full control
+from noveum_trace import get_client
+client = get_client()
+listener = NoveumCrewAIListener(client)
+crew.callback_function = listener
+result = crew.kickoff()
+```
+
+### Installation
+
+```bash
+# Requires Python 3.10+
+pip install "noveum-trace[crewai]"
+```
+
+For a complete working example, see [`docs/examples/crewai_e2e_test.py`](docs/examples/crewai_e2e_test.py).
 
 ## 🧪 Testing
 
@@ -459,7 +537,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - [GitHub Issues](https://github.com/Noveum/noveum-trace/issues)
 - [Documentation](https://github.com/Noveum/noveum-trace/tree/main/docs)
-- [Examples](https://github.com/Noveum/noveum-trace/tree/main/examples)
+- [Examples](https://github.com/Noveum/noveum-trace/tree/main/docs/examples)
 
 ---
 
