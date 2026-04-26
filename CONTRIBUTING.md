@@ -6,7 +6,7 @@ Thank you for your interest in contributing to the Noveum Trace SDK! This docume
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.9 or higher (Python 3.10+ required for the CrewAI integration extra)
 - pip for dependency management
 - Git for version control
 
@@ -32,29 +32,36 @@ Thank you for your interest in contributing to the Noveum Trace SDK! This docume
 ## Project Structure
 
 ```
-noveum_trace/
-├── core/              # Core tracing functionality
-│   ├── client.py      # Main client class
-│   ├── config.py      # Configuration management
-│   ├── context.py     # Context management
-│   ├── span.py        # Span implementation
+src/noveum_trace/
+├── core/              # Core tracing primitives
+│   ├── client.py      # NoveumClient — main SDK entry point
+│   ├── config.py      # Configuration and environment variable handling
+│   ├── context.py     # Context propagation (contextvars-based)
+│   ├── span.py        # Span implementation and SpanStatus enum
 │   └── trace.py       # Trace implementation
-├── decorators/        # Decorator-based API
-│   ├── base.py        # Base trace decorator
-│   ├── llm.py         # LLM-specific decorator
-│   ├── agent.py       # Agent-specific decorator
-│   ├── tool.py        # Tool-specific decorator
-│   └── retrieval.py   # Retrieval-specific decorator
-├── transport/         # Transport layer
-│   ├── http_transport.py    # HTTP transport
-│   └── batch_processor.py   # Batch processing
-├── integrations/      # Framework integrations
-│   └── openai.py      # OpenAI integration
-└── utils/             # Utility modules
-    ├── exceptions.py   # Custom exceptions
-    ├── llm_utils.py    # LLM utilities
-    └── pii_redaction.py # PII redaction
+├── context_managers.py # trace_llm, trace_agent, trace_operation context managers
+├── agents/            # Agent registry, AgentGraph, AgentWorkflow
+├── streaming/         # StreamingSpanManager, streaming callbacks
+├── threads/           # ThreadContext, multi-turn conversation tracking
+├── transport/         # HTTP transport and batch processing
+├── integrations/      # Framework integrations (all optional)
+│   ├── langchain/     # NoveumTraceCallbackHandler (requires [langchain])
+│   ├── livekit/       # setup_livekit_tracing, wrappers (requires [livekit])
+│   ├── pipecat/       # NoveumTraceObserver, setup_pipecat_tracing (requires [pipecat])
+│   └── crewai/        # NoveumCrewAIListener, setup_crewai_tracing (requires [crewai], Python 3.10+)
+└── utils/             # Exceptions, serialization, LLM utilities
 ```
+
+### Integration extras
+
+| Extra | Install command | Python requirement |
+|-------|----------------|--------------------|
+| `langchain` | `pip install "noveum-trace[langchain]"` | 3.9+ |
+| `livekit` | `pip install "noveum-trace[livekit]"` | 3.9+ |
+| `pipecat` | `pip install "noveum-trace[pipecat]"` | 3.9+ |
+| `crewai` | `pip install "noveum-trace[crewai]"` | **3.10+** |
+| `openai` | `pip install "noveum-trace[openai]"` | 3.9+ |
+| `anthropic` | `pip install "noveum-trace[anthropic]"` | 3.9+ |
 
 ## Development Guidelines
 
@@ -81,13 +88,13 @@ noveum_trace/
 
 ## Adding New Features
 
-### Adding a New Decorator
+### Adding a New Integration or Context Manager
 
-1. Create a new file in `noveum_trace/decorators/` or extend existing ones
-2. Follow the pattern established by existing decorators
-3. Add comprehensive tests
-4. Update the `__init__.py` file to export the new decorator
-5. Add documentation and examples
+1. For a new context manager: add to `src/noveum_trace/context_managers.py` and export from `src/noveum_trace/__init__.py`
+2. For a new integration: create `src/noveum_trace/integrations/<name>/` with `__init__.py` exporting the public API; add a corresponding extra in `pyproject.toml`
+3. Follow patterns from existing integrations (e.g., `integrations/pipecat/`)
+4. Add unit tests in `tests/unit/integrations/test_<name>_integration.py`
+5. Update README.md with installation instructions and a usage example
 
 ### Adding a New Integration
 
@@ -138,6 +145,11 @@ pytest -m opentelemetry tests/integration/
 
 # Run specific integration test files
 pytest tests/integration/test_base_configuration.py
+
+# Run CrewAI integration tests (requires Python 3.10+ and crewai installed)
+pytest tests/unit/integrations/test_crewai_integration.py -m "crewai"
+# Or install the extra and run:
+pip install "noveum-trace[crewai]" && pytest tests/unit/integrations/
 pytest tests/integration/test_real_llm_scenarios.py
 pytest tests/integration/test_decorator_integrations.py
 pytest tests/integration/test_opentelemetry_integration.py

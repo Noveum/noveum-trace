@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.x] — Current (2026)
+
+### Current Public API (v1.x)
+
+The SDK has evolved significantly from the decorator-based 0.3.x era. The current public interface is **context-manager first**:
+
+**Root imports (`from noveum_trace import ...`)**
+- `init`, `shutdown`, `flush`, `get_client`, `get_config`, `is_initialized`, `configure`
+- `trace_llm_call`, `trace_agent_operation`, `trace_operation`, `trace_batch_operation`, `trace_pipeline_stage`, `create_child_span`
+- `start_trace`, `start_span`, `trace_context`, `NoveumClient`, `Trace`, `Span`
+- Streaming: `trace_streaming`, `streaming_llm`, `create_openai_streaming_callback`, `create_anthropic_streaming_callback`
+- Threads: `create_thread`, `get_thread`, `delete_thread`, `list_threads`, `trace_thread_llm`, `ThreadContext`
+- Agents: `create_agent`, `get_agent`, `create_agent_graph`, `create_agent_workflow`, `AgentGraph`, `AgentWorkflow`, `AgentNode`, etc.
+- Conditional (when extras installed): `NoveumTraceCallbackHandler` (LangChain), `NoveumCrewAIListener`, `setup_crewai_tracing` (CrewAI)
+
+**Integration submodules (require extras)**
+- `noveum_trace.integrations.langchain` — `NoveumTraceCallbackHandler` (`pip install "noveum-trace[langchain]"`)
+- `noveum_trace.integrations.livekit` — `setup_livekit_tracing`, `LiveKitSTTWrapper`, `LiveKitTTSWrapper`, `LiveKitLLMWrapper`, `extract_job_context` (`pip install "noveum-trace[livekit]"`)
+- `noveum_trace.integrations.pipecat` — `NoveumTraceObserver`, `setup_pipecat_tracing` (`pip install "noveum-trace[pipecat]"`)
+- `noveum_trace.integrations.crewai` — `NoveumCrewAIListener`, `setup_crewai_tracing` (`pip install "noveum-trace[crewai]"`, Python 3.10+)
+
+### Added
+- **CrewAI integration** (`[crewai]` extra, Python 3.10+): `NoveumCrewAIListener` and `setup_crewai_tracing` covering agents, tasks, tools, LLM calls, memory, MCP, flow events, A2A delegation, and guardrails.
+- **`get_client()`** exported at package root — raises `InitializationError` if not initialized.
+- **Agent registry** with `create_agent_graph`, `AgentGraph`, `AgentWorkflow`, and cleanup utilities.
+- **Streaming support**: `trace_streaming`, `streaming_llm`, provider streaming callbacks.
+- **Thread management**: `create_thread`, `trace_thread_llm`, `ThreadContext` for multi-turn conversations.
+
+### Note on older versions
+The 0.3.0 release introduced a **decorator-based API** (`@trace_llm`, `@trace_agent`, etc.). These decorators are **not part of the current public API** — the package now ships context managers as its primary interface.
+
+---
+
 ## 0.3.2 (2025-01-23)
 
 ### Added

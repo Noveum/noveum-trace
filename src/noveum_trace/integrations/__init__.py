@@ -67,3 +67,14 @@ try:
     __all__.extend(["NoveumTraceObserver", "setup_pipecat_tracing"])
 except ImportError:
     pass
+
+# CrewAI integration (requires Python 3.10+ and crewai>=0.177.0)
+try:
+    from noveum_trace.integrations.crewai import (
+        NoveumCrewAIListener,
+        setup_crewai_tracing,
+    )
+
+    __all__.extend(["NoveumCrewAIListener", "setup_crewai_tracing"])
+except ImportError:
+    pass
