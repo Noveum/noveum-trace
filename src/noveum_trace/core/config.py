@@ -236,13 +236,25 @@ class Config:
 
         if self.security.pii_enabled:
             salt = self.security.pii_salt
-            if salt is None or not str(salt).strip():
+            if salt is None:
                 raise ConfigurationError(
-                    "security.pii_enabled is True but security.pii_salt is missing or empty. "
-                    "Set a deployment-specific secret (e.g. NOVEUM_PII_SALT or "
+                    "security.pii_enabled is True but security.pii_salt is missing. "
+                    "Set a deployment-specific string secret (e.g. NOVEUM_PII_SALT or "
                     "security.pii_salt in configuration)."
                 )
-            if str(salt).strip() == _DEPRECATED_SHARED_PII_SALT:
+            if not isinstance(salt, str):
+                raise ConfigurationError(
+                    "security.pii_enabled is True but security.pii_salt must be a str, "
+                    f"not {type(salt).__name__}. "
+                    "Use a string secret (e.g. quote the value in YAML/JSON)."
+                )
+            stripped = salt.strip()
+            if not stripped:
+                raise ConfigurationError(
+                    "security.pii_enabled is True but security.pii_salt is empty or "
+                    "whitespace-only. Set a non-empty string secret."
+                )
+            if stripped == _DEPRECATED_SHARED_PII_SALT:
                 raise ConfigurationError(
                     "security.pii_salt must not use the deprecated shared default value. "
                     "Set a unique secret for your deployment."
@@ -555,10 +567,9 @@ def _load_from_environment() -> Config:
     if pii_enabled_env is not None:
         if "security" not in config_data:
             config_data["security"] = {}
-        config_data["security"]["pii_enabled"] = pii_enabled_env.lower() in (
-            "true",
-            "1",
-            "yes",
+        config_data["security"]["pii_enabled"] = _parse_config_bool(
+            pii_enabled_env,
+            field_name="NOVEUM_PII_ENABLED",
         )
 
     pii_salt_env = os.getenv("NOVEUM_PII_SALT")
