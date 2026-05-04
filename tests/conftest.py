@@ -173,7 +173,9 @@ def mock_transport_completely(request):
         self.batch_processor.shutdown = Mock()
         self._shutdown = False
         if self.config.security.pii_enabled:
-            self._pii_pseudonymizer = PiiPseudonymizer(self.config.security.pii_salt)
+            salt = self.config.security.pii_salt
+            assert salt is not None and str(salt).strip()
+            self._pii_pseudonymizer = PiiPseudonymizer(salt)
         else:
             self._pii_pseudonymizer = None
 

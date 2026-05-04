@@ -7,6 +7,7 @@ identifiable information from trace data.
 
 import hashlib
 import hmac
+import importlib
 import re
 import unicodedata
 from typing import Any, Optional
@@ -255,6 +256,11 @@ def create_redaction_summary(original_text: str, redacted_text: str) -> dict[str
     }
 
 
+# Hex digits from the HMAC-SHA256 digest used after the ``LABEL_`` prefix in
+# pseudonyms (tunable; longer suffixes reduce collision rate among distinct values).
+TOKEN_SUFFIX_LENGTH = 12
+
+
 class PiiPseudonymizer:
     """
     Deterministic pseudonymization of PII-like spans using HMAC-SHA256 + salt.
@@ -284,14 +290,13 @@ class PiiPseudonymizer:
         self._salt_bytes = salt.encode("utf-8")
         self._nlp: Any = None
         try:
-            import spacy
-
+            spacy = importlib.import_module("spacy")
             self._nlp = spacy.load("en_core_web_sm")
         except (ImportError, OSError):
             self._nlp = None
 
     def _token(self, label: str, value: str) -> str:
-        """NFC-normalize ``value``, HMAC-SHA256(salt, value), return LABEL_ + first 5 hex."""
+        """NFC-normalize ``value``, HMAC-SHA256(salt, value), return LABEL_ + hex suffix."""
         raw = value if isinstance(value, str) else str(value)
         normalized = unicodedata.normalize("NFC", raw)
         digest_hex = hmac.new(
@@ -300,7 +305,7 @@ class PiiPseudonymizer:
             hashlib.sha256,
         ).hexdigest()
         prefix = label.strip().upper().replace(" ", "_")
-        return f"{prefix}_{digest_hex[:5]}"
+        return f"{prefix}_{digest_hex[:TOKEN_SUFFIX_LENGTH]}"
 
     def _regex_spans(self, text: str) -> list[tuple[int, int, str]]:
         spans: list[tuple[int, int, str]] = []

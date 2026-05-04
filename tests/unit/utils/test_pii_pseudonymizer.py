@@ -5,7 +5,10 @@ import types
 
 import pytest
 
-from noveum_trace.utils.pii_redaction import PiiPseudonymizer
+from noveum_trace.utils.pii_redaction import (
+    TOKEN_SUFFIX_LENGTH,
+    PiiPseudonymizer,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +38,7 @@ class TestPiiPseudonymizerToken:
         t2 = p._token("EMAIL", "user@example.com")
         assert t1 == t2
         assert t1.startswith("EMAIL_")
-        assert len(t1.split("_", 1)[1]) == 5
+        assert len(t1.split("_", 1)[1]) == TOKEN_SUFFIX_LENGTH
 
     def test_token_salt_changes_output(self) -> None:
         a = PiiPseudonymizer("salt-a")._token("EMAIL", "user@example.com")
