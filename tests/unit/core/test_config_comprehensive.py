@@ -144,11 +144,13 @@ class TestSecurityConfig:
 
     def test_security_config_pii_enabled_requires_salt_via_config_validate(self):
         """PII pseudonymization must not run without an explicit salt."""
-        with pytest.raises(ConfigurationError, match="pii_salt is missing or empty"):
+        with pytest.raises(ConfigurationError, match="pii_salt is missing"):
             Config(security=SecurityConfig(pii_enabled=True, pii_salt=None))
-        with pytest.raises(ConfigurationError, match="pii_salt is missing or empty"):
+        with pytest.raises(ConfigurationError, match="must be a str"):
+            Config(security=SecurityConfig(pii_enabled=True, pii_salt=12345))
+        with pytest.raises(ConfigurationError, match="empty or whitespace-only"):
             Config(security=SecurityConfig(pii_enabled=True, pii_salt=""))
-        with pytest.raises(ConfigurationError, match="pii_salt is missing or empty"):
+        with pytest.raises(ConfigurationError, match="empty or whitespace-only"):
             Config(security=SecurityConfig(pii_enabled=True, pii_salt="   "))
 
     def test_security_config_pii_enabled_rejects_deprecated_shared_salt(self):
@@ -436,7 +438,7 @@ class TestConfig:
         assert config.integrations.langchain == {"enabled": True, "auto_trace": True}
 
     def test_config_from_dict_pii_enabled_without_salt_raises(self):
-        with pytest.raises(ConfigurationError, match="pii_salt is missing or empty"):
+        with pytest.raises(ConfigurationError, match="pii_salt is missing"):
             Config.from_dict({"security": {"pii_enabled": True}})
 
     def test_config_from_dict_security_pii_enabled_string_coercion(self):
@@ -648,11 +650,16 @@ class TestConfigurationLoading:
                 config = _load_from_environment()
                 assert config.security.pii_enabled is False
 
-        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "true"}, clear=True):
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "ture"}, clear=True):
             with patch("noveum_trace.core.config.os.path.exists", return_value=False):
                 with pytest.raises(
-                    ConfigurationError, match="pii_salt is missing or empty"
+                    ConfigurationError, match="Invalid boolean for NOVEUM_PII_ENABLED"
                 ):
+                    _load_from_environment()
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "true"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                with pytest.raises(ConfigurationError, match="pii_salt is missing"):
                     _load_from_environment()
 
         with patch.dict(os.environ, {}, clear=True):

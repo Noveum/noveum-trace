@@ -1,5 +1,6 @@
 """Tests for PiiPseudonymizer."""
 
+import re
 import sys
 import types
 
@@ -127,6 +128,16 @@ class TestPiiPseudonymizeRegex:
         assert "https://a.com/x" not in out
         for label in ("PHONE_", "SSN_", "CARD_", "IP_", "URL_"):
             assert label in out
+
+    def test_url_trailing_punct_same_pseudonym(self) -> None:
+        """Canonical URL (no trailing sentence punctuation) used for hashing."""
+        p = PiiPseudonymizer("salt")
+        with_dot = p.pseudonymize("u https://ex.com/a.")
+        no_dot = p.pseudonymize("u https://ex.com/a")
+        tok = re.compile(r"URL_[a-f0-9]+")
+        assert tok.search(with_dot) and tok.search(no_dot)
+        assert tok.search(with_dot).group(0) == tok.search(no_dot).group(0)
+        assert with_dot.endswith(".")
 
     def test_right_to_left_indices(self) -> None:
         p = PiiPseudonymizer("salt")

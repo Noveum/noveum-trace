@@ -27,15 +27,35 @@ _PII_RE_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _PII_RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _PII_RE_URL = re.compile(r"https?://[^\s]+")
 
+# Strip from URL match end only (prose often appends . , ) ] } : ; ! ? ' ")
+_URL_TRAILING_PUNCT = frozenset(".,;:!?)]}'\"")
 
-def redact_pii(text: str, redaction_char: str = "*") -> str:  # noqa: ARG001
+
+def _url_match_exclusive_end(raw: str) -> int:
+    """Exclusive end index into ``raw`` with trailing sentence punctuation removed."""
+    end = len(raw)
+    while end > 0 and raw[end - 1] in _URL_TRAILING_PUNCT:
+        end -= 1
+    return end
+
+
+def _tile_mask_to_length(unit: str, n: int) -> str:
+    """Repeat ``unit`` to cover ``n`` characters (single-char fast path)."""
+    if n <= 0:
+        return ""
+    if len(unit) == 1:
+        return unit * n
+    return (unit * ((n + len(unit) - 1) // len(unit)))[:n]
+
+
+def redact_pii(text: str, redaction_char: str = "*") -> str:
     """
     Redact personally identifiable information from text.
 
     Args:
         text: Text to redact PII from
-        redaction_char: Kept for backward compatibility; redaction uses fixed tags
-            (e.g. ``[EMAIL_REDACTED]``), not this character.
+        redaction_char: String to tile over each matched span (same length as the match).
+            Empty or invalid values fall back to ``"*"``.
 
     Returns:
         Text with PII redacted
@@ -43,13 +63,28 @@ def redact_pii(text: str, redaction_char: str = "*") -> str:  # noqa: ARG001
     if not isinstance(text, str):
         text = str(text)
 
-    text = _PII_RE_EMAIL.sub("[EMAIL_REDACTED]", text)
+    unit = (
+        redaction_char
+        if isinstance(redaction_char, str) and redaction_char.strip()
+        else "*"
+    )
+
+    def _mask_span(m: re.Match[str]) -> str:
+        return _tile_mask_to_length(unit, len(m.group(0)))
+
+    def _mask_url(m: re.Match[str]) -> str:
+        raw = m.group(0)
+        end = _url_match_exclusive_end(raw)
+        core = raw[:end]
+        return _tile_mask_to_length(unit, len(core)) + raw[end:]
+
+    text = _PII_RE_EMAIL.sub(_mask_span, text)
     for cre in _PII_RE_PHONES:
-        text = cre.sub("[PHONE_REDACTED]", text)
-    text = _PII_RE_CARD.sub("[CARD_REDACTED]", text)
-    text = _PII_RE_SSN.sub("[SSN_REDACTED]", text)
-    text = _PII_RE_IP.sub("[IP_REDACTED]", text)
-    text = _PII_RE_URL.sub("[URL_REDACTED]", text)
+        text = cre.sub(_mask_span, text)
+    text = _PII_RE_CARD.sub(_mask_span, text)
+    text = _PII_RE_SSN.sub(_mask_span, text)
+    text = _PII_RE_IP.sub(_mask_span, text)
+    text = _PII_RE_URL.sub(_mask_url, text)
     return text
 
 
@@ -138,7 +173,10 @@ class PiiPseudonymizer:
         for m in _PII_RE_IP.finditer(text):
             spans.append((m.start(), m.end(), "IP"))
         for m in _PII_RE_URL.finditer(text):
-            spans.append((m.start(), m.end(), "URL"))
+            raw = m.group(0)
+            end = m.start() + _url_match_exclusive_end(raw)
+            if end > m.start():
+                spans.append((m.start(), end, "URL"))
         return spans
 
     def _ner_spans(self, text: str) -> list[tuple[int, int, str]]:
