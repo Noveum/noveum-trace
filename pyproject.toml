@@ -60,6 +60,13 @@ livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 pipecat = ["pipecat-ai>=0.0.50"]
 crewai = ["crewai>=0.177.0; python_version>='3.10'"]
 
+# Optional: spaCy for ``PiiPseudonymizer`` NER (heavier than the core SDK; regex-only
+# pseudonymization works without this extra). After install, run:
+# ``python -m spacy download en_core_web_sm`` so ``spacy.load("en_core_web_sm")`` succeeds.
+pii_redaction = [
+    "spacy>=3.7.0",
+]
+
 # Development dependencies
 dev = [
     # Testing framework

@@ -20,6 +20,7 @@ from noveum_trace.core.config import (
     DEFAULT_ENDPOINT,
     DEFAULT_MAX_QUEUE_SIZE,
     DEFAULT_MAX_SPANS_PER_TRACE,
+    DEFAULT_PII_SALT,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_TIMEOUT,
     Config,
@@ -119,6 +120,8 @@ class TestSecurityConfig:
         assert config.custom_redaction_patterns == []
         assert config.encrypt_data is True
         assert config.data_residency is None
+        assert config.pii_enabled is False
+        assert config.pii_salt == DEFAULT_PII_SALT
 
     def test_security_config_custom_values(self):
         """Test SecurityConfig with custom values."""
@@ -128,12 +131,36 @@ class TestSecurityConfig:
             custom_redaction_patterns=patterns,
             encrypt_data=False,
             data_residency="EU",
+            pii_enabled=True,
+            pii_salt="custom-salt",
         )
 
         assert config.redact_pii is True
         assert config.custom_redaction_patterns == patterns
         assert config.encrypt_data is False
         assert config.data_residency == "EU"
+        assert config.pii_enabled is True
+        assert config.pii_salt == "custom-salt"
+
+    def test_security_config_pii_enabled_requires_salt_via_config_validate(self):
+        """PII pseudonymization must not run without an explicit salt."""
+        with pytest.raises(ConfigurationError, match="pii_salt is missing"):
+            Config(security=SecurityConfig(pii_enabled=True, pii_salt=None))
+        with pytest.raises(ConfigurationError, match="must be a str"):
+            Config(security=SecurityConfig(pii_enabled=True, pii_salt=12345))
+        with pytest.raises(ConfigurationError, match="empty or whitespace-only"):
+            Config(security=SecurityConfig(pii_enabled=True, pii_salt=""))
+        with pytest.raises(ConfigurationError, match="empty or whitespace-only"):
+            Config(security=SecurityConfig(pii_enabled=True, pii_salt="   "))
+
+    def test_security_config_pii_enabled_rejects_deprecated_shared_salt(self):
+        with pytest.raises(ConfigurationError, match="deprecated shared default"):
+            Config(
+                security=SecurityConfig(
+                    pii_enabled=True,
+                    pii_salt="noveum-pii-default-salt",
+                )
+            )
 
 
 class TestIntegrationConfig:
@@ -315,6 +342,8 @@ class TestConfig:
         assert "tracing" in data
         assert "transport" in data
         assert "security" in data
+        assert data["security"]["pii_enabled"] is False
+        assert data["security"]["pii_salt"] == DEFAULT_PII_SALT
         assert "integrations" in data
 
     def test_config_from_dict_basic(self):
@@ -403,8 +432,55 @@ class TestConfig:
         assert config.transport.retry_attempts == 5
         assert config.security.redact_pii is True
         assert config.security.custom_redaction_patterns == ["email", "phone"]
+        assert config.security.pii_enabled is False
+        assert config.security.pii_salt == DEFAULT_PII_SALT
         assert config.integrations.openai == {"enabled": True}
         assert config.integrations.langchain == {"enabled": True, "auto_trace": True}
+
+    def test_config_from_dict_pii_enabled_without_salt_raises(self):
+        with pytest.raises(ConfigurationError, match="pii_salt is missing"):
+            Config.from_dict({"security": {"pii_enabled": True}})
+
+    def test_config_from_dict_security_pii_enabled_string_coercion(self):
+        """security.pii_enabled from YAML/JSON is often a string; coerce like dev_mode."""
+        assert (
+            Config.from_dict(
+                {"security": {"pii_enabled": "false", "pii_salt": "x"}}
+            ).security.pii_enabled
+            is False
+        )
+        assert (
+            Config.from_dict(
+                {"security": {"pii_enabled": "FALSE", "pii_salt": "x"}}
+            ).security.pii_enabled
+            is False
+        )
+        assert (
+            Config.from_dict(
+                {"security": {"pii_enabled": "true", "pii_salt": "x"}}
+            ).security.pii_enabled
+            is True
+        )
+        assert (
+            Config.from_dict(
+                {"security": {"pii_enabled": "0", "pii_salt": "x"}}
+            ).security.pii_enabled
+            is False
+        )
+        assert (
+            Config.from_dict(
+                {"security": {"pii_enabled": "1", "pii_salt": "x"}}
+            ).security.pii_enabled
+            is True
+        )
+        assert (
+            Config.from_dict({"security": {"pii_enabled": None}}).security.pii_enabled
+            is False
+        )
+        with pytest.raises(
+            ConfigurationError, match="Invalid boolean for security.pii_enabled"
+        ):
+            Config.from_dict({"security": {"pii_enabled": "maybe", "pii_salt": "x"}})
 
     def test_config_from_dict_with_invalid_component_types(self):
         """Test Config.from_dict() method with invalid component types."""
@@ -509,6 +585,8 @@ class TestConfigurationLoading:
                 assert config.api_key is None
                 assert config.environment == "development"
                 assert config.debug is False
+                assert config.security.pii_enabled is False
+                assert config.security.pii_salt == DEFAULT_PII_SALT
 
     def test_load_from_environment_with_variables(self):
         """Test loading from environment with variables set."""
@@ -552,6 +630,43 @@ class TestConfigurationLoading:
                     config = _load_from_environment()
                     assert config.debug is False
 
+    def test_load_from_environment_pii_settings(self):
+        """NOVEUM_PII_ENABLED / NOVEUM_PII_SALT map into security config."""
+        with patch.dict(
+            os.environ,
+            {
+                "NOVEUM_PII_ENABLED": "true",
+                "NOVEUM_PII_SALT": "env-salt-value",
+            },
+            clear=True,
+        ):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_enabled is True
+                assert config.security.pii_salt == "env-salt-value"
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "false"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_enabled is False
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "ture"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                with pytest.raises(
+                    ConfigurationError, match="Invalid boolean for NOVEUM_PII_ENABLED"
+                ):
+                    _load_from_environment()
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "true"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                with pytest.raises(ConfigurationError, match="pii_salt is missing"):
+                    _load_from_environment()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_salt == DEFAULT_PII_SALT
+
     def test_load_from_environment_with_config_file(self):
         """Test loading from environment with config file present."""
         file_config = Config(project="file-project", api_key="file-key")
@@ -566,6 +681,25 @@ class TestConfigurationLoading:
                     # Environment variable should override file config
                     assert config.project == "env-project"
                     assert config.api_key == "file-key"
+
+    def test_load_from_environment_deep_merges_security_with_file(self):
+        """Env NOVEUM_PII_ENABLED must not replace entire security dict from file."""
+        file_config = Config(
+            security=SecurityConfig(
+                pii_enabled=False,
+                pii_salt="salt-from-yaml",
+            ),
+        )
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "true"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=True):
+                with patch(
+                    "noveum_trace.core.config._load_from_file", return_value=file_config
+                ):
+                    config = _load_from_environment()
+
+        assert config.security.pii_enabled is True
+        assert config.security.pii_salt == "salt-from-yaml"
 
     def test_load_from_file_yaml(self):
         """Test loading from YAML file."""

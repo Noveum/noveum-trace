@@ -61,6 +61,10 @@ DEFAULT_BATCH_TIMEOUT = 5.0
 DEFAULT_MAX_QUEUE_SIZE = 1000
 DEFAULT_MAX_SPANS_PER_TRACE = 1000
 DEFAULT_DEV_TRACES_DIR = ".noveum_trace_dev"
+# Not a cryptographic default: absence of salt. Pseudonymization requires an
+# explicit deployment secret when ``SecurityConfig.pii_enabled`` is True.
+DEFAULT_PII_SALT: Optional[str] = None
+_DEPRECATED_SHARED_PII_SALT = "noveum-pii-default-salt"
 
 
 @dataclass
@@ -103,6 +107,8 @@ class SecurityConfig:
     custom_redaction_patterns: list[str] = field(default_factory=list)
     encrypt_data: bool = True
     data_residency: Optional[str] = None
+    pii_enabled: bool = False
+    pii_salt: Optional[str] = DEFAULT_PII_SALT
 
 
 @dataclass
@@ -228,6 +234,32 @@ class Config:
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
 
+        if self.security.pii_enabled:
+            salt = self.security.pii_salt
+            if salt is None:
+                raise ConfigurationError(
+                    "security.pii_enabled is True but security.pii_salt is missing. "
+                    "Set a deployment-specific string secret (e.g. NOVEUM_PII_SALT or "
+                    "security.pii_salt in configuration)."
+                )
+            if not isinstance(salt, str):
+                raise ConfigurationError(
+                    "security.pii_enabled is True but security.pii_salt must be a str, "
+                    f"not {type(salt).__name__}. "
+                    "Use a string secret (e.g. quote the value in YAML/JSON)."
+                )
+            stripped = salt.strip()
+            if not stripped:
+                raise ConfigurationError(
+                    "security.pii_enabled is True but security.pii_salt is empty or "
+                    "whitespace-only. Set a non-empty string secret."
+                )
+            if stripped == _DEPRECATED_SHARED_PII_SALT:
+                raise ConfigurationError(
+                    "security.pii_salt must not use the deprecated shared default value. "
+                    "Set a unique secret for your deployment."
+                )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -258,6 +290,8 @@ class Config:
                 "custom_redaction_patterns": self.security.custom_redaction_patterns,
                 "encrypt_data": self.security.encrypt_data,
                 "data_residency": self.security.data_residency,
+                "pii_enabled": self.security.pii_enabled,
+                "pii_salt": self.security.pii_salt,
             },
             "integrations": {
                 "langchain": self.integrations.langchain,
@@ -358,6 +392,11 @@ class Config:
                     ),
                     encrypt_data=security_data.get("encrypt_data", True),
                     data_residency=security_data.get("data_residency"),
+                    pii_enabled=_parse_config_bool(
+                        security_data.get("pii_enabled", False),
+                        field_name="security.pii_enabled",
+                    ),
+                    pii_salt=security_data.get("pii_salt", DEFAULT_PII_SALT),
                 )
             else:
                 # If security is not a dict, use default
@@ -524,6 +563,21 @@ def _load_from_environment() -> Config:
     if dev_mode_env:
         config_data["dev_mode"] = dev_mode_env.lower() in ("true", "1", "yes")
 
+    pii_enabled_env = os.getenv("NOVEUM_PII_ENABLED")
+    if pii_enabled_env is not None:
+        if "security" not in config_data:
+            config_data["security"] = {}
+        config_data["security"]["pii_enabled"] = _parse_config_bool(
+            pii_enabled_env,
+            field_name="NOVEUM_PII_ENABLED",
+        )
+
+    pii_salt_env = os.getenv("NOVEUM_PII_SALT")
+    if pii_salt_env is not None:
+        if "security" not in config_data:
+            config_data["security"] = {}
+        config_data["security"]["pii_salt"] = pii_salt_env
+
     dev_traces_dir_env = os.getenv("NOVEUM_DEV_TRACES_DIR")
     if dev_traces_dir_env:
         config_data["dev_traces_dir"] = dev_traces_dir_env
@@ -541,10 +595,10 @@ def _load_from_environment() -> Config:
     for config_file in config_files:
         if os.path.exists(config_file):
             file_config = _load_from_file(config_file)
-            # Merge file config with environment config (env takes precedence)
-            merged_config = file_config.to_dict()
-            merged_config.update(config_data)
-            config_data = merged_config
+            # Merge file config with environment config (env takes precedence).
+            # Deep-merge nested dicts (e.g. security) so env-only keys like
+            # NOVEUM_PII_ENABLED do not wipe file-provided security.pii_salt.
+            config_data = _deep_merge_dicts(file_config.to_dict(), config_data)
             break
 
     return Config.from_dict(config_data)

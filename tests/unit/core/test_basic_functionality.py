@@ -398,11 +398,14 @@ class TestUtilities:
         """Test PII redaction functionality."""
         from noveum_trace.utils.pii_redaction import detect_pii_types, redact_pii
 
-        # Test email redaction
+        # Test email redaction (default redaction_char tiles "*" to match length)
         text_with_email = "Contact me at john@example.com"
         redacted = redact_pii(text_with_email)
         assert "john@example.com" not in redacted
-        assert "[EMAIL_REDACTED]" in redacted
+        assert redacted == "Contact me at " + "*" * len("john@example.com")
+
+        redacted_hash = redact_pii(text_with_email, redaction_char="#")
+        assert redacted_hash == "Contact me at " + "#" * len("john@example.com")
 
         # Test PII detection
         pii_types = detect_pii_types(text_with_email)
