@@ -38,6 +38,7 @@ from noveum_trace.utils.logging import (
     log_http_response,
     log_trace_flow,
 )
+from noveum_trace.utils.pii_redaction import PiiPseudonymizer
 
 _MOCK_TYPES: tuple[type[Any], ...]
 
@@ -75,6 +76,12 @@ class HttpTransport:
         self.session = self._create_session()
         self.batch_processor = BatchProcessor(self._send_batch, self.config)
         self._shutdown = False
+        if self.config.security.pii_enabled:
+            self._pii_pseudonymizer: Optional[PiiPseudonymizer] = PiiPseudonymizer(
+                self.config.security.pii_salt
+            )
+        else:
+            self._pii_pseudonymizer = None
 
         logger.info(
             f"HTTP transport initialized for endpoint: {self.config.transport.endpoint}"
@@ -815,11 +822,15 @@ class HttpTransport:
 
         self._write_dev_trace_payload(trace_data)
 
+        post_body: dict[str, Any] = trace_data
+        if self._pii_pseudonymizer is not None:
+            post_body = self._pii_pseudonymizer.pseudonymize_dict(trace_data)
+
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=trace_data,
+                json=post_body,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
@@ -955,11 +966,15 @@ class HttpTransport:
 
         self._write_dev_trace_payload(payload)
 
+        post_payload: dict[str, Any] = payload
+        if self._pii_pseudonymizer is not None:
+            post_payload = self._pii_pseudonymizer.pseudonymize_dict(payload)
+
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=payload,
+                json=post_payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )

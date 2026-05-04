@@ -61,6 +61,7 @@ DEFAULT_BATCH_TIMEOUT = 5.0
 DEFAULT_MAX_QUEUE_SIZE = 1000
 DEFAULT_MAX_SPANS_PER_TRACE = 1000
 DEFAULT_DEV_TRACES_DIR = ".noveum_trace_dev"
+DEFAULT_PII_SALT = "noveum-pii-default-salt"
 
 
 @dataclass
@@ -103,6 +104,8 @@ class SecurityConfig:
     custom_redaction_patterns: list[str] = field(default_factory=list)
     encrypt_data: bool = True
     data_residency: Optional[str] = None
+    pii_enabled: bool = False
+    pii_salt: str = DEFAULT_PII_SALT
 
 
 @dataclass
@@ -258,6 +261,8 @@ class Config:
                 "custom_redaction_patterns": self.security.custom_redaction_patterns,
                 "encrypt_data": self.security.encrypt_data,
                 "data_residency": self.security.data_residency,
+                "pii_enabled": self.security.pii_enabled,
+                "pii_salt": self.security.pii_salt,
             },
             "integrations": {
                 "langchain": self.integrations.langchain,
@@ -358,6 +363,8 @@ class Config:
                     ),
                     encrypt_data=security_data.get("encrypt_data", True),
                     data_residency=security_data.get("data_residency"),
+                    pii_enabled=security_data.get("pii_enabled", False),
+                    pii_salt=security_data.get("pii_salt", DEFAULT_PII_SALT),
                 )
             else:
                 # If security is not a dict, use default
@@ -523,6 +530,22 @@ def _load_from_environment() -> Config:
     dev_mode_env = os.getenv("NOVEUM_DEV_MODE")
     if dev_mode_env:
         config_data["dev_mode"] = dev_mode_env.lower() in ("true", "1", "yes")
+
+    pii_enabled_env = os.getenv("NOVEUM_PII_ENABLED")
+    if pii_enabled_env is not None:
+        if "security" not in config_data:
+            config_data["security"] = {}
+        config_data["security"]["pii_enabled"] = pii_enabled_env.lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+
+    pii_salt_env = os.getenv("NOVEUM_PII_SALT")
+    if pii_salt_env is not None:
+        if "security" not in config_data:
+            config_data["security"] = {}
+        config_data["security"]["pii_salt"] = pii_salt_env
 
     dev_traces_dir_env = os.getenv("NOVEUM_DEV_TRACES_DIR")
     if dev_traces_dir_env:

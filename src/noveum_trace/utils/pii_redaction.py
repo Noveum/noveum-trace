@@ -5,7 +5,10 @@ This module provides functions to detect and redact personally
 identifiable information from trace data.
 """
 
+import hashlib
+import hmac
 import re
+import unicodedata
 from typing import Any, Optional
 
 
@@ -250,3 +253,123 @@ def create_redaction_summary(original_text: str, redacted_text: str) -> dict[str
             1 - (len(redacted_text) / len(original_text)) if original_text else 0
         ),
     }
+
+
+class PiiPseudonymizer:
+    """
+    Deterministic pseudonymization of PII-like spans using HMAC-SHA256 + salt.
+
+    Uses spaCy ``en_core_web_sm`` when importable and the model is available;
+    otherwise relies on regex spans only. No mandatory dependency beyond the
+    standard library.
+    """
+
+    _NER_LABELS = frozenset({"PERSON", "GPE", "ORG", "LOC"})
+
+    # Aligned with ``redact_pii`` / ``detect_pii_types`` patterns in this module.
+    _RE_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+    _RE_PHONE = [
+        re.compile(r"\b\d{3}-\d{3}-\d{4}\b"),
+        re.compile(r"\b\(\d{3}\)\s*\d{3}-\d{4}\b"),
+        re.compile(r"\b\d{3}\.\d{3}\.\d{4}\b"),
+        re.compile(r"\b\d{10}\b"),
+    ]
+    _RE_CARD = re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b")
+    _RE_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+    _RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+    _RE_URL = re.compile(r"https?://[^\s]+")
+
+    def __init__(self, salt: str) -> None:
+        self._salt = salt
+        self._salt_bytes = salt.encode("utf-8")
+        self._nlp: Any = None
+        try:
+            import spacy
+
+            self._nlp = spacy.load("en_core_web_sm")
+        except (ImportError, OSError):
+            self._nlp = None
+
+    def _token(self, label: str, value: str) -> str:
+        """NFC-normalize ``value``, HMAC-SHA256(salt, value), return LABEL_ + first 5 hex."""
+        raw = value if isinstance(value, str) else str(value)
+        normalized = unicodedata.normalize("NFC", raw)
+        digest_hex = hmac.new(
+            self._salt_bytes,
+            normalized.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        prefix = label.strip().upper().replace(" ", "_")
+        return f"{prefix}_{digest_hex[:5]}"
+
+    def _regex_spans(self, text: str) -> list[tuple[int, int, str]]:
+        spans: list[tuple[int, int, str]] = []
+        for m in self._RE_EMAIL.finditer(text):
+            spans.append((m.start(), m.end(), "EMAIL"))
+        for cre in self._RE_PHONE:
+            for m in cre.finditer(text):
+                spans.append((m.start(), m.end(), "PHONE"))
+        for m in self._RE_SSN.finditer(text):
+            spans.append((m.start(), m.end(), "SSN"))
+        for m in self._RE_CARD.finditer(text):
+            spans.append((m.start(), m.end(), "CARD"))
+        for m in self._RE_IP.finditer(text):
+            spans.append((m.start(), m.end(), "IP"))
+        for m in self._RE_URL.finditer(text):
+            spans.append((m.start(), m.end(), "URL"))
+        return spans
+
+    def _ner_spans(self, text: str) -> list[tuple[int, int, str]]:
+        if self._nlp is None:
+            return []
+        doc = self._nlp(text)
+        out: list[tuple[int, int, str]] = []
+        for ent in doc.ents:
+            if ent.label_ in self._NER_LABELS and ent.start_char < ent.end_char:
+                out.append((ent.start_char, ent.end_char, ent.label_))
+        return out
+
+    @staticmethod
+    def _non_overlapping_longest_first(
+        spans: list[tuple[int, int, str]],
+    ) -> list[tuple[int, int, str]]:
+        """Keep non-overlapping spans; when spans overlap, prefer longest (then leftmost)."""
+        ordered = sorted(spans, key=lambda s: (-(s[1] - s[0]), s[0]))
+        accepted: list[tuple[int, int, str]] = []
+        for start, end, label in ordered:
+            if start >= end:
+                continue
+            if any(not (end <= a0 or start >= a1) for a0, a1, _ in accepted):
+                continue
+            accepted.append((start, end, label))
+        return accepted
+
+    def pseudonymize(self, text: str) -> str:
+        """
+        Replace detected PII spans with deterministic pseudonyms.
+
+        Overlapping spans are deduplicated so the longest span wins; replacements
+        are applied right-to-left to preserve indices.
+        """
+        if not isinstance(text, str):
+            text = str(text)
+        if not text:
+            return text
+
+        spans = self._ner_spans(text) + self._regex_spans(text)
+        kept = self._non_overlapping_longest_first(spans)
+        # Right-to-left by start index descending
+        for start, end, label in sorted(kept, key=lambda s: s[0], reverse=True):
+            fragment = text[start:end]
+            text = text[:start] + self._token(label, fragment) + text[end:]
+        return text
+
+    def pseudonymize_dict(self, data: Any) -> Any:
+        """Recursively walk dicts and lists; pseudonymize every string value."""
+        if isinstance(data, dict):
+            return {k: self.pseudonymize_dict(v) for k, v in data.items()}
+        if isinstance(data, list):
+            return [self.pseudonymize_dict(item) for item in data]
+        if isinstance(data, str):
+            return self.pseudonymize(data)
+        return data

@@ -1,11 +1,15 @@
 """Additional unit tests for HTTP transport to improve coverage."""
 
+import json
+import sys
+import types
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
-from noveum_trace.core.config import Config
+from noveum_trace.core.config import Config, SecurityConfig
 from noveum_trace.transport.http_transport import HttpTransport
 from noveum_trace.utils.exceptions import TransportError
 
@@ -397,3 +401,109 @@ class TestHttpTransportEdgeCases:
             assert f"{text_length} chars" in preview
         else:
             assert preview == response.text
+
+
+class TestHttpTransportPiiPseudonymization:
+    """PII pseudonymization on POST while dev JSON stays raw."""
+
+    @pytest.fixture(autouse=True)
+    def stub_spacy(self, monkeypatch):
+        class FakeDoc:
+            __slots__ = ("ents", "text")
+
+            def __init__(self, text: str) -> None:
+                self.text = text
+                self.ents: list = []
+
+        class FakeNlp:
+            def __call__(self, text: str) -> FakeDoc:
+                return FakeDoc(text)
+
+        fake_spacy = types.ModuleType("spacy")
+        fake_spacy.load = lambda *_a, **_k: FakeNlp()
+        monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
+
+    def test_send_request_dev_raw_post_pseudonymized(self, tmp_path):
+        config = Config.create(
+            api_key="k",
+            project="p",
+            endpoint="https://api.test.com",
+            dev_mode=True,
+            dev_traces_dir=str(tmp_path),
+            security=SecurityConfig(pii_enabled=True, pii_salt="salt-for-test"),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ok": True}
+        transport.session.post = Mock(return_value=mock_response)
+
+        trace_data = {
+            "trace_id": "abc123",
+            "name": "n",
+            "note": "email me@example.com ok",
+        }
+        transport._send_request(trace_data)
+
+        written = Path(tmp_path) / "abc123.json"
+        assert written.exists()
+        assert "me@example.com" in written.read_text(encoding="utf-8")
+
+        posted = transport.session.post.call_args.kwargs["json"]
+        assert "me@example.com" not in json.dumps(posted)
+        assert "EMAIL_" in json.dumps(posted)
+        assert trace_data["note"] == "email me@example.com ok"
+
+    def test_send_trace_batch_dev_raw_post_pseudonymized(self, tmp_path):
+        config = Config.create(
+            api_key="k",
+            project="p",
+            endpoint="https://api.test.com",
+            dev_mode=True,
+            dev_traces_dir=str(tmp_path),
+            security=SecurityConfig(pii_enabled=True, pii_salt="batch-salt"),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "{}"
+        mock_response.headers = {}
+        transport.session.post = Mock(return_value=mock_response)
+
+        traces = [{"trace_id": "t1", "note": "a@b.co"}]
+        with patch(
+            "noveum_trace.transport.http_transport.log_debug_enabled",
+            return_value=False,
+        ):
+            transport._send_trace_batch(traces)
+
+        assert "a@b.co" in (Path(tmp_path) / "t1.json").read_text(encoding="utf-8")
+
+        posted = transport.session.post.call_args.kwargs["json"]
+        assert "a@b.co" not in json.dumps(posted)
+        assert "EMAIL_" in json.dumps(posted)
+        assert traces[0]["note"] == "a@b.co"
+
+    def test_pii_disabled_posts_original_body(self):
+        config = Config.create(
+            api_key="k",
+            project="p",
+            endpoint="https://api.test.com",
+            security=SecurityConfig(pii_enabled=False),
+        )
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+        assert transport._pii_pseudonymizer is None
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ok": True}
+        transport.session.post = Mock(return_value=mock_response)
+
+        trace_data = {"trace_id": "x", "note": "u@v.co"}
+        transport._send_request(trace_data)
+        posted = transport.session.post.call_args.kwargs["json"]
+        assert posted == trace_data
+        assert "u@v.co" in posted["note"]

@@ -22,6 +22,7 @@ from noveum_trace.core.client import NoveumClient  # noqa: E402
 from noveum_trace.core.config import Config  # noqa: E402
 from noveum_trace.transport.batch_processor import BatchProcessor  # noqa: E402
 from noveum_trace.transport.http_transport import HttpTransport  # noqa: E402
+from noveum_trace.utils.pii_redaction import PiiPseudonymizer  # noqa: E402
 
 # Global registry to track all clients created during tests
 _test_clients: list[NoveumClient] = []
@@ -171,6 +172,10 @@ def mock_transport_completely(request):
         self.batch_processor.flush = Mock()
         self.batch_processor.shutdown = Mock()
         self._shutdown = False
+        if self.config.security.pii_enabled:
+            self._pii_pseudonymizer = PiiPseudonymizer(self.config.security.pii_salt)
+        else:
+            self._pii_pseudonymizer = None
 
     def mock_http_transport_export(self, trace_data):
         """Mock HttpTransport.export_trace"""

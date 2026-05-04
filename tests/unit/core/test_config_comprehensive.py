@@ -20,6 +20,7 @@ from noveum_trace.core.config import (
     DEFAULT_ENDPOINT,
     DEFAULT_MAX_QUEUE_SIZE,
     DEFAULT_MAX_SPANS_PER_TRACE,
+    DEFAULT_PII_SALT,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_TIMEOUT,
     Config,
@@ -119,6 +120,8 @@ class TestSecurityConfig:
         assert config.custom_redaction_patterns == []
         assert config.encrypt_data is True
         assert config.data_residency is None
+        assert config.pii_enabled is False
+        assert config.pii_salt == DEFAULT_PII_SALT
 
     def test_security_config_custom_values(self):
         """Test SecurityConfig with custom values."""
@@ -128,12 +131,16 @@ class TestSecurityConfig:
             custom_redaction_patterns=patterns,
             encrypt_data=False,
             data_residency="EU",
+            pii_enabled=True,
+            pii_salt="custom-salt",
         )
 
         assert config.redact_pii is True
         assert config.custom_redaction_patterns == patterns
         assert config.encrypt_data is False
         assert config.data_residency == "EU"
+        assert config.pii_enabled is True
+        assert config.pii_salt == "custom-salt"
 
 
 class TestIntegrationConfig:
@@ -315,6 +322,8 @@ class TestConfig:
         assert "tracing" in data
         assert "transport" in data
         assert "security" in data
+        assert data["security"]["pii_enabled"] is False
+        assert data["security"]["pii_salt"] == DEFAULT_PII_SALT
         assert "integrations" in data
 
     def test_config_from_dict_basic(self):
@@ -403,6 +412,8 @@ class TestConfig:
         assert config.transport.retry_attempts == 5
         assert config.security.redact_pii is True
         assert config.security.custom_redaction_patterns == ["email", "phone"]
+        assert config.security.pii_enabled is False
+        assert config.security.pii_salt == DEFAULT_PII_SALT
         assert config.integrations.openai == {"enabled": True}
         assert config.integrations.langchain == {"enabled": True, "auto_trace": True}
 
@@ -509,6 +520,8 @@ class TestConfigurationLoading:
                 assert config.api_key is None
                 assert config.environment == "development"
                 assert config.debug is False
+                assert config.security.pii_enabled is False
+                assert config.security.pii_salt == DEFAULT_PII_SALT
 
     def test_load_from_environment_with_variables(self):
         """Test loading from environment with variables set."""
@@ -551,6 +564,31 @@ class TestConfigurationLoading:
                 ):
                     config = _load_from_environment()
                     assert config.debug is False
+
+    def test_load_from_environment_pii_settings(self):
+        """NOVEUM_PII_ENABLED / NOVEUM_PII_SALT map into security config."""
+        with patch.dict(
+            os.environ,
+            {
+                "NOVEUM_PII_ENABLED": "true",
+                "NOVEUM_PII_SALT": "env-salt-value",
+            },
+            clear=True,
+        ):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_enabled is True
+                assert config.security.pii_salt == "env-salt-value"
+
+        with patch.dict(os.environ, {"NOVEUM_PII_ENABLED": "false"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_enabled is False
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+                assert config.security.pii_salt == DEFAULT_PII_SALT
 
     def test_load_from_environment_with_config_file(self):
         """Test loading from environment with config file present."""
