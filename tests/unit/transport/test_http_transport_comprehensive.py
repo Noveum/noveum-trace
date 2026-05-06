@@ -1193,6 +1193,24 @@ class TestHttpTransportCompressionAndHealth:
 
             assert result is False
 
+    @patch("noveum_trace.transport.http_transport.log_error_always")
+    def test_health_check_rate_limit(self, mock_log_error):
+        """Health check treats HTTP 429 like other Noveum API rate limits."""
+        config = Config.create(endpoint="https://api.test.com")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            mock_response = Mock()
+            mock_response.status_code = 429
+
+            transport.session.get = Mock(return_value=mock_response)
+
+            result = transport.health_check()
+
+            assert result is False
+            mock_log_error.assert_called_once()
+
     def test_health_check_exception(self):
         """Test health check with exception."""
         config = Config.create(endpoint="https://api.test.com")
