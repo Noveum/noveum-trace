@@ -551,6 +551,9 @@ class HttpTransport:
             backoff_factor=self.config.transport.retry_backoff,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["POST"],
+            # Ensure we receive the final response (e.g., 429) after retries,
+            # so higher-level handlers can inspect status_code and log properly.
+            raise_on_status=False,
         )
 
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -1073,6 +1076,10 @@ class HttpTransport:
                 trace_count=len(traces),
             )
             raise TransportError(f"HTTP error: {e}") from e
+        except TransportError:
+            # Preserve specific TransportError messages (401/403/429 branches)
+            # without wrapping or double-logging.
+            raise
         except Exception as e:
             log_error_always(
                 logger,
@@ -1166,6 +1173,8 @@ class HttpTransport:
                 audio_uuid=audio_uuid,
             )
             raise TransportError(f"Audio upload timeout: {e}") from e
+        except TransportError:
+            raise
         except Exception as e:
             log_error_always(
                 logger,
@@ -1278,6 +1287,8 @@ class HttpTransport:
                 image_uuid=image_uuid,
             )
             raise TransportError(f"Image upload timeout: {e}") from e
+        except TransportError:
+            raise
         except Exception as e:
             log_error_always(
                 logger,

@@ -151,6 +151,8 @@ class TestHttpTransportSessionCreation:
             if not isinstance(transport.session, Mock):
                 assert isinstance(http_adapter, HTTPAdapter)
                 assert isinstance(https_adapter, HTTPAdapter)
+                assert http_adapter.max_retries.raise_on_status is False
+                assert 429 in set(http_adapter.max_retries.status_forcelist)
 
 
 class TestHttpTransportContentTypeHeaders:
@@ -1138,6 +1140,84 @@ class TestHttpTransportSendBatch:
             # assert "Successfully sent batch of 2 traces" in caplog.text
             # Just verify the request was made
             transport.session.post.assert_called_once()
+
+    @patch("noveum_trace.transport.http_transport.log_error_always")
+    def test_send_trace_batch_rate_limit_error(self, mock_log_error):
+        """Trace batch POST returns 429 → TransportError and a single log_error_always."""
+        config = Config.create()
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            mock_response = Mock()
+            mock_response.status_code = 429
+
+            transport.session.post = Mock(return_value=mock_response)
+
+            traces = [{"trace_id": "test-1", "name": "n", "spans": []}]
+
+            with pytest.raises(TransportError, match="Rate limit exceeded"):
+                transport._send_trace_batch(traces)
+
+        mock_log_error.assert_called_once()
+
+
+class TestHttpTransportMediaRateLimitHandling:
+    """Ensure media 429 errors are not wrapped by generic handlers."""
+
+    @patch("noveum_trace.transport.http_transport.log_error_always")
+    def test_send_single_audio_rate_limit_not_wrapped(self, mock_log_error):
+        config = Config.create(api_key="test-key")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+            transport.session = Mock()
+            transport.session.headers = {"Authorization": "Bearer test-key"}
+            mock_response = Mock()
+            mock_response.status_code = 429
+            transport.session.post = Mock(return_value=mock_response)
+
+            audio_item = {
+                "audio_uuid": "au-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "audio_data": b"wav-bytes",
+                "timestamp": "2024-01-01T00:00:00Z",
+                "metadata": {},
+            }
+
+            with pytest.raises(TransportError, match="Rate limit exceeded"):
+                transport._send_single_audio(audio_item)
+
+        mock_log_error.assert_called_once()
+        assert "while uploading audio" in mock_log_error.call_args[0][1]
+
+    @patch("noveum_trace.transport.http_transport.log_error_always")
+    def test_send_single_image_rate_limit_not_wrapped(self, mock_log_error):
+        config = Config.create(api_key="test-key")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+            transport.session = Mock()
+            transport.session.headers = {"Authorization": "Bearer test-key"}
+            mock_response = Mock()
+            mock_response.status_code = 429
+            transport.session.post = Mock(return_value=mock_response)
+
+            image_item = {
+                "image_uuid": "img-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "image_data": b"jpeg-bytes",
+                "timestamp": "2024-01-01T00:00:00Z",
+                "metadata": {"format": "jpeg"},
+            }
+
+            with pytest.raises(TransportError, match="Rate limit exceeded"):
+                transport._send_single_image(image_item)
+
+        mock_log_error.assert_called_once()
+        assert "while uploading image" in mock_log_error.call_args[0][1]
 
 
 class TestHttpTransportCompressionAndHealth:
