@@ -551,6 +551,9 @@ class HttpTransport:
             backoff_factor=self.config.transport.retry_backoff,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["POST"],
+            # Ensure we receive the final response (e.g., 429) after retries,
+            # so higher-level handlers can inspect status_code and log properly.
+            raise_on_status=False,
         )
 
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -866,7 +869,10 @@ class HttpTransport:
                 raise TransportError("Access forbidden - check project permissions")
             elif response.status_code == 429:
                 log_error_always(
-                    logger, "Rate limit exceeded", status=response.status_code, url=url
+                    logger,
+                    "Rate limit exceeded/Quota exceeded (HTTP 429) from Noveum API",
+                    status=response.status_code,
+                    url=url,
                 )
                 raise TransportError("Rate limit exceeded")
             else:
@@ -1021,7 +1027,7 @@ class HttpTransport:
             elif response.status_code == 429:
                 log_error_always(
                     logger,
-                    "Rate limit exceeded",
+                    "Rate limit exceeded (HTTP 429) from Noveum API",
                     status=response.status_code,
                     url=url,
                     trace_count=len(traces),
@@ -1070,6 +1076,10 @@ class HttpTransport:
                 trace_count=len(traces),
             )
             raise TransportError(f"HTTP error: {e}") from e
+        except TransportError:
+            # Preserve specific TransportError messages (401/403/429 branches)
+            # without wrapping or double-logging.
+            raise
         except Exception as e:
             log_error_always(
                 logger,
@@ -1137,6 +1147,15 @@ class HttpTransport:
 
             if response.status_code in [200, 201]:
                 logger.info(f"✅ Successfully sent audio {audio_uuid}")
+            elif response.status_code == 429:
+                log_error_always(
+                    logger,
+                    "Rate limit exceeded (HTTP 429) while uploading audio",
+                    status=response.status_code,
+                    url=url,
+                    audio_uuid=audio_uuid,
+                )
+                raise TransportError("Rate limit exceeded")
             else:
                 log_error_always(
                     logger,
@@ -1154,6 +1173,8 @@ class HttpTransport:
                 audio_uuid=audio_uuid,
             )
             raise TransportError(f"Audio upload timeout: {e}") from e
+        except TransportError:
+            raise
         except Exception as e:
             log_error_always(
                 logger,
@@ -1240,6 +1261,15 @@ class HttpTransport:
 
             if response.status_code in [200, 201]:
                 logger.info(f"✅ Successfully sent image {image_uuid}")
+            elif response.status_code == 429:
+                log_error_always(
+                    logger,
+                    "Rate limit exceeded (HTTP 429) while uploading image",
+                    status=response.status_code,
+                    url=url,
+                    image_uuid=image_uuid,
+                )
+                raise TransportError("Rate limit exceeded")
             else:
                 log_error_always(
                     logger,
@@ -1257,6 +1287,8 @@ class HttpTransport:
                 image_uuid=image_uuid,
             )
             raise TransportError(f"Image upload timeout: {e}") from e
+        except TransportError:
+            raise
         except Exception as e:
             log_error_always(
                 logger,
@@ -1295,16 +1327,24 @@ class HttpTransport:
             log_trace_flow(logger, "Performing health check", url=url)
 
             response = self.session.get(url, timeout=10)
-            is_healthy = response.status_code == 200
 
-            if is_healthy:
+            if response.status_code == 200:
                 logger.debug(f"✅ Health check passed for {url}")
-            else:
-                logger.warning(
-                    f"⚠️  Health check failed for {url} (status: {response.status_code})"
-                )
+                return True
 
-            return is_healthy
+            if response.status_code == 429:
+                log_error_always(
+                    logger,
+                    "Rate limit exceeded (HTTP 429) from Noveum API during health check",
+                    status=response.status_code,
+                    url=url,
+                )
+                return False
+
+            logger.warning(
+                f"⚠️  Health check failed for {url} (status: {response.status_code})"
+            )
+            return False
         except Exception as e:
             logger.warning(
                 f"⚠️  Health check failed for {self.config.transport.endpoint}: {e}"
