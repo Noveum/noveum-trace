@@ -870,7 +870,7 @@ class HttpTransport:
             elif response.status_code == 429:
                 log_error_always(
                     logger,
-                    "Rate limit exceeded (HTTP 429) from Noveum API",
+                    "Rate limit exceeded/Quota exceeded (HTTP 429) from Noveum API",
                     status=response.status_code,
                     url=url,
                 )
