@@ -47,6 +47,7 @@ from noveum_trace.integrations.pipecat.pipecat_utils import (
     merge_llm_pending_stash,
     serialize_tool_choice_field,
     serialize_tools_field,
+    system_prompt_from_messages_json,
     truncate_for_trace_attr,
 )
 
@@ -227,6 +228,15 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 val = settings.get(settings_key)
                 if val is not None:
                     attributes[attr_key] = val
+
+        # Fallback: if _settings had no system prompt, scan the pending messages
+        # stash (populated by LLMContextFrame / LLMMessagesFrame).
+        if "llm.system_prompt" not in attributes:
+            prompt = system_prompt_from_messages_json(
+                self._pending_llm_context.get("messages") or ""
+            )
+            if prompt:
+                attributes["llm.system_prompt"] = prompt
 
         # Flush stashed context data (Path A + Path B frames)
         pending = self._pending_llm_context

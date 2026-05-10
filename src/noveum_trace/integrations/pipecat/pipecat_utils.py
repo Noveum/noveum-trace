@@ -23,6 +23,15 @@ from noveum_trace.integrations.pipecat.pipecat_constants import (
 
 logger = logging.getLogger(__name__)
 
+# Try to import the openai NOT_GIVEN sentinel directly so we can use identity
+# comparison instead of the fragile repr()-based string check.  Falls back to
+# None (meaning: no sentinel is known) when openai is not installed or the
+# sentinel is renamed in a future version.
+try:
+    from openai._types import NOT_GIVEN as _OPENAI_NOT_GIVEN
+except ImportError:
+    _OPENAI_NOT_GIVEN = None
+
 
 # ---------------------------------------------------------------------------
 # Service settings extraction
@@ -42,6 +51,8 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
         if raw is None:
             return settings
 
+        # Falsy guard is intentional for model/voice/language — an empty string is
+        # not a useful value for these fields and should be treated as absent.
         if hasattr(raw, "model") and raw.model:
             settings["model"] = str(raw.model)
 
@@ -52,10 +63,12 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
             lang = raw.language
             settings["language"] = str(lang.value if hasattr(lang, "value") else lang)
 
-        # LLM system instruction
+        # `is not None` (not falsy) is deliberate here: an empty-string system prompt
+        # is a valid operator intent (explicitly clearing the default instruction) and
+        # must be recorded, unlike an absent model name above.
         for attr in ("system_instruction", "system_prompt"):
             val = getattr(raw, attr, None)
-            if val:
+            if val is not None:
                 settings["system_instruction"] = str(val)
                 break
 
@@ -113,13 +126,10 @@ def extract_llm_context_data(context: Any) -> dict[str, Any]:
     try:
         tools = getattr(context, "tools", None)
         # Pipecat uses openai's NOT_GIVEN sentinel; it is falsy-like but not None
-        if tools is not None and tools is not False:
-            # Check it is not the NOT_GIVEN sentinel (has no standard bool)
-            tools_repr = repr(tools)
-            if "NOT_GIVEN" not in tools_repr:
-                tools_list = _resolve_tools_to_list(tools)
-                if tools_list:
-                    result["tools"] = json.dumps(tools_list, default=str)
+        if tools is not None and tools is not False and not _is_not_given(tools):
+            tools_list = _resolve_tools_to_list(tools)
+            if tools_list:
+                result["tools"] = json.dumps(tools_list, default=str)
     except Exception as e:
         logger.debug("Failed to serialise LLM tools: %s", e)
 
@@ -133,6 +143,29 @@ def merge_llm_pending_stash(
     for key, val in extracted.items():
         if val:
             existing[key] = val
+
+
+def system_prompt_from_messages_json(json_str: str) -> str | None:
+    """
+    Return the ``system`` role content from a JSON-encoded messages list.
+
+    Scans the list for the first message with ``role == "system"`` and returns
+    its content as a string. Returns ``None`` when the input is absent, the
+    JSON is invalid, or no system message is found.
+    """
+    if not json_str:
+        return None
+    try:
+        for msg in json.loads(json_str):
+            if not (isinstance(msg, dict) and msg.get("role") == "system"):
+                continue
+            content = msg.get("content") or ""
+            if content:
+                return content if isinstance(content, str) else json.dumps(content)
+            break
+    except Exception:
+        pass
+    return None
 
 
 def json_dumps_messages(messages: Any) -> str | None:
@@ -208,14 +241,26 @@ def _coerce_function_schemas(items: list[Any]) -> list[Any]:
     return result
 
 
+def _is_not_given(value: Any) -> bool:
+    """
+    Return True when *value* is the openai ``NOT_GIVEN`` sentinel.
+
+    Uses identity comparison when the sentinel was successfully imported;
+    falls back to a repr()-based check so the guard works even when the
+    import failed (e.g. older openai versions or pipecat without openai).
+    """
+    if _OPENAI_NOT_GIVEN is not None:
+        return value is _OPENAI_NOT_GIVEN
+    return "NOT_GIVEN" in repr(value)
+
+
 def serialize_tools_field(tools: Any) -> str | None:
     """
     Serialise Pipecat ``LLMSetToolsFrame.tools`` (list, ``ToolsSchema``, or sentinel).
     """
     if tools is None or tools is False:
         return None
-    tools_repr = repr(tools)
-    if "NOT_GIVEN" in tools_repr:
+    if _is_not_given(tools):
         return None
     try:
         tools_list = _resolve_tools_to_list(tools)
@@ -457,22 +502,6 @@ def extract_stt_confidence(result: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# Frame text extraction
-# ---------------------------------------------------------------------------
-
-
-def extract_frame_text(frame: Any) -> Optional[str]:
-    """Return text content from any text-carrying frame type."""
-    try:
-        text = getattr(frame, "text", None)
-        if text is not None:
-            return str(text)
-    except Exception:
-        pass
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Function call extraction
 # ---------------------------------------------------------------------------
 
@@ -512,26 +541,6 @@ def extract_function_call_data(frame: Any) -> dict[str, Any]:
         logger.debug("Failed to extract function call data: %s", e)
 
     return data
-
-
-# ---------------------------------------------------------------------------
-# Processor info
-# ---------------------------------------------------------------------------
-
-
-def serialize_processor_info(processor: Any) -> dict[str, Any]:
-    """Return processor name, class, and settings probe."""
-    info: dict[str, Any] = {}
-    try:
-        if hasattr(processor, "name"):
-            info["name"] = str(processor.name)
-        info["class"] = type(processor).__name__
-        settings = extract_service_settings(processor)
-        if settings:
-            info["settings"] = settings
-    except Exception as e:
-        logger.debug("Failed to serialize processor info: %s", e)
-    return info
 
 
 # ---------------------------------------------------------------------------

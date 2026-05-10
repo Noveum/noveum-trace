@@ -136,10 +136,21 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
         # Close any orphaned span from a previous utterance that never got a transcript
         if self._active_stt_span is not None:
             logger.debug("Closing orphaned STT span before new VAD utterance")
-
-            self._active_stt_span.attributes["pipecat_span_status"] = "cancelled"
-            self._active_stt_span.finish()
+            orphan = self._active_stt_span
+            orphan.attributes["stt.was_cancelled"] = True
+            # _stt_interim_results and _vad_speech_start_time still hold values
+            # from the previous utterance here — they are reset in the new-span
+            # creation block below (after span = self._create_child_span), NOT here.
+            if self._stt_interim_results:
+                last_interim = self._stt_interim_results[-1]
+                orphan.attributes["stt.partial_transcript"] = last_interim.get("text", "")
+                orphan.attributes["stt.interim_count"] = len(self._stt_interim_results)
+            if self._vad_speech_start_time is not None:
+                elapsed = asyncio.get_running_loop().time() - self._vad_speech_start_time
+                orphan.attributes["stt.vad_to_cancel_ms"] = elapsed * 1000.0
+            orphan.attributes["pipecat_span_status"] = "cancelled"
             self._active_stt_span = None
+            orphan.finish()
 
         # Ensure a turn is open
 

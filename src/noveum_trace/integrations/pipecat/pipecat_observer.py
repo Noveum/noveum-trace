@@ -251,6 +251,7 @@ class NoveumTraceObserver(
             "total_output_tokens": 0,
             "total_cost": 0.0,
             "turn_count": 0,
+            "interrupted_turns": 0,
         }
 
         # ------------------------------------------------------------------ #
@@ -318,6 +319,36 @@ class NoveumTraceObserver(
 
         Safe to call multiple times; repeated calls with the same observers are
         no-ops.
+
+        **Full-conversation audio checklist** (e.g. Exotel / telephony pipelines):
+
+        1. Set ``record_audio=True`` on this observer (default is ``True``).
+        2. Add ``AudioBufferProcessor(num_channels=2)`` **after** ``transport.output()``
+           in your pipeline::
+
+               pipeline = Pipeline([
+                   transport.input(),
+                   stt,                       # audio_passthrough=True (default)
+                   user_aggregator,
+                   mandate_processor,         # MUST re-emit InputAudioRawFrame downstream!
+                   user_idle,
+                   tts,
+                   transport.output(),
+                   AudioBufferProcessor(num_channels=2),  # ← here
+               ])
+
+        3. Ensure every custom processor between ``transport.input()`` and
+           ``AudioBufferProcessor`` **passes ``InputAudioRawFrame`` downstream**
+           (i.e. calls ``await self.push_frame(frame, direction)`` for audio frames).
+           Dropping these frames is the most common cause of a missing or silent user
+           channel in the stereo recording.
+        4. Call ``await observer.attach_to_task(task)`` before ``runner.run(task)``.
+           This auto-detects the ``AudioBufferProcessor``, calls ``start_recording()``,
+           and wires the ``on_audio_data`` callback that builds the
+           ``pipecat.full_conversation`` WAV on session end.
+        5. The ``pipecat.full_conversation`` span is created automatically when the
+           pipeline receives an ``EndFrame`` or ``CancelFrame``.  No extra wiring is
+           needed.
         """
         if task is None:
             return
@@ -388,7 +419,14 @@ class NoveumTraceObserver(
             await self._attach_audio_buffer_from_pipeline(task)
 
     def _iter_nested_processors(self, node: Any) -> Iterator[Any]:
-        """Depth-first walk of Pipecat compound processors (Pipeline inside Pipeline)."""
+        """
+        Depth-first walk of Pipecat compound processors (Pipeline inside Pipeline).
+
+        ``Pipeline`` stores its processors in ``._processors`` (private) as of
+        pipecat 0.0.89.  The public ``processors`` attribute is checked first to
+        remain forward-compatible should pipecat ever expose a stable API; the
+        private fallback handles current versions.
+        """
         procs = (
             getattr(node, "processors", None)
             or getattr(node, "_processors", None)
@@ -858,7 +896,11 @@ class NoveumTraceObserver(
         """
         End all active spans, finish the trace, and flush the client.
 
-        Safe to call multiple times (guarded by ``_trace`` ``None``-check).
+        Safe to call multiple times. The trace reference is claimed atomically
+        (before any ``await``) so concurrent calls — e.g. ``EndFrame`` handler
+        racing with ``on_pipeline_finished`` — both pass the ``None`` guard but
+        only the first one proceeds; the second returns immediately after finding
+        ``_trace`` is ``None``.
         """
         if self._trace is None:
             logger.debug(
@@ -866,10 +908,16 @@ class NoveumTraceObserver(
             )
             return
 
+        # Claim the trace reference immediately so any concurrent call that
+        # also passed the guard above will see None and exit cleanly on the
+        # next line without racing through the rest of this method.
+        trace = self._trace
+        self._trace = None
+
         logger.debug(
             "_finish_conversation starting (cancelled=%s, trace_id=%s)",
             cancelled,
-            getattr(self._trace, "trace_id", "<unknown>"),
+            getattr(trace, "trace_id", "<unknown>"),
         )
 
         await self._cancel_turn_end_timer()
@@ -892,7 +940,10 @@ class NoveumTraceObserver(
         self._stt_first_text_latency_recorded = False
         self._stt_audio_buffer.clear()
 
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
+        active_spans: list[Any] = [
+            s for s in [self._active_llm_span, self._active_tts_span] if s is not None
+        ]
+        for span in active_spans:
             if not span.is_finished():
                 span.attributes["pipecat_span_status"] = (
                     "cancelled" if cancelled else "ok"
@@ -914,10 +965,14 @@ class NoveumTraceObserver(
         self._pending_turn_eou_metrics.clear()
 
         if self._current_turn_span is not None:
-            await self._end_current_turn(was_interrupted=cancelled)
+            # Do NOT pass cancelled=True here.  A transport/task shutdown (CancelFrame)
+            # is not a user barge-in and must not inflate conversation.barge_in_rate or
+            # conversation.interrupted_turn_count.  The cancellation is already captured
+            # at the trace level via pipecat_span_status="cancelled" below.
+            await self._end_current_turn(was_interrupted=False)
 
         await self._await_audio_buffer_pending_handlers()
-        await self._upload_full_conversation_audio()
+        await self._upload_full_conversation_audio(trace)
 
         # Annotate trace with conversation summary
         summary: dict[str, Any] = {}
@@ -931,22 +986,25 @@ class NoveumTraceObserver(
             ]
         if self._metrics_accumulator.get("total_cost"):
             summary["conversation.total_cost"] = self._metrics_accumulator["total_cost"]
-        if self._metrics_accumulator.get("turn_count"):
-            summary["conversation.turn_count"] = self._metrics_accumulator["turn_count"]
+        turn_count = self._metrics_accumulator.get("turn_count", 0)
+        if turn_count:
+            summary["conversation.turn_count"] = turn_count
+        interrupted = self._metrics_accumulator.get("interrupted_turns", 0)
+        if turn_count > 0:
+            summary["conversation.barge_in_rate"] = round(interrupted / turn_count, 3)
+            # Only written when there were actual interruptions — avoids noise on clean
+            # conversations where the value would always be 0.
+            if interrupted > 0:
+                summary["conversation.interrupted_turn_count"] = interrupted
         if self._transcription_buffer:
             summary["conversation.last_user_input"] = " ".join(
                 self._transcription_buffer[-5:]
             )
 
         if summary:
-            self._trace.set_attributes(summary)
+            trace.set_attributes(summary)
 
-        self._trace.attributes["pipecat_span_status"] = (
-            "cancelled" if cancelled else "ok"
-        )
-
-        trace = self._trace
-        self._trace = None
+        trace.attributes["pipecat_span_status"] = "cancelled" if cancelled else "ok"
 
         try:
             client = self._get_client()
@@ -971,13 +1029,18 @@ class NoveumTraceObserver(
             "total_output_tokens": 0,
             "total_cost": 0.0,
             "turn_count": 0,
+            "interrupted_turns": 0,
         }
         self._transcription_buffer = []
         self._llm_text_buffer.clear()
+        self._tts_text_buffer.clear()
+        self._tts_audio_buffer.clear()
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()
         self._pending_llm_context.clear()
+        # Release task references so finished PipelineTask objects can be garbage collected.
+        self._registered_pipeline_tasks.clear()
         # Reset stored ABP so a new PipelineTask can attach the correct processor.
         self._audio_buffer_processor = None
         self._abp_is_recording = False
@@ -1009,17 +1072,21 @@ class NoveumTraceObserver(
         if pending:
             await asyncio.wait(pending)
 
-    async def _upload_full_conversation_audio(self) -> None:
+    async def _upload_full_conversation_audio(self, trace: Any) -> None:
         """
         Build a WAV from the PCM delivered by ``AudioBufferProcessor`` and upload
         it as a dedicated ``pipecat.full_conversation`` span.
+
+        Accepts ``trace`` as an argument (rather than reading ``self._trace``) so
+        that this method remains safe to call after ``_finish_conversation`` has
+        already claimed and cleared ``self._trace``.
 
         Mirrors ``livekit_session._upload_full_conversation_audio`` so that the
         Noveum dashboard can treat both integrations identically.
         """
         if not self._record_audio:
             return
-        if self._trace is None:
+        if trace is None:
             return
 
         # Always create the span so the dashboard has a stable place to look,
@@ -1039,7 +1106,7 @@ class NoveumTraceObserver(
                 "pipecat_span_status_message": missing_reason,
             }
             try:
-                span = self._trace.create_span(
+                span = trace.create_span(
                     name="pipecat.full_conversation",
                     attributes=missing_attributes,
                 )
@@ -1047,7 +1114,7 @@ class NoveumTraceObserver(
                     logger.warning("Could not create pipecat.full_conversation span")
                     return
                 span.attributes["pipecat_span_status"] = "error"
-                self._trace.finish_span(span.span_id)
+                trace.finish_span(span.span_id)
             except Exception as e:
                 logger.warning(
                     "Failed to create pipecat.full_conversation missing span: %s",
@@ -1093,7 +1160,7 @@ class NoveumTraceObserver(
                 attributes["full_conversation.audio_channel_left"] = "user"
                 attributes["full_conversation.audio_channel_right"] = "bot"
 
-            span = self._trace.create_span(
+            span = trace.create_span(
                 name="pipecat.full_conversation",
                 attributes=attributes,
             )
@@ -1137,7 +1204,7 @@ class NoveumTraceObserver(
                 raise
             finally:
                 span.attributes["pipecat_span_status"] = "ok" if upload_ok else "error"
-                self._trace.finish_span(span.span_id)
+                trace.finish_span(span.span_id)
 
         except Exception as e:
             logger.warning(

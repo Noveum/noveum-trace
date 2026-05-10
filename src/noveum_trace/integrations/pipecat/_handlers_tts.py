@@ -147,10 +147,10 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
                     upload_ok = False
                 if upload_ok:
                     span.attributes["tts.audio_uuid"] = audio_uuid
-                    self._tts_audio_buffer.clear()
                 else:
                     tts_status = "upload_failed"
 
             span.attributes["pipecat_span_status"] = tts_status
         finally:
+            self._tts_audio_buffer.clear()
             span.finish()
