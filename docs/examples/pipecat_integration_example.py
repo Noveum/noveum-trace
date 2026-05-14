@@ -12,10 +12,13 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
+    Frame,
     FunctionCallResultProperties,
     LLMRunFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -204,6 +207,44 @@ transport_params = {
 }
 
 
+class STTCustomSpanProcessor(FrameProcessor):
+    """Adds a custom Noveum span for each final STT transcription.
+
+    Sits immediately after the STT service in the pipeline. For every
+    TranscriptionFrame that arrives it opens a span on the active Noveum
+    trace, records transcript metadata, then finishes the span before
+    forwarding the frame downstream.
+
+    Receives the observer by reference so it can read _trace directly —
+    Pipecat runs each processor in its own asyncio Task, so contextvars
+    set by the observer are not visible here via get_current_trace().
+    """
+
+    def __init__(self, observer: "NoveumTraceObserver"):
+        super().__init__()
+        self._noveum_observer = observer
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TranscriptionFrame):
+            trace = self._noveum_observer._trace
+            if trace is not None:
+                span = trace.create_span(
+                    name="custom.stt.transcription",
+                    attributes={
+                        "stt.transcript": frame.text,
+                        "stt.user_id": frame.user_id,
+                        "stt.language": str(frame.language) if frame.language else None,
+                        "stt.word_count": len(frame.text.split()),
+                        "stt.finalized": frame.finalized,
+                    },
+                )
+                span.finish()
+
+        await self.push_frame(frame, direction)
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info("Starting drive-thru order bot")
 
@@ -324,10 +365,16 @@ If they ask for something not on the menu, politely let them know and suggest al
     # pipecat.full_conversation span at the end of the session.
     audio_buffer = AudioBufferProcessor(num_channels=2)
 
+    # Observer must be created first so the processor can hold a reference to
+    # its _trace field (contextvars don't cross asyncio Task boundaries).
+    trace_obs = NoveumTraceObserver(record_audio=True)
+    stt_span_processor = STTCustomSpanProcessor(trace_obs)
+
     pipeline = Pipeline(
         [
             transport.input(),  # Transport user input
             stt,  # Speech-to-Text
+            stt_span_processor,  # Custom Noveum span per transcription
             user_aggregator,  # User responses
             llm,  # LLM with function calling
             tts,  # Text-to-Speech
@@ -336,8 +383,6 @@ If they ask for something not on the menu, politely let them know and suggest al
             audio_buffer,  # Full-conversation stereo recording
         ]
     )
-
-    trace_obs = NoveumTraceObserver(record_audio=True)
 
     task = PipelineTask(
         pipeline,
