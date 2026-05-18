@@ -10,7 +10,7 @@ Pipecat runs every processor in the pipeline as its own asyncio Task. Noveum's `
 
 This means:
 
-```
+```text
 NoveumTraceObserver task  →  creates trace, calls set_current_trace(trace)
 YourCustomProcessor task  →  calls get_current_trace() → returns None  ❌
 ```
@@ -108,7 +108,7 @@ await trace_obs.attach_to_task(task)
 
 Custom spans created this way share the same `trace_id` as all the Pipecat spans. They appear as top-level children of the trace (siblings of the turn spans), because the observer does not push individual turn/LLM spans onto the ContextVar stack.
 
-```
+```text
 pipecat.conversation  (trace root)
 ├── pipecat.turn
 │   ├── pipecat.stt
