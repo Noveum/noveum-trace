@@ -20,6 +20,7 @@ class _PipecatObserverState:
 
     _trace_name_prefix: str
     _record_audio: bool
+    _record_raw_input_audio: bool
     _capture_text: bool
     _capture_function_calls: bool
     _turn_end_timeout_secs: float
@@ -50,6 +51,9 @@ class _PipecatObserverState:
     _llm_thought_signatures_list: list[str]
 
     _stt_audio_buffer: list[Any]
+    _stt_raw_audio_buffer: list[Any]
+    _pipeline_has_stt: bool
+    _warned_no_stt_for_raw: bool
     _tts_audio_buffer: list[Any]
     _tts_source_processor: Any
 
@@ -99,6 +103,8 @@ class _PipecatObserverMethods(Protocol):
 
     async def _finish_conversation(self, cancelled: bool = False) -> None: ...
 
+    def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...
+
 
 # Do not inherit _PipecatObserverMethods (Protocol) at runtime: it inserts
 # typing.Protocol / Generic before BaseObserver in NoveumTraceObserver's MRO, so
@@ -121,3 +127,5 @@ class _PipecatObserverMixinBase(_PipecatObserverState):
         async def _start_new_turn(self, turn_number: Optional[int] = None) -> None: ...
 
         async def _finish_conversation(self, cancelled: bool = False) -> None: ...
+
+        def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...

@@ -126,6 +126,141 @@ async def test_handle_interim_transcription_appends_and_event(ff) -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_transcription_empty_raw_buffer_not_upload_failed(ff) -> None:
+    """Stock transport (no raw tap): empty raw buffer must not fail the STT span."""
+    obs = _obs_with_trace()
+    obs._record_audio = True
+    obs._record_raw_input_audio = True
+    obs._using_external_turn_tracking = True
+    obs._current_turn_span = MagicMock()
+
+    stt_span = MagicMock()
+    stt_span.attributes = {}
+    stt_span.trace_id = "t"
+    stt_span.span_id = "s"
+    stt_span.finish = MagicMock()
+    obs._active_stt_span = stt_span
+    obs._stt_audio_buffer = [MagicMock()]
+    obs._stt_raw_audio_buffer = []
+
+    with patch(
+        "noveum_trace.integrations.pipecat._handlers_stt.upload_audio_frames",
+        return_value=True,
+    ) as mock_upload:
+        tf = ff.TranscriptionFrame(text="hi", user_id="u1", timestamp="ts1")
+        await obs._handle_transcription(MagicMock(frame=tf, source=None))
+
+    assert mock_upload.call_count == 1
+    assert "stt.audio_uuid" in stt_span.attributes
+    assert "stt.raw_audio_uuid" not in stt_span.attributes
+    assert stt_span.attributes["pipecat_span_status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_handle_transcription_dual_audio_upload(ff) -> None:
+    obs = _obs_with_trace()
+    obs._record_audio = True
+    obs._record_raw_input_audio = True
+    obs._using_external_turn_tracking = True
+    obs._current_turn_span = MagicMock()
+
+    stt_span = MagicMock()
+    stt_span.attributes = {}
+    stt_span.trace_id = "t"
+    stt_span.span_id = "s"
+    stt_span.finish = MagicMock()
+
+    obs._active_stt_span = stt_span
+    obs._stt_audio_buffer = [MagicMock()]
+    obs._stt_raw_audio_buffer = [MagicMock()]
+
+    with patch(
+        "noveum_trace.integrations.pipecat._handlers_stt.upload_audio_frames",
+        side_effect=[True, True],
+    ) as mock_upload:
+        tf = ff.TranscriptionFrame(text="hi", user_id="u1", timestamp="ts1")
+        await obs._handle_transcription(MagicMock(frame=tf, source=None))
+
+    assert mock_upload.call_count == 2
+    assert "stt.audio_uuid" in stt_span.attributes
+    assert "stt.raw_audio_uuid" in stt_span.attributes
+    assert stt_span.attributes["pipecat_span_status"] == "ok"
+    assert obs._stt_audio_buffer == []
+    assert obs._stt_raw_audio_buffer == []
+
+
+@pytest.mark.asyncio
+async def test_handle_transcription_raw_opt_out(ff) -> None:
+    obs = _obs_with_trace()
+    obs._record_audio = True
+    obs._record_raw_input_audio = False
+    obs._using_external_turn_tracking = True
+    obs._current_turn_span = MagicMock()
+
+    stt_span = MagicMock()
+    stt_span.attributes = {}
+    stt_span.trace_id = "t"
+    stt_span.span_id = "s"
+    stt_span.finish = MagicMock()
+    obs._active_stt_span = stt_span
+    obs._stt_audio_buffer = [MagicMock()]
+    obs._stt_raw_audio_buffer = [MagicMock()]
+
+    with patch(
+        "noveum_trace.integrations.pipecat._handlers_stt.upload_audio_frames",
+        return_value=True,
+    ) as mock_upload:
+        tf = ff.TranscriptionFrame(text="hi", user_id="u1", timestamp="ts1")
+        await obs._handle_transcription(MagicMock(frame=tf, source=None))
+
+    assert mock_upload.call_count == 1
+    assert "stt.audio_uuid" in stt_span.attributes
+    assert "stt.raw_audio_uuid" not in stt_span.attributes
+
+
+@pytest.mark.asyncio
+async def test_handle_transcription_raw_upload_failed(ff) -> None:
+    obs = _obs_with_trace()
+    obs._record_audio = True
+    obs._record_raw_input_audio = True
+    obs._using_external_turn_tracking = True
+    obs._current_turn_span = MagicMock()
+
+    stt_span = MagicMock()
+    stt_span.attributes = {}
+    stt_span.trace_id = "t"
+    stt_span.span_id = "s"
+    stt_span.finish = MagicMock()
+    obs._active_stt_span = stt_span
+    obs._stt_audio_buffer = [MagicMock()]
+    obs._stt_raw_audio_buffer = [MagicMock()]
+
+    with patch(
+        "noveum_trace.integrations.pipecat._handlers_stt.upload_audio_frames",
+        side_effect=[True, False],
+    ):
+        tf = ff.TranscriptionFrame(text="hi", user_id="u1", timestamp="ts1")
+        await obs._handle_transcription(MagicMock(frame=tf, source=None))
+
+    assert "stt.audio_uuid" in stt_span.attributes
+    assert "stt.raw_audio_uuid" not in stt_span.attributes
+    assert stt_span.attributes["pipecat_span_status"] == "upload_failed"
+
+
+@pytest.mark.asyncio
+async def test_bounded_append_stt_frame_drops_oldest(ff) -> None:
+    from noveum_trace.integrations.pipecat.pipecat_constants import MAX_STT_AUDIO_FRAMES
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver()
+    buf: list = []
+    frame = ff.InputAudioRawFrame(audio=b"\x00", sample_rate=16000, num_channels=1)
+    for _ in range(MAX_STT_AUDIO_FRAMES + 5):
+        obs._bounded_append_stt_frame(buf, frame)
+    assert len(buf) == MAX_STT_AUDIO_FRAMES
+
+
+@pytest.mark.asyncio
 async def test_handle_vad_stt_start_opens_span_when_vad_present(ff) -> None:
     try:
         from pipecat.processors.frame_processor import FrameDirection
