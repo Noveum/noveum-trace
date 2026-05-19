@@ -11,7 +11,8 @@ Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversat
 3. [Quick Start](#quick-start)
 4. [What Gets Traced](#what-gets-traced)
 5. [Configuration Options](#configuration-options)
-6. [Troubleshooting](#troubleshooting)
+6. [Capturing pre-filter (raw) audio](#capturing-pre-filter-raw-audio)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -105,7 +106,9 @@ Trace: pipecat.conversation
 │   │
 │   ├── Span: pipecat.stt
 │   │   ├── stt.text: "What's the weather in Paris?"
-│   │   └── stt.model: "nova-2"
+│   │   ├── stt.model: "nova-2"
+│   │   ├── stt.audio_uuid: "…"        (post-filter audio, when record_audio=True)
+│   │   └── stt.raw_audio_uuid: "…"   (pre-filter audio, when raw capture enabled)
 │   │
 │   ├── Span: pipecat.llm
 │   │   ├── llm.model: "gpt-4o-mini"
@@ -147,8 +150,52 @@ trace_obs = NoveumTraceObserver(
     # Buffer and upload STT/TTS audio as WAV files per span (default: True)
     # Adds stt.audio_uuid / tts.audio_uuid attributes when enabled
     record_audio=True,
+
+    # Also capture pre-filter mic bytes via Noveum*Transport wrappers (default: True)
+    # Adds stt.raw_audio_uuid on the STT span (~2x audio storage per turn)
+    record_raw_input_audio=True,
 )
 ```
+
+---
+
+## Capturing pre-filter (raw) audio
+
+By default, `stt.audio_uuid` contains audio **after** Pipecat's `audio_in_filter`
+(Krisp, Koala, etc.). To also capture **pre-filter** bytes for STT efficacy or
+filter A/B analysis, swap your transport for a `Noveum*Transport` wrapper and pass
+the observer:
+
+```python
+from noveum_trace.integrations.pipecat import NoveumTraceObserver, NoveumDailyTransport
+
+trace_obs = NoveumTraceObserver(record_audio=True, record_raw_input_audio=True)
+
+transport = NoveumDailyTransport(
+    room_url,
+    token,
+    "Bot",
+    DailyParams(...),
+    noveum_observer=trace_obs,
+)
+
+task = PipelineTask(pipeline, observers=[trace_obs])
+await trace_obs.attach_to_task(task)
+```
+
+- **`stt.audio_uuid`** — unchanged; post-filter audio the STT path consumed.
+- **`stt.raw_audio_uuid`** — pre-filter snapshot (requires `Noveum*Transport` or a
+  custom mixin; see [PIPECAT_CUSTOM_TRANSPORTS.md](./PIPECAT_CUSTOM_TRANSPORTS.md)).
+- **`record_raw_input_audio`** defaults to `True`; set `False` to opt out.
+- Upload status is all-or-nothing: both enabled uploads must succeed for
+  `pipecat_span_status="ok"` on the STT span.
+- “Raw” means pre-pipecat-filter, not pre-SDK or hardware processing.
+
+Available wrappers: `NoveumDailyTransport`, `NoveumLiveKitTransport`,
+`NoveumSmallWebRTCTransport`, `NoveumFastAPIWebsocketTransport`,
+`NoveumWebsocketServerTransport`, `NoveumWebsocketClientTransport`,
+`NoveumLocalAudioTransport`, `NoveumTkTransport`, `NoveumTavusTransport`,
+`NoveumHeyGenTransport`, `NoveumLemonSliceTransport`.
 
 ---
 

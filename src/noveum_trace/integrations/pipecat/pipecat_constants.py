@@ -21,6 +21,9 @@ MAX_TEXT_BUFFER_LENGTH = 50_000
 # Dedupe observer callbacks when the same frame id is pushed twice (Pipecat pattern).
 # Busy-turn order of magnitude: ~100 LLM text frames + ~500 TTS audio frames
 MAX_FRAME_DEDUP_HISTORY = 20_000
+# Cap STT PCM frame lists (post-filter and raw pre-filter). ~3k frames ≈ 60s at
+# 20 ms/frame for mono 16 kHz; drops oldest on overflow (long utterances / VAD pre-roll).
+MAX_STT_AUDIO_FRAMES = 3_000
 
 # ---------------------------------------------------------------------------
 # Turn management defaults

@@ -51,6 +51,20 @@ Or use the convenience helper::
 from typing import Any
 
 from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+from noveum_trace.integrations.pipecat.transports import (
+    NoveumDailyTransport,
+    NoveumFastAPIWebsocketTransport,
+    NoveumHeyGenTransport,
+    NoveumLemonSliceTransport,
+    NoveumLiveKitTransport,
+    NoveumLocalAudioTransport,
+    NoveumRawAudioTapMixin,
+    NoveumSmallWebRTCTransport,
+    NoveumTavusTransport,
+    NoveumTkTransport,
+    NoveumWebsocketClientTransport,
+    NoveumWebsocketServerTransport,
+)
 
 
 def setup_pipecat_tracing(**kwargs: Any) -> NoveumTraceObserver:
@@ -80,4 +94,19 @@ def setup_pipecat_tracing(**kwargs: Any) -> NoveumTraceObserver:
     return NoveumTraceObserver(**kwargs)
 
 
-__all__ = ["NoveumTraceObserver", "setup_pipecat_tracing"]
+__all__ = [
+    "NoveumTraceObserver",
+    "setup_pipecat_tracing",
+    "NoveumRawAudioTapMixin",
+    "NoveumDailyTransport",
+    "NoveumLiveKitTransport",
+    "NoveumSmallWebRTCTransport",
+    "NoveumFastAPIWebsocketTransport",
+    "NoveumWebsocketServerTransport",
+    "NoveumWebsocketClientTransport",
+    "NoveumLocalAudioTransport",
+    "NoveumTkTransport",
+    "NoveumTavusTransport",
+    "NoveumHeyGenTransport",
+    "NoveumLemonSliceTransport",
+]

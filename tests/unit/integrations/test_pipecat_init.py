@@ -21,7 +21,22 @@ def test_setup_pipecat_tracing_returns_observer() -> None:
 def test_pipecat_all_exports() -> None:
     import noveum_trace.integrations.pipecat as m
 
-    assert set(m.__all__) == {"NoveumTraceObserver", "setup_pipecat_tracing"}
+    assert set(m.__all__) == {
+        "NoveumTraceObserver",
+        "setup_pipecat_tracing",
+        "NoveumRawAudioTapMixin",
+        "NoveumDailyTransport",
+        "NoveumLiveKitTransport",
+        "NoveumSmallWebRTCTransport",
+        "NoveumFastAPIWebsocketTransport",
+        "NoveumWebsocketServerTransport",
+        "NoveumWebsocketClientTransport",
+        "NoveumLocalAudioTransport",
+        "NoveumTkTransport",
+        "NoveumTavusTransport",
+        "NoveumHeyGenTransport",
+        "NoveumLemonSliceTransport",
+    }
 
 
 def test_setup_pipecat_tracing_forwards_kwargs_to_observer() -> None:
@@ -29,8 +44,13 @@ def test_setup_pipecat_tracing_forwards_kwargs_to_observer() -> None:
 
     from noveum_trace.integrations.pipecat import setup_pipecat_tracing
 
-    obs = setup_pipecat_tracing(record_audio=False, trace_name_prefix="custom")
+    obs = setup_pipecat_tracing(
+        record_audio=False,
+        record_raw_input_audio=False,
+        trace_name_prefix="custom",
+    )
     assert obs._record_audio is False
+    assert obs._record_raw_input_audio is False
     assert obs._trace_name_prefix == "custom"
 
 

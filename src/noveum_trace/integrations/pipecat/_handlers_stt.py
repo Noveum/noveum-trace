@@ -228,7 +228,7 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
             )
             return
 
-        self._stt_audio_buffer.append(data.frame)
+        self._bounded_append_stt_frame(self._stt_audio_buffer, data.frame)
 
     # ---------------------------------------------------------------------- #
     # Final transcript                                                        #
@@ -251,7 +251,8 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
         settings), ``stt.confidence`` (from ``result`` when present),
         ``stt.vad_to_final_ms`` / ``stt.first_text_latency_ms`` (monotonic, when
         VAD-gated), ``stt.interim_results`` (JSON list of
-        ``{"text","confidence"}``), ``stt.audio_uuid`` (if ``record_audio=True``).
+        ``{"text","confidence"}``), ``stt.audio_uuid`` / ``stt.raw_audio_uuid``
+        (if ``record_audio=True``; raw requires ``Noveum*Transport`` wiring).
         """
         if not self._trace:
             return
@@ -326,25 +327,58 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
                         )
 
                 stt_status = "ok"
-                if self._record_audio and self._stt_audio_buffer:
-                    audio_uuid = str(uuid.uuid4())
-                    if upload_audio_frames(
-                        self._stt_audio_buffer,
-                        audio_uuid,
-                        "stt",
-                        span.trace_id,
-                        span.span_id,
-                        client=self._get_client(),
-                    ):
-                        span.attributes["stt.audio_uuid"] = audio_uuid
-                    else:
-                        stt_status = "upload_failed"
+                if self._record_audio and (
+                    self._stt_audio_buffer or self._record_raw_input_audio
+                ):
+                    client = self._get_client()
+
+                    async def _upload_post() -> bool:
+                        if not self._stt_audio_buffer:
+                            return True
+                        post_uuid = str(uuid.uuid4())
+                        ok = await asyncio.to_thread(
+                            upload_audio_frames,
+                            self._stt_audio_buffer,
+                            post_uuid,
+                            "stt",
+                            span.trace_id,
+                            span.span_id,
+                            client,
+                        )
+                        if ok:
+                            span.attributes["stt.audio_uuid"] = post_uuid
+                        return ok
+
+                    async def _upload_raw() -> bool:
+                        if not self._record_raw_input_audio:
+                            return True
+                        if not self._stt_raw_audio_buffer:
+                            return True
+                        raw_uuid = str(uuid.uuid4())
+                        ok = await asyncio.to_thread(
+                            upload_audio_frames,
+                            self._stt_raw_audio_buffer,
+                            raw_uuid,
+                            "stt_raw",
+                            span.trace_id,
+                            span.span_id,
+                            client,
+                        )
+                        if ok:
+                            span.attributes["stt.raw_audio_uuid"] = raw_uuid
+                        return ok
+
+                    post_ok, raw_ok = await asyncio.gather(
+                        _upload_post(), _upload_raw()
+                    )
+                    stt_status = "ok" if (post_ok and raw_ok) else "upload_failed"
                 span.attributes["pipecat_span_status"] = stt_status
                 span.finish()
         finally:
             self._vad_speech_start_time = None
             self._stt_interim_results.clear()
             self._stt_audio_buffer.clear()
+            self._stt_raw_audio_buffer.clear()
             self._stt_first_text_latency_recorded = False
 
     # ---------------------------------------------------------------------- #
