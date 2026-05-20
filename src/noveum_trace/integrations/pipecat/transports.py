@@ -131,7 +131,9 @@ try:
 
     NoveumDailyTransport = _NoveumDailyTransport
 
-except ImportError:
+# Catch Exception (not just ImportError): pipecat re-raises missing transport
+# deps as generic Exception, which would otherwise bypass ImportError handling.
+except Exception:
     NoveumDailyTransport = _unavailable_transport(
         "NoveumDailyTransport",
         "NoveumDailyTransport requires Pipecat Daily transport dependencies. "
@@ -169,7 +171,7 @@ try:
 
     NoveumLiveKitTransport = _NoveumLiveKitTransport
 
-except ImportError:
+except Exception:
     NoveumLiveKitTransport = _unavailable_transport(
         "NoveumLiveKitTransport",
         "NoveumLiveKitTransport requires Pipecat LiveKit transport dependencies. "
@@ -208,7 +210,7 @@ try:
 
     NoveumSmallWebRTCTransport = _NoveumSmallWebRTCTransport
 
-except ImportError:
+except Exception:
     NoveumSmallWebRTCTransport = _unavailable_transport(
         "NoveumSmallWebRTCTransport",
         "NoveumSmallWebRTCTransport requires Pipecat SmallWebRTC transport dependencies. "
@@ -257,7 +259,7 @@ try:
 
     NoveumFastAPIWebsocketTransport = _NoveumFastAPIWebsocketTransport
 
-except ImportError:
+except Exception:
     NoveumFastAPIWebsocketTransport = _unavailable_transport(
         "NoveumFastAPIWebsocketTransport",
         "NoveumFastAPIWebsocketTransport requires Pipecat FastAPI WebSocket "
@@ -299,7 +301,7 @@ try:
 
     NoveumWebsocketServerTransport = _NoveumWebsocketServerTransport
 
-except ImportError:
+except Exception:
     NoveumWebsocketServerTransport = _unavailable_transport(
         "NoveumWebsocketServerTransport",
         "NoveumWebsocketServerTransport requires Pipecat WebSocket server "
@@ -338,7 +340,7 @@ try:
 
     NoveumWebsocketClientTransport = _NoveumWebsocketClientTransport
 
-except ImportError:
+except Exception:
     NoveumWebsocketClientTransport = _unavailable_transport(
         "NoveumWebsocketClientTransport",
         "NoveumWebsocketClientTransport requires Pipecat WebSocket client "
@@ -371,7 +373,7 @@ try:
 
     NoveumTavusTransport = _NoveumTavusTransport
 
-except ImportError:
+except Exception:
     NoveumTavusTransport = _unavailable_transport(
         "NoveumTavusTransport",
         "NoveumTavusTransport requires Pipecat Tavus transport dependencies. "
@@ -407,7 +409,7 @@ try:
 
     NoveumHeyGenTransport = _NoveumHeyGenTransport
 
-except ImportError:
+except Exception:
     NoveumHeyGenTransport = _unavailable_transport(
         "NoveumHeyGenTransport",
         "NoveumHeyGenTransport requires Pipecat HeyGen transport dependencies. "
@@ -445,7 +447,7 @@ try:
 
     NoveumLemonSliceTransport = _NoveumLemonSliceTransport
 
-except ImportError:
+except Exception:
     NoveumLemonSliceTransport = _unavailable_transport(
         "NoveumLemonSliceTransport",
         "NoveumLemonSliceTransport requires Pipecat LemonSlice transport dependencies. "
