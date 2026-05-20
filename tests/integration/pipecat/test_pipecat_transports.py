@@ -97,8 +97,9 @@ def test_local_audio_stub_raises_import_error_when_backend_unavailable() -> None
     from noveum_trace.integrations.pipecat import transports as transports_mod
 
     stub = transports_mod.NoveumLocalAudioTransport
-    # When pyaudio is missing, transports.py defines the stub instead of the real class.
-    if getattr(stub, "__module__", "").endswith("transports"):
+    # The stub set by _unavailable_transport has __name__ == "NoveumLocalAudioTransport"
+    # (no leading underscore); the real wrapper class is "_NoveumLocalAudioTransport".
+    if stub.__name__ == "NoveumLocalAudioTransport":
         with pytest.raises(ImportError, match="pyaudio"):
             stub()
     else:
