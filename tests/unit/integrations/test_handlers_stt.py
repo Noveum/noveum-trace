@@ -235,9 +235,13 @@ async def test_handle_transcription_raw_upload_failed(ff) -> None:
     obs._stt_audio_buffer = [MagicMock()]
     obs._stt_raw_audio_buffer = [MagicMock()]
 
+    def upload_side_effect(*args, **kwargs):
+        audio_type = kwargs.get("audio_type", args[2] if len(args) > 2 else None)
+        return audio_type == "stt"
+
     with patch(
         "noveum_trace.integrations.pipecat._handlers_stt.upload_audio_frames",
-        side_effect=[True, False],
+        side_effect=upload_side_effect,
     ):
         tf = ff.TranscriptionFrame(text="hi", user_id="u1", timestamp="ts1")
         await obs._handle_transcription(MagicMock(frame=tf, source=None))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,6 +60,27 @@ async def test_mixin_push_audio_frame_calls_observer(ff) -> None:
     _Base.push_audio_frame.assert_awaited_once_with(frame)
 
 
+@pytest.mark.asyncio
+async def test_mixin_push_audio_frame_forwards_when_observer_raises(ff) -> None:
+    from noveum_trace.integrations.pipecat.transports import NoveumRawAudioTapMixin
+
+    observer = MagicMock()
+    observer.capture_raw_input_audio.side_effect = RuntimeError("capture failed")
+    frame = ff.InputAudioRawFrame(audio=b"\x00", sample_rate=16000, num_channels=1)
+
+    class _Base:
+        push_audio_frame = AsyncMock()
+
+    class _Tap(NoveumRawAudioTapMixin, _Base):
+        def __init__(self) -> None:
+            self._noveum_observer = observer
+
+    tap = _Tap()
+    await tap.push_audio_frame(frame)
+    observer.capture_raw_input_audio.assert_called_once_with(frame)
+    _Base.push_audio_frame.assert_awaited_once_with(frame)
+
+
 def test_mro_guard_raises_on_bad_order() -> None:
     pytest.importorskip("pipecat.transports.base_input")
     from pipecat.transports.base_input import BaseInputTransport
@@ -91,3 +113,158 @@ def test_wrap_input_sets_observer_on_instance() -> None:
 
     Wrapped = _wrap_input(DailyInputTransport)
     assert Wrapped.__name__ == "_NoveumDailyInputTransport"
+
+
+def test_transports_module_exports_all_symbols() -> None:
+    import noveum_trace.integrations.pipecat.transports as transports_mod
+
+    for name in transports_mod.__all__:
+        assert hasattr(transports_mod, name), name
+
+
+# ---------------------------------------------------------------------------
+# Composite wrapper instantiation — observer wiring under real Pipecat classes
+# ---------------------------------------------------------------------------
+
+
+def test_noveum_websocket_server_transport_input_sets_observer() -> None:
+    pytest.importorskip("pipecat.transports.websocket.server")
+    from pipecat.transports.websocket.server import WebsocketServerParams
+
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumWebsocketServerTransport,
+    )
+
+    observer = MagicMock()
+    t = NoveumWebsocketServerTransport(
+        WebsocketServerParams(), noveum_observer=observer
+    )
+    inp = t.input()
+    assert inp._noveum_observer is observer
+
+
+def test_noveum_websocket_client_transport_input_sets_observer() -> None:
+    pytest.importorskip("pipecat.transports.websocket.client")
+
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumWebsocketClientTransport,
+    )
+
+    observer = MagicMock()
+    t = NoveumWebsocketClientTransport("ws://localhost:9999", noveum_observer=observer)
+    inp = t.input()
+    assert inp._noveum_observer is observer
+
+
+def test_noveum_fastapi_websocket_transport_input_sets_observer() -> None:
+    pytest.importorskip("pipecat.transports.websocket.fastapi")
+    from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumFastAPIWebsocketTransport,
+    )
+
+    observer = MagicMock()
+    mock_websocket = MagicMock()
+    t = NoveumFastAPIWebsocketTransport(
+        mock_websocket, FastAPIWebsocketParams(), noveum_observer=observer
+    )
+    inp = t.input()
+    assert inp._noveum_observer is observer
+
+
+def test_noveum_smallwebrtc_transport_input_sets_observer() -> None:
+    pytest.importorskip("pipecat.transports.smallwebrtc.transport")
+    from pipecat.transports.base_transport import TransportParams
+    from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+
+    from noveum_trace.integrations.pipecat.transports import NoveumSmallWebRTCTransport
+
+    observer = MagicMock()
+    mock_conn = MagicMock(spec=SmallWebRTCConnection)
+    t = NoveumSmallWebRTCTransport(
+        mock_conn, TransportParams(), noveum_observer=observer
+    )
+    inp = t.input()
+    assert inp._noveum_observer is observer
+
+
+def test_noveum_daily_transport_input_sets_observer(monkeypatch) -> None:
+    pytest.importorskip("pipecat.transports.daily.transport")
+    import pipecat.transports.daily.transport as daily_mod
+    from pipecat.transports.daily.transport import DailyParams
+
+    from noveum_trace.integrations.pipecat.transports import NoveumDailyTransport
+
+    monkeypatch.setattr(daily_mod, "DailyTransportClient", lambda *a, **kw: MagicMock())
+    observer = MagicMock()
+    t = NoveumDailyTransport(
+        "https://example.daily.co/test",
+        None,
+        "bot",
+        params=DailyParams(),
+        noveum_observer=observer,
+    )
+    inp = t.input()
+    assert inp._noveum_observer is observer
+
+
+def test_input_is_idempotent() -> None:
+    """Calling .input() twice must return the same object (lazy-init guard)."""
+    pytest.importorskip("pipecat.transports.websocket.server")
+    from pipecat.transports.websocket.server import WebsocketServerParams
+
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumWebsocketServerTransport,
+    )
+
+    t = NoveumWebsocketServerTransport(
+        WebsocketServerParams(), noveum_observer=MagicMock()
+    )
+    assert t.input() is t.input()
+
+
+def test_input_with_no_observer_propagates_none() -> None:
+    """Constructing without noveum_observer must set _noveum_observer=None on the input."""
+    pytest.importorskip("pipecat.transports.websocket.server")
+    from pipecat.transports.websocket.server import WebsocketServerParams
+
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumWebsocketServerTransport,
+    )
+
+    t = NoveumWebsocketServerTransport(WebsocketServerParams())
+    inp = t.input()
+    assert inp._noveum_observer is None
+
+
+def test_missing_backend_does_not_hide_other_transports(monkeypatch) -> None:
+    pytest.importorskip("pipecat")
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _import(name: str, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        if name == "pipecat.transports.heygen.transport":
+            raise ImportError("simulated missing heygen backend")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+
+    import importlib
+
+    import noveum_trace.integrations.pipecat.transports as transports_mod
+
+    importlib.reload(transports_mod)
+
+    pytest.importorskip("pipecat.transports.daily.transport")
+    from pipecat.transports.daily.transport import DailyTransport
+
+    assert issubclass(transports_mod.NoveumDailyTransport, DailyTransport)
+
+    with pytest.raises(ImportError, match="HeyGen"):
+        transports_mod.NoveumHeyGenTransport()
+
+    importlib.reload(
+        importlib.import_module("noveum_trace.integrations.pipecat.transports")
+    )

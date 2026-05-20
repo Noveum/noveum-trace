@@ -7,38 +7,10 @@ Use ``Noveum*Transport`` composites instead of stock pipecat transports and pass
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
-from pipecat.transports.daily.transport import (
-    DailyInputTransport,
-    DailyTransport,
-)
-from pipecat.transports.heygen.transport import HeyGenInputTransport, HeyGenTransport
-from pipecat.transports.lemonslice.transport import (
-    LemonSliceInputTransport,
-    LemonSliceTransport,
-)
-from pipecat.transports.livekit.transport import (
-    LiveKitInputTransport,
-    LiveKitTransport,
-)
-from pipecat.transports.smallwebrtc.transport import (
-    SmallWebRTCInputTransport,
-    SmallWebRTCTransport,
-)
-from pipecat.transports.tavus.transport import TavusInputTransport, TavusTransport
-from pipecat.transports.websocket.client import (
-    WebsocketClientInputTransport,
-    WebsocketClientTransport,
-)
-from pipecat.transports.websocket.fastapi import (
-    FastAPIWebsocketInputTransport,
-    FastAPIWebsocketTransport,
-)
-from pipecat.transports.websocket.server import (
-    WebsocketServerInputTransport,
-    WebsocketServerTransport,
-)
+logger = logging.getLogger(__name__)
 
 
 class _NoveumLazyInputTransportMixin:
@@ -76,7 +48,13 @@ class NoveumRawAudioTapMixin:
     async def push_audio_frame(self, frame: Any) -> None:
         observer = getattr(self, "_noveum_observer", None)
         if observer is not None:
-            observer.capture_raw_input_audio(frame)
+            try:
+                observer.capture_raw_input_audio(frame)
+            except Exception:
+                logger.debug(
+                    "Raw input audio capture failed; continuing pipeline",
+                    exc_info=True,
+                )
         await super().push_audio_frame(frame)  # type: ignore[misc]
 
 
@@ -95,197 +73,384 @@ def _wrap_input(base: type[Any]) -> type[Any]:
     return _Wrapped
 
 
-_NoveumDailyInputTransport = _wrap_input(DailyInputTransport)
-_NoveumLiveKitInputTransport = _wrap_input(LiveKitInputTransport)
-_NoveumSmallWebRTCInputTransport = _wrap_input(SmallWebRTCInputTransport)
-_NoveumFastAPIWebsocketInputTransport = _wrap_input(FastAPIWebsocketInputTransport)
-_NoveumWebsocketServerInputTransport = _wrap_input(WebsocketServerInputTransport)
-_NoveumWebsocketClientInputTransport = _wrap_input(WebsocketClientInputTransport)
-_NoveumTavusInputTransport = _wrap_input(TavusInputTransport)
-_NoveumHeyGenInputTransport = _wrap_input(HeyGenInputTransport)
-_NoveumLemonSliceInputTransport = _wrap_input(LemonSliceInputTransport)
+def _unavailable_transport(name: str, message: str) -> type[Any]:
+    """Return a stub class that raises ``ImportError`` on instantiation."""
+
+    class _Stub:
+        """Stub when Pipecat transport dependencies are unavailable."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise ImportError(message) from None
+
+    _Stub.__name__ = name
+    _Stub.__qualname__ = name
+    _Stub.__doc__ = f"Stub when {name} dependencies are unavailable."
+    return _Stub
 
 
-class NoveumDailyTransport(_NoveumLazyInputTransportMixin, DailyTransport):
-    """Daily transport with pre-filter input audio capture for Noveum tracing."""
-
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
-
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumDailyInputTransport(
-                self,
-                self._client,
-                self._params,
-                name=self._input_name,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+NoveumDailyTransport: type[Any]
+NoveumLiveKitTransport: type[Any]
+NoveumSmallWebRTCTransport: type[Any]
+NoveumFastAPIWebsocketTransport: type[Any]
+NoveumWebsocketServerTransport: type[Any]
+NoveumWebsocketClientTransport: type[Any]
+NoveumTavusTransport: type[Any]
+NoveumHeyGenTransport: type[Any]
+NoveumLemonSliceTransport: type[Any]
+NoveumLocalAudioTransport: type[Any]
+NoveumTkTransport: type[Any]
 
 
-class NoveumLiveKitTransport(_NoveumLazyInputTransportMixin, LiveKitTransport):
-    """LiveKit transport with pre-filter input audio capture for Noveum tracing."""
+try:
+    from pipecat.transports.daily.transport import (
+        DailyInputTransport,
+        DailyTransport,
+    )
 
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
+    _NoveumDailyInputTransport = _wrap_input(DailyInputTransport)
 
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumLiveKitInputTransport(
-                self,
-                self._client,
-                self._params,
-                name=self._input_name,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+    class _NoveumDailyTransport(_NoveumLazyInputTransportMixin, DailyTransport):
+        """Daily transport with pre-filter input audio capture for Noveum tracing."""
 
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
 
-class NoveumSmallWebRTCTransport(_NoveumLazyInputTransportMixin, SmallWebRTCTransport):
-    """SmallWebRTC transport with pre-filter input audio capture for Noveum tracing."""
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumDailyInputTransport(
+                    self,
+                    self._client,
+                    self._params,
+                    name=self._input_name,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
 
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
+    NoveumDailyTransport = _NoveumDailyTransport
 
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumSmallWebRTCInputTransport(
-                self._client,
-                self._params,
-                name=self._input_name,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+except ImportError:
+    NoveumDailyTransport = _unavailable_transport(
+        "NoveumDailyTransport",
+        "NoveumDailyTransport requires Pipecat Daily transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
 
 
-class NoveumFastAPIWebsocketTransport(
-    _NoveumLazyInputTransportMixin, FastAPIWebsocketTransport
-):
-    """FastAPI WebSocket transport with pre-filter input audio capture."""
+try:
+    from pipecat.transports.livekit.transport import (
+        LiveKitInputTransport,
+        LiveKitTransport,
+    )
 
-    def __init__(
-        self,
-        *args: Any,
-        noveum_observer: Any = None,
-        input_name: Optional[str] = None,
-        output_name: Optional[str] = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            *args,
-            input_name=input_name,
-            output_name=output_name,
-            **kwargs,
-        )
-        self._noveum_observer = noveum_observer
-        self._input = _NoveumFastAPIWebsocketInputTransport(
+    _NoveumLiveKitInputTransport = _wrap_input(LiveKitInputTransport)
+
+    class _NoveumLiveKitTransport(_NoveumLazyInputTransportMixin, LiveKitTransport):
+        """LiveKit transport with pre-filter input audio capture for Noveum tracing."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumLiveKitInputTransport(
+                    self,
+                    self._client,
+                    self._params,
+                    name=self._input_name,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumLiveKitTransport = _NoveumLiveKitTransport
+
+except ImportError:
+    NoveumLiveKitTransport = _unavailable_transport(
+        "NoveumLiveKitTransport",
+        "NoveumLiveKitTransport requires Pipecat LiveKit transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
+
+
+try:
+    from pipecat.transports.smallwebrtc.transport import (
+        SmallWebRTCInputTransport,
+        SmallWebRTCTransport,
+    )
+
+    _NoveumSmallWebRTCInputTransport = _wrap_input(SmallWebRTCInputTransport)
+
+    class _NoveumSmallWebRTCTransport(
+        _NoveumLazyInputTransportMixin, SmallWebRTCTransport
+    ):
+        """SmallWebRTC transport with pre-filter input audio capture for Noveum tracing."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumSmallWebRTCInputTransport(
+                    self._client,
+                    self._params,
+                    name=self._input_name,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumSmallWebRTCTransport = _NoveumSmallWebRTCTransport
+
+except ImportError:
+    NoveumSmallWebRTCTransport = _unavailable_transport(
+        "NoveumSmallWebRTCTransport",
+        "NoveumSmallWebRTCTransport requires Pipecat SmallWebRTC transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
+
+
+try:
+    from pipecat.transports.websocket.fastapi import (
+        FastAPIWebsocketInputTransport,
+        FastAPIWebsocketTransport,
+    )
+
+    _NoveumFastAPIWebsocketInputTransport = _wrap_input(FastAPIWebsocketInputTransport)
+
+    class _NoveumFastAPIWebsocketTransport(
+        _NoveumLazyInputTransportMixin, FastAPIWebsocketTransport
+    ):
+        """FastAPI WebSocket transport with pre-filter input audio capture."""
+
+        def __init__(
             self,
-            self._client,
-            self._params,
-            name=self._input_name,
-            noveum_observer=self._noveum_observer,
-        )
-
-    def input(self) -> Any:
-        return self._input
-
-
-class NoveumWebsocketServerTransport(
-    _NoveumLazyInputTransportMixin, WebsocketServerTransport
-):
-    """WebSocket server transport with pre-filter input audio capture."""
-
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
-
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumWebsocketServerInputTransport(
+            *args: Any,
+            noveum_observer: Any = None,
+            input_name: Optional[str] = None,
+            output_name: Optional[str] = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(
+                *args,
+                input_name=input_name,
+                output_name=output_name,
+                **kwargs,
+            )
+            self._noveum_observer = noveum_observer
+            self._input = _NoveumFastAPIWebsocketInputTransport(
                 self,
-                self._host,
-                self._port,
+                self._client,
                 self._params,
-                self._callbacks,
                 name=self._input_name,
                 noveum_observer=self._noveum_observer,
             )
-        return self._input
+
+        def input(self) -> Any:
+            return self._input
+
+    NoveumFastAPIWebsocketTransport = _NoveumFastAPIWebsocketTransport
+
+except ImportError:
+    NoveumFastAPIWebsocketTransport = _unavailable_transport(
+        "NoveumFastAPIWebsocketTransport",
+        "NoveumFastAPIWebsocketTransport requires Pipecat FastAPI WebSocket "
+        "transport dependencies. Install the relevant pipecat-ai extras and retry.",
+    )
 
 
-class NoveumWebsocketClientTransport(
-    _NoveumLazyInputTransportMixin, WebsocketClientTransport
-):
-    """WebSocket client transport with pre-filter input audio capture."""
+try:
+    from pipecat.transports.websocket.server import (
+        WebsocketServerInputTransport,
+        WebsocketServerTransport,
+    )
 
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
+    _NoveumWebsocketServerInputTransport = _wrap_input(WebsocketServerInputTransport)
 
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumWebsocketClientInputTransport(
-                self,
-                self._session,
-                self._params,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+    class _NoveumWebsocketServerTransport(
+        _NoveumLazyInputTransportMixin, WebsocketServerTransport
+    ):
+        """WebSocket server transport with pre-filter input audio capture."""
 
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
 
-class NoveumTavusTransport(_NoveumLazyInputTransportMixin, TavusTransport):
-    """Tavus transport with pre-filter input audio capture."""
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumWebsocketServerInputTransport(
+                    self,
+                    self._host,
+                    self._port,
+                    self._params,
+                    self._callbacks,
+                    name=self._input_name,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
 
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
+    NoveumWebsocketServerTransport = _NoveumWebsocketServerTransport
 
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumTavusInputTransport(
-                client=self._client,
-                params=self._params,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
-
-
-class NoveumHeyGenTransport(_NoveumLazyInputTransportMixin, HeyGenTransport):
-    """HeyGen transport with pre-filter input audio capture."""
-
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
-
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumHeyGenInputTransport(
-                client=self._client,
-                params=self._params,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+except ImportError:
+    NoveumWebsocketServerTransport = _unavailable_transport(
+        "NoveumWebsocketServerTransport",
+        "NoveumWebsocketServerTransport requires Pipecat WebSocket server "
+        "transport dependencies. Install the relevant pipecat-ai extras and retry.",
+    )
 
 
-class NoveumLemonSliceTransport(_NoveumLazyInputTransportMixin, LemonSliceTransport):
-    """LemonSlice transport with pre-filter input audio capture."""
+try:
+    from pipecat.transports.websocket.client import (
+        WebsocketClientInputTransport,
+        WebsocketClientTransport,
+    )
 
-    def __init__(self, *args: Any, noveum_observer: Any = None, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._noveum_observer = noveum_observer
+    _NoveumWebsocketClientInputTransport = _wrap_input(WebsocketClientInputTransport)
 
-    def input(self) -> Any:
-        if not self._input:
-            self._input = _NoveumLemonSliceInputTransport(
-                client=self._client,
-                params=self._params,
-                noveum_observer=self._noveum_observer,
-            )
-        return self._input
+    class _NoveumWebsocketClientTransport(
+        _NoveumLazyInputTransportMixin, WebsocketClientTransport
+    ):
+        """WebSocket client transport with pre-filter input audio capture."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumWebsocketClientInputTransport(
+                    self,
+                    self._session,
+                    self._params,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumWebsocketClientTransport = _NoveumWebsocketClientTransport
+
+except ImportError:
+    NoveumWebsocketClientTransport = _unavailable_transport(
+        "NoveumWebsocketClientTransport",
+        "NoveumWebsocketClientTransport requires Pipecat WebSocket client "
+        "transport dependencies. Install the relevant pipecat-ai extras and retry.",
+    )
+
+
+try:
+    from pipecat.transports.tavus.transport import TavusInputTransport, TavusTransport
+
+    _NoveumTavusInputTransport = _wrap_input(TavusInputTransport)
+
+    class _NoveumTavusTransport(_NoveumLazyInputTransportMixin, TavusTransport):
+        """Tavus transport with pre-filter input audio capture."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumTavusInputTransport(
+                    client=self._client,
+                    params=self._params,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumTavusTransport = _NoveumTavusTransport
+
+except ImportError:
+    NoveumTavusTransport = _unavailable_transport(
+        "NoveumTavusTransport",
+        "NoveumTavusTransport requires Pipecat Tavus transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
+
+
+try:
+    from pipecat.transports.heygen.transport import (
+        HeyGenInputTransport,
+        HeyGenTransport,
+    )
+
+    _NoveumHeyGenInputTransport = _wrap_input(HeyGenInputTransport)
+
+    class _NoveumHeyGenTransport(_NoveumLazyInputTransportMixin, HeyGenTransport):
+        """HeyGen transport with pre-filter input audio capture."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumHeyGenInputTransport(
+                    client=self._client,
+                    params=self._params,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumHeyGenTransport = _NoveumHeyGenTransport
+
+except ImportError:
+    NoveumHeyGenTransport = _unavailable_transport(
+        "NoveumHeyGenTransport",
+        "NoveumHeyGenTransport requires Pipecat HeyGen transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
+
+
+try:
+    from pipecat.transports.lemonslice.transport import (
+        LemonSliceInputTransport,
+        LemonSliceTransport,
+    )
+
+    _NoveumLemonSliceInputTransport = _wrap_input(LemonSliceInputTransport)
+
+    class _NoveumLemonSliceTransport(
+        _NoveumLazyInputTransportMixin, LemonSliceTransport
+    ):
+        """LemonSlice transport with pre-filter input audio capture."""
+
+        def __init__(
+            self, *args: Any, noveum_observer: Any = None, **kwargs: Any
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._noveum_observer = noveum_observer
+
+        def input(self) -> Any:
+            if not self._input:
+                self._input = _NoveumLemonSliceInputTransport(
+                    client=self._client,
+                    params=self._params,
+                    noveum_observer=self._noveum_observer,
+                )
+            return self._input
+
+    NoveumLemonSliceTransport = _NoveumLemonSliceTransport
+
+except ImportError:
+    NoveumLemonSliceTransport = _unavailable_transport(
+        "NoveumLemonSliceTransport",
+        "NoveumLemonSliceTransport requires Pipecat LemonSlice transport dependencies. "
+        "Install the relevant pipecat-ai extras and retry.",
+    )
 
 
 # Optional local transports (pyaudio / tkinter).
@@ -300,7 +465,7 @@ try:
 
     _NoveumLocalAudioInputTransport = _wrap_input(LocalAudioInputTransport)
 
-    class NoveumLocalAudioTransport(
+    class _NoveumLocalAudioTransport(
         _NoveumLazyInputTransportMixin, LocalAudioTransport
     ):
         """Local audio transport with pre-filter input audio capture."""
@@ -320,17 +485,15 @@ try:
                 )
             return self._input
 
+    NoveumLocalAudioTransport = _NoveumLocalAudioTransport
+
 except ImportError:
-
-    class NoveumLocalAudioTransport:  # type: ignore[no-redef]
-        """Stub when pyaudio / pipecat local audio extras are unavailable."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise ImportError(
-                "NoveumLocalAudioTransport requires pyaudio. "
-                "Install it via `pip install pyaudio` or use the "
-                "pipecat extras that include it."
-            ) from None
+    NoveumLocalAudioTransport = _unavailable_transport(
+        "NoveumLocalAudioTransport",
+        "NoveumLocalAudioTransport requires pyaudio. "
+        "Install it via `pip install pyaudio` or use the "
+        "pipecat extras that include it.",
+    )
 
 
 try:
@@ -343,7 +506,7 @@ try:
 
     _NoveumTkInputTransport = _wrap_input(TkInputTransport)
 
-    class NoveumTkTransport(_NoveumLazyInputTransportMixin, TkTransport):
+    class _NoveumTkTransport(_NoveumLazyInputTransportMixin, TkTransport):
         """Tkinter local transport with pre-filter input audio capture."""
 
         def __init__(
@@ -361,17 +524,15 @@ try:
                 )
             return self._input
 
+    NoveumTkTransport = _NoveumTkTransport
+
 except ImportError:
-
-    class NoveumTkTransport:  # type: ignore[no-redef]
-        """Stub when tkinter / pipecat local tk extras are unavailable."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise ImportError(
-                "NoveumTkTransport requires tkinter. "
-                "Install a Python build with tkinter support, or use the "
-                "pipecat extras that include it."
-            ) from None
+    NoveumTkTransport = _unavailable_transport(
+        "NoveumTkTransport",
+        "NoveumTkTransport requires tkinter. "
+        "Install a Python build with tkinter support, or use the "
+        "pipecat extras that include it.",
+    )
 
 
 __all__ = [

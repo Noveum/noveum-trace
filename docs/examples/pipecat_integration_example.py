@@ -46,6 +46,7 @@ from noveum_trace.integrations.pipecat import (
     NoveumDailyTransport,
     NoveumSmallWebRTCTransport,
     NoveumTraceObserver,
+    setup_pipecat_tracing,
 )
 
 load_dotenv(override=True)
@@ -471,7 +472,7 @@ async def bot(runner_args: RunnerArguments):
         api_key=os.getenv("NOVEUM_API_KEY"),
         project=os.getenv("NOVEUM_PROJECT", "pipecat-drive-thru"),
     )
-    trace_obs = NoveumTraceObserver(record_audio=True)
+    trace_obs = setup_pipecat_tracing(record_audio=True)
     transport = await _create_noveum_transport(runner_args, trace_obs)
     await run_bot(transport, runner_args, trace_obs)
 
