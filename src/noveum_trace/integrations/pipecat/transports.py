@@ -528,7 +528,7 @@ try:
 
     NoveumTkTransport = _NoveumTkTransport
 
-except ImportError:
+except Exception:
     NoveumTkTransport = _unavailable_transport(
         "NoveumTkTransport",
         "NoveumTkTransport requires tkinter. "
