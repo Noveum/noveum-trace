@@ -82,6 +82,7 @@ from noveum_trace.integrations.pipecat._turn_manager import _TurnManagerMixin
 from noveum_trace.integrations.pipecat.pipecat_constants import (
     DEFAULT_TURN_END_TIMEOUT_SECS,
     MAX_FRAME_DEDUP_HISTORY,
+    MAX_STT_AUDIO_FRAMES,
     SPAN_CONVERSATION,
 )
 
@@ -124,6 +125,7 @@ class NoveumTraceObserver(
         self,
         trace_name_prefix: str = "pipecat",
         record_audio: bool = True,
+        record_raw_input_audio: bool = True,
         capture_text: bool = True,
         capture_function_calls: bool = True,
         turn_end_timeout_secs: float = DEFAULT_TURN_END_TIMEOUT_SECS,
@@ -138,6 +140,9 @@ class NoveumTraceObserver(
             trace_name_prefix: Prefix for the conversation trace name.
             record_audio: When ``True``, buffers STT/TTS audio and uploads a WAV
                 per span to ``/v1/audio``.
+            record_raw_input_audio: When ``True`` (and ``record_audio=True``),
+                also buffers pre-filter input audio via ``Noveum*Transport``
+                wrappers and uploads as ``stt.raw_audio_uuid``.
             capture_text: When ``True``, accumulates LLM / TTS text buffers.
             capture_function_calls: When ``True``, creates ``function_call`` child
                 spans.
@@ -154,6 +159,7 @@ class NoveumTraceObserver(
 
         self._trace_name_prefix = trace_name_prefix
         self._record_audio = record_audio
+        self._record_raw_input_audio = record_raw_input_audio
         self._capture_text = capture_text
         self._capture_function_calls = capture_function_calls
         self._turn_end_timeout_secs = turn_end_timeout_secs
@@ -208,6 +214,9 @@ class NoveumTraceObserver(
 
         # Audio buffers (populated only when record_audio=True)
         self._stt_audio_buffer: list[Any] = []
+        self._stt_raw_audio_buffer: list[Any] = []
+        self._pipeline_has_stt: bool = False
+        self._warned_no_stt_for_raw: bool = False
         self._tts_audio_buffer: list[Any] = []
         # Source processor that opened the current TTS span (set on TTSStartedFrame,
         # cleared on TTSStoppedFrame / interruption).  Audio frames are only buffered
@@ -293,6 +302,67 @@ class NoveumTraceObserver(
             return get_client()
         except Exception:
             return None
+
+    def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None:
+        """Append an audio frame to an STT buffer, dropping oldest when over cap."""
+        buffer.append(frame)
+        overflow = len(buffer) - MAX_STT_AUDIO_FRAMES
+        if overflow > 0:
+            del buffer[:overflow]
+
+    def capture_raw_input_audio(self, frame: Any) -> None:
+        """
+        Buffer a snapshot of pre-filter input audio (called from transport mixin).
+
+        No-op unless ``record_audio``, ``record_raw_input_audio``, and an STT
+        processor were detected in the pipeline at :meth:`attach_to_task`.
+        """
+        if not self._record_audio or not self._record_raw_input_audio:
+            return
+        if not self._pipeline_has_stt:
+            return
+        audio = getattr(frame, "audio", None)
+        if not audio:
+            return
+        try:
+            from pipecat.frames.frames import InputAudioRawFrame
+        except ImportError:
+            return
+        snapshot = InputAudioRawFrame(
+            audio=bytes(audio),
+            sample_rate=getattr(frame, "sample_rate", None),
+            num_channels=getattr(frame, "num_channels", None),
+        )
+        self._bounded_append_stt_frame(self._stt_raw_audio_buffer, snapshot)
+
+    @staticmethod
+    def _processor_is_stt(proc: Any) -> bool:
+        for base in type(proc).__mro__:
+            name = getattr(base, "__name__", "")
+            if name == "STTService" or name.endswith("STTService"):
+                return True
+        return False
+
+    def _detect_pipeline_has_stt(self, task: Any) -> None:
+        """Set ``_pipeline_has_stt`` by scanning the task pipeline for STT services."""
+        pipeline = getattr(task, "_pipeline", None) or getattr(task, "pipeline", None)
+        if pipeline is None:
+            self._pipeline_has_stt = False
+            return
+        self._pipeline_has_stt = any(
+            self._processor_is_stt(proc)
+            for proc in self._iter_nested_processors(pipeline)
+        )
+        if (
+            self._record_raw_input_audio
+            and not self._pipeline_has_stt
+            and not self._warned_no_stt_for_raw
+        ):
+            self._warned_no_stt_for_raw = True
+            logger.warning(
+                "record_raw_input_audio=True but no STT service found in pipeline — "
+                "raw input audio will not be buffered"
+            )
 
     # ---------------------------------------------------------------------- #
     # External observer wiring (public API)                                  #
@@ -382,6 +452,8 @@ class NoveumTraceObserver(
                 "on_pipeline_finished safety net not registered — "
                 "trace cleanup relies on on_push_frame CancelFrame/EndFrame path only"
             )
+
+        self._detect_pipeline_has_stt(task)
 
         # Auto-detect AudioBufferProcessor for full-conversation recording
         if self._record_audio:
@@ -891,6 +963,7 @@ class NoveumTraceObserver(
         self._stt_interim_results.clear()
         self._stt_first_text_latency_recorded = False
         self._stt_audio_buffer.clear()
+        self._stt_raw_audio_buffer.clear()
 
         for span in filter(None, [self._active_llm_span, self._active_tts_span]):
             if not span.is_finished():

@@ -18,7 +18,6 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSSpeakFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -28,8 +27,12 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
-from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import create_transport
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.runner.types import (
+    DailyRunnerArguments,
+    RunnerArguments,
+    SmallWebRTCRunnerArguments,
+)
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.llm_service import FunctionCallParams
@@ -39,7 +42,12 @@ from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import noveum_trace
-from noveum_trace.integrations.pipecat import NoveumTraceObserver
+from noveum_trace.integrations.pipecat import (
+    NoveumDailyTransport,
+    NoveumSmallWebRTCTransport,
+    NoveumTraceObserver,
+    setup_pipecat_tracing,
+)
 
 load_dotenv(override=True)
 
@@ -245,13 +253,40 @@ class STTCustomSpanProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
-    logger.info("Starting drive-thru order bot")
+async def _create_noveum_transport(
+    runner_args: RunnerArguments, observer: "NoveumTraceObserver"
+) -> BaseTransport:
+    """Construct the Noveum composite transport matching the runner's transport type.
 
-    noveum_trace.init(
-        api_key=os.getenv("NOVEUM_API_KEY"),
-        project=os.getenv("NOVEUM_PROJECT", "pipecat-drive-thru"),
+    Mirrors pipecat.runner.utils.create_transport but uses the Noveum* wrappers
+    so that pre-filter (raw) input audio is tapped at push_audio_frame time.
+    """
+    if isinstance(runner_args, DailyRunnerArguments):
+        return NoveumDailyTransport(
+            runner_args.room_url,
+            runner_args.token,
+            "Pipecat Bot",
+            params=transport_params["daily"](),
+            noveum_observer=observer,
+        )
+    if isinstance(runner_args, SmallWebRTCRunnerArguments):
+        return NoveumSmallWebRTCTransport(
+            webrtc_connection=runner_args.webrtc_connection,
+            params=transport_params["webrtc"](),
+            noveum_observer=observer,
+        )
+    raise ValueError(
+        f"Noveum example does not yet wrap transport type {type(runner_args).__name__}; "
+        "extend _create_noveum_transport to add support."
     )
+
+
+async def run_bot(
+    transport: BaseTransport,
+    runner_args: RunnerArguments,
+    trace_obs: "NoveumTraceObserver",
+):
+    logger.info("Starting drive-thru order bot")
 
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
@@ -365,9 +400,8 @@ If they ask for something not on the menu, politely let them know and suggest al
     # pipecat.full_conversation span at the end of the session.
     audio_buffer = AudioBufferProcessor(num_channels=2)
 
-    # Observer must be created first so the processor can hold a reference to
-    # its _trace field (contextvars don't cross asyncio Task boundaries).
-    trace_obs = NoveumTraceObserver(record_audio=True)
+    # Observer was created in bot() so that the Noveum composite transport
+    # could be constructed with noveum_observer=trace_obs already wired in.
     stt_span_processor = STTCustomSpanProcessor(trace_obs)
 
     pipeline = Pipeline(
@@ -434,8 +468,13 @@ If they ask for something not on the menu, politely let them know and suggest al
 
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point compatible with Pipecat Cloud."""
-    transport = await create_transport(runner_args, transport_params)
-    await run_bot(transport, runner_args)
+    noveum_trace.init(
+        api_key=os.getenv("NOVEUM_API_KEY"),
+        project=os.getenv("NOVEUM_PROJECT", "pipecat-drive-thru"),
+    )
+    trace_obs = setup_pipecat_tracing(record_audio=True)
+    transport = await _create_noveum_transport(runner_args, trace_obs)
+    await run_bot(transport, runner_args, trace_obs)
 
 
 if __name__ == "__main__":
