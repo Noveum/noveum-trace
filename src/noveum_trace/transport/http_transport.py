@@ -751,6 +751,9 @@ class HttpTransport:
             "version": self._get_sdk_version(),
         }
 
+        if self.config.version:
+            trace_data["service_version"] = self.config.version
+
         # Add project information
         if self.config.project:
             trace_data["project"] = self.config.project
@@ -776,7 +779,7 @@ class HttpTransport:
         path = out_dir / f"{stem}.json"
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(trace, indent=2, default=str), encoding="utf-8")
+            path.write_text(json.dumps(trace, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
         except OSError as e:
             logger.warning("dev_mode: failed to write trace JSON to %s: %s", path, e)
         except (TypeError, ValueError) as e:
