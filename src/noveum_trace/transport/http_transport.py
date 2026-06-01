@@ -779,7 +779,10 @@ class HttpTransport:
         path = out_dir / f"{stem}.json"
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(trace, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
+            path.write_text(
+                json.dumps(trace, indent=2, default=str, ensure_ascii=False),
+                encoding="utf-8",
+            )
         except OSError as e:
             logger.warning("dev_mode: failed to write trace JSON to %s: %s", path, e)
         except (TypeError, ValueError) as e:
