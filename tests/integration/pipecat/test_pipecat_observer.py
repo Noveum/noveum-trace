@@ -670,3 +670,43 @@ async def test_on_pipeline_finished_idempotent_after_proxy_path() -> None:
     assert (
         call_count == 2
     )  # mock doesn't guard, but real impl would no-op via _trace check
+
+
+async def test_concurrent_finish_conversation_flushes_once_without_error() -> None:
+    """Regression: EndFrame and on_pipeline_finished can call _finish_conversation
+    concurrently on Pipecat 1.x. Both pass the ``_trace is None`` guard, then
+    interleave across teardown awaits — without ``_finish_lock`` one nulls
+    ``_trace`` out from under the other, raising
+    ``AttributeError: 'NoneType' object has no attribute 'attributes'`` and
+    risking a double flush. The lock must make teardown run exactly once.
+    """
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    trace.attributes = {}
+    obs._trace = trace
+    client = MagicMock()
+
+    # Force a real await-yield mid-teardown so the two coroutines interleave,
+    # exactly as the live audio-upload / turn-end awaits do. These patches exist
+    # to guarantee a mid-teardown yield; if those awaits are removed from the
+    # body, restore an equivalent yield here or this test stops exercising the race.
+    async def _yield() -> None:
+        await asyncio.sleep(0.01)
+
+    obs._await_audio_buffer_pending_handlers = _yield  # type: ignore[method-assign]
+    obs._upload_full_conversation_audio = _yield  # type: ignore[method-assign]
+
+    with patch.object(obs, "_get_client", return_value=client):
+        results = await asyncio.gather(
+            obs._finish_conversation(),
+            obs._finish_conversation(cancelled=True),
+            return_exceptions=True,
+        )
+
+    assert [r for r in results if isinstance(r, Exception)] == []
+    assert client.finish_trace.call_count == 1
+    assert obs._trace is None

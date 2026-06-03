@@ -503,12 +503,12 @@ try:
 
     from pipecat.transports.local.tk import (
         TkInputTransport,
-        TkTransport,
+        TkLocalTransport,
     )
 
     _NoveumTkInputTransport = _wrap_input(TkInputTransport)
 
-    class _NoveumTkTransport(_NoveumLazyInputTransportMixin, TkTransport):
+    class _NoveumTkTransport(_NoveumLazyInputTransportMixin, TkLocalTransport):
         """Tkinter local transport with pre-filter input audio capture."""
 
         def __init__(
