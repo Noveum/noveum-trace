@@ -229,6 +229,18 @@ class NoveumTraceObserver(
         # task are no-ops, even if attach_to_task(task1), attach_to_task(task2),
         # attach_to_task(task1) is called in sequence.
         self._registered_pipeline_tasks: set[Any] = set()
+        # Serializes conversation teardown. EndFrame/CancelFrame (on_push_frame)
+        # and the on_pipeline_finished safety-net can fire concurrently on
+        # Pipecat 1.x; without this lock both pass the ``_trace is None`` guard,
+        # then interleave across the teardown's awaits and one nulls ``_trace``
+        # out from under the other (AttributeError). The lock makes the whole
+        # teardown run exactly once.
+        #
+        # Lazily created on first use (not here): on Python < 3.10 ``asyncio.Lock()``
+        # binds to the current event loop at construction, but the observer is
+        # usually built outside any loop (setup time) and run under a different
+        # loop, which would raise "got Future attached to a different loop".
+        self._finish_lock: Optional[asyncio.Lock] = None
 
         # Full-conversation audio (populated via AudioBufferProcessor wired in attach_to_task)
         # Holds raw PCM bytes from on_audio_data until EndFrame flushes them.
@@ -930,7 +942,25 @@ class NoveumTraceObserver(
         """
         End all active spans, finish the trace, and flush the client.
 
-        Safe to call multiple times (guarded by ``_trace`` ``None``-check).
+        Safe to call multiple times and from concurrent callers: the
+        ``_finish_lock`` serializes teardown and the inner ``_trace``
+        ``None``-check makes the second caller a no-op. See ``_finish_lock``.
+        """
+        # Lazily bind the lock to the running loop (see __init__ for why).
+        # The check-and-set is synchronous, so concurrent callers can't both
+        # create one — whichever reaches here first wins atomically.
+        if self._finish_lock is None:
+            self._finish_lock = asyncio.Lock()
+        async with self._finish_lock:
+            await self._finish_conversation_impl(cancelled=cancelled)
+
+    async def _finish_conversation_impl(self, cancelled: bool = False) -> None:
+        """
+        End all active spans, finish the trace, and flush the client.
+
+        Must only be called while holding ``_finish_lock`` (via
+        ``_finish_conversation``). The ``_trace`` ``None``-check below provides
+        idempotency once the lock is held.
         """
         if self._trace is None:
             logger.debug(
