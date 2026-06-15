@@ -1,10 +1,14 @@
 """
 Unit tests for noveum_trace/__init__.py.
 
-Tests import error handling for LiveKit integrations.
+Tests import error handling for LiveKit integrations and the public
+``init()`` entry point.
 """
 
 from unittest.mock import patch
+
+import noveum_trace
+from noveum_trace.core import config as config_module
 
 
 class TestInitLiveKitImports:
@@ -61,3 +65,36 @@ class TestInitLiveKitImports:
         except ImportError:
             # Acceptable if import fails, but should be handled gracefully
             pass
+
+
+class TestInitServiceVersion:
+    """Test the ``version`` parameter of the public ``init()`` function."""
+
+    def _reset_state(self):
+        """Reset global client and configuration so init() runs cleanly."""
+        with noveum_trace._client_lock:
+            noveum_trace._client = None
+        config_module._config = None
+
+    def setup_method(self):
+        self._reset_state()
+
+    def teardown_method(self):
+        self._reset_state()
+
+    def test_init_sets_version(self):
+        """init(version=...) propagates the value into the configuration."""
+        noveum_trace.init(
+            project="test-project",
+            api_key="test-key",
+            version="v1.0.0",
+        )
+
+        assert config_module.get_config().version == "v1.0.0"
+
+    def test_init_without_version_defaults_to_none(self):
+        """init() without a version leaves the config version as None."""
+        with patch.dict("os.environ", {}, clear=True):
+            noveum_trace.init(project="test-project", api_key="test-key")
+
+        assert config_module.get_config().version is None

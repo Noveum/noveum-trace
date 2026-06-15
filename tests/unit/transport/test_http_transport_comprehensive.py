@@ -532,6 +532,38 @@ class TestHttpTransportTraceFormatting:
             assert "environment" not in result
             assert result["sdk"]["name"] == "noveum-trace-python"
 
+    def test_format_trace_for_export_with_service_version(self):
+        """Trace formatting includes service_version when version is configured."""
+        config = Config.create(version="v1.0.0")
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            trace = Mock(spec=Trace)
+            trace.trace_id = "test-id"
+            trace.name = "test-trace"
+            trace.to_dict.return_value = {"trace_id": "test-id", "spans": []}
+
+            result = transport._format_trace_for_export(trace)
+
+            assert result["service_version"] == "v1.0.0"
+
+    def test_format_trace_for_export_no_service_version(self):
+        """Trace formatting omits service_version when version is unset."""
+        config = Config.create()
+
+        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+            transport = HttpTransport(config)
+
+            trace = Mock(spec=Trace)
+            trace.trace_id = "test-id"
+            trace.name = "test-trace"
+            trace.to_dict.return_value = {"trace_id": "test-id"}
+
+            result = transport._format_trace_for_export(trace)
+
+            assert "service_version" not in result
+
 
 class TestHttpTransportTraceToDict:
     """Test the new trace_to_dict method for object serialization."""
