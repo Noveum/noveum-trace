@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noveum-trace"
-version = "1.5.14"
+version = "1.5.15"
 description = "Cloud-first tracing SDK for LLM applications and multi-agent systems"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -57,7 +57,7 @@ langchain = [
     "Pillow>=9.0.0",  # For image processing and format detection
 ]
 livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
-pipecat = ["pipecat-ai>=0.0.108,<0.1"]
+pipecat = ["pipecat-ai>=0.0.108"]
 crewai = ["crewai>=0.177.0; python_version>='3.10'"]
 
 # Optional: spaCy for ``PiiPseudonymizer`` NER (heavier than the core SDK; regex-only
@@ -287,7 +287,7 @@ skips = ["B101", "B601"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.5.14"
+version = "1.5.15"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
