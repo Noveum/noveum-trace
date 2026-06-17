@@ -669,9 +669,7 @@ class TestConfigurationLoading:
 
     def test_load_from_environment_with_service_version(self):
         """NOVEUM_SERVICE_VERSION maps into the config service_version field."""
-        with patch.dict(
-            os.environ, {"NOVEUM_SERVICE_VERSION": "v1.0.0"}, clear=True
-        ):
+        with patch.dict(os.environ, {"NOVEUM_SERVICE_VERSION": "v1.0.0"}, clear=True):
             with patch("noveum_trace.core.config.os.path.exists", return_value=False):
                 config = _load_from_environment()
 
