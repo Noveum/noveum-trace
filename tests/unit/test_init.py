@@ -82,19 +82,19 @@ class TestInitServiceVersion:
     def teardown_method(self):
         self._reset_state()
 
-    def test_init_sets_version(self):
-        """init(version=...) propagates the value into the configuration."""
+    def test_init_sets_service_version(self):
+        """init(service_version=...) propagates the value into the configuration."""
         noveum_trace.init(
             project="test-project",
             api_key="test-key",
-            version="v1.0.0",
+            service_version="v1.0.0",
         )
 
-        assert config_module.get_config().version == "v1.0.0"
+        assert config_module.get_config().service_version == "v1.0.0"
 
-    def test_init_without_version_defaults_to_none(self):
-        """init() without a version leaves the config version as None."""
+    def test_init_without_service_version_defaults_to_none(self):
+        """init() without a service_version leaves the config service_version as None."""
         with patch.dict("os.environ", {}, clear=True):
             noveum_trace.init(project="test-project", api_key="test-key")
 
-        assert config_module.get_config().version is None
+        assert config_module.get_config().service_version is None

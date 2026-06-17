@@ -129,7 +129,7 @@ class Config:
     project: Optional[str] = None
     api_key: Optional[str] = None
     environment: str = "development"
-    version: Optional[str] = None
+    service_version: Optional[str] = None
 
     # Component configurations
     tracing: TracingConfig = field(default_factory=TracingConfig)
@@ -166,7 +166,7 @@ class Config:
         project: Optional[str] = None,
         api_key: Optional[str] = None,
         environment: str = "development",
-        version: Optional[str] = None,
+        service_version: Optional[str] = None,
         endpoint: Optional[str] = None,
         tracing: Optional[TracingConfig] = None,
         transport: Optional[TransportConfig] = None,
@@ -183,7 +183,7 @@ class Config:
             project=project,
             api_key=api_key,
             environment=environment,
-            version=version,
+            service_version=service_version,
             tracing=tracing or TracingConfig(),
             transport=transport or TransportConfig(),
             security=security or SecurityConfig(),
@@ -269,7 +269,7 @@ class Config:
             "project": self.project,
             "api_key": self.api_key,
             "environment": self.environment,
-            "version": self.version,
+            "service_version": self.service_version,
             "tracing": {
                 "enabled": self.tracing.enabled,
                 "sample_rate": self.tracing.sample_rate,
@@ -318,7 +318,7 @@ class Config:
         config.project = data.get("project")
         config.api_key = data.get("api_key")
         config.environment = data.get("environment", "development")
-        config.version = data.get("version")
+        config.service_version = data.get("service_version")
         config.debug = data.get("debug", False)
         config.log_level = data.get("log_level", "ERROR")
         if "dev_mode" in data:
@@ -560,8 +560,8 @@ def _load_from_environment() -> Config:
             config_data["transport"] = {}
         config_data["transport"]["ca_bundle"] = ca_bundle_env
 
-    if os.getenv("NOVEUM_VERSION"):
-        config_data["version"] = os.getenv("NOVEUM_VERSION")
+    if os.getenv("NOVEUM_SERVICE_VERSION"):
+        config_data["service_version"] = os.getenv("NOVEUM_SERVICE_VERSION")
 
     debug_env = os.getenv("NOVEUM_DEBUG")
     if debug_env:

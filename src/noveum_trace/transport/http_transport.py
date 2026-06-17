@@ -751,8 +751,8 @@ class HttpTransport:
             "version": self._get_sdk_version(),
         }
 
-        if self.config.version:
-            trace_data["service_version"] = self.config.version
+        if self.config.service_version:
+            trace_data["service_version"] = self.config.service_version
 
         # Add project information
         if self.config.project:

@@ -533,8 +533,8 @@ class TestHttpTransportTraceFormatting:
             assert result["sdk"]["name"] == "noveum-trace-python"
 
     def test_format_trace_for_export_with_service_version(self):
-        """Trace formatting includes service_version when version is configured."""
-        config = Config.create(version="v1.0.0")
+        """Trace formatting includes service_version when it is configured."""
+        config = Config.create(service_version="v1.0.0")
 
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             transport = HttpTransport(config)
@@ -549,7 +549,7 @@ class TestHttpTransportTraceFormatting:
             assert result["service_version"] == "v1.0.0"
 
     def test_format_trace_for_export_no_service_version(self):
-        """Trace formatting omits service_version when version is unset."""
+        """Trace formatting omits service_version when it is unset."""
         config = Config.create()
 
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):

@@ -128,7 +128,7 @@ def init(
     api_key: Optional[str] = None,
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
-    version: Optional[str] = None,
+    service_version: Optional[str] = None,
     **kwargs: Any,
 ) -> None:
     """
@@ -141,7 +141,9 @@ def init(
         api_key: Noveum API key (defaults to NOVEUM_API_KEY env var)
         endpoint: API endpoint (defaults to https://api.noveum.ai/api)
         environment: Environment name (dev, staging, prod)
-        version: Application/agent version string (e.g. "v1.0.0")
+        service_version: Service/application version string (e.g. "v1.0.0").
+            Exported as ``service_version`` on each trace. Defaults to the
+            NOVEUM_SERVICE_VERSION env var.
         **kwargs: Additional configuration options including:
                  - transport_config: Transport layer configuration
                  - tracing_config: Tracing behavior configuration
@@ -153,7 +155,7 @@ def init(
         >>> noveum_trace.init(
         ...     project="my-llm-app",
         ...     environment="production",
-        ...     version="v1.0.0",
+        ...     service_version="v1.0.0",
         ...     transport_config={
         ...         "batch_size": 10,
         ...         "batch_timeout": 1.0
@@ -178,8 +180,8 @@ def init(
         config["endpoint"] = endpoint if endpoint is not None else DEFAULT_ENDPOINT
         if environment is not None:
             config["environment"] = environment
-        if version is not None:
-            config["version"] = version
+        if service_version is not None:
+            config["service_version"] = service_version
 
         # Handle special config parameter mappings
         config_mappings = {

@@ -31,7 +31,7 @@ noveum_trace.init(
     api_key="your-api-key",          # or NOVEUM_API_KEY env var
     project="my-app",                # or NOVEUM_PROJECT env var
     environment="production",        # optional — default "development"
-    version="v1.0.0",               # optional — maps to service_version in ClickHouse
+    service_version="v1.0.0",        # optional — or NOVEUM_SERVICE_VERSION env var; maps to service_version in ClickHouse
     endpoint="https://api.noveum.ai/api",  # optional — override for self-hosted
     transport_config={               # optional — tune batching
         "batch_size": 50,
@@ -916,9 +916,9 @@ The `docs/examples/` directory contains runnable examples from the test suite:
 | `NOVEUM_PROJECT` | Project name | `my-app` |
 | `NOVEUM_ENVIRONMENT` | Environment name | `production` |
 | `NOVEUM_ENDPOINT` | API endpoint override | `https://api.noveum.ai/api` |
-| `NOVEUM_VERSION` | The application/agent version string | `v1.0.0` |
+| `NOVEUM_SERVICE_VERSION` | The service/application version string | `v1.0.0` |
 
-`version` maps to `service_version` and enables filtering/comparison in the Noveum UI and MCP.
+`service_version` is exported as `service_version` on each trace and enables filtering/comparison in the Noveum UI and MCP.
 
 ---
 
