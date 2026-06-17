@@ -512,6 +512,65 @@ class TestConfig:
         assert config.endpoint == "https://top-level.com"
 
 
+class TestConfigServiceVersion:
+    """Test the ``service_version`` configuration field."""
+
+    def test_service_version_default_is_none(self):
+        """service_version defaults to None when not provided."""
+        assert Config().service_version is None
+
+    def test_config_custom_service_version(self):
+        """Config accepts an explicit service_version value."""
+        config = Config(service_version="v1.0.0")
+
+        assert config.service_version == "v1.0.0"
+
+    def test_config_create_with_service_version(self):
+        """Config.create() forwards the service_version value."""
+        config = Config.create(service_version="v2.3.4")
+
+        assert config.service_version == "v2.3.4"
+
+    def test_config_create_service_version_default_is_none(self):
+        """Config.create() leaves service_version as None when omitted."""
+        assert Config.create().service_version is None
+
+    def test_config_to_dict_includes_service_version(self):
+        """to_dict() serializes the service_version field."""
+        config = Config(service_version="v1.2.3")
+
+        data = config.to_dict()
+
+        assert data["service_version"] == "v1.2.3"
+
+    def test_config_to_dict_service_version_none(self):
+        """to_dict() includes service_version as None when unset."""
+        data = Config().to_dict()
+
+        assert "service_version" in data
+        assert data["service_version"] is None
+
+    def test_config_from_dict_with_service_version(self):
+        """from_dict() reads the service_version field."""
+        config = Config.from_dict({"service_version": "v9.9.9"})
+
+        assert config.service_version == "v9.9.9"
+
+    def test_config_from_dict_without_service_version(self):
+        """from_dict() defaults service_version to None when absent."""
+        config = Config.from_dict({"project": "test-project"})
+
+        assert config.service_version is None
+
+    def test_config_service_version_round_trip(self):
+        """service_version survives a to_dict() / from_dict() round trip."""
+        original = Config(service_version="v1.0.0")
+
+        restored = Config.from_dict(original.to_dict())
+
+        assert restored.service_version == "v1.0.0"
+
+
 class TestDeepMergeDicts:
     """Test deep merge dictionary functionality."""
 
@@ -607,6 +666,22 @@ class TestConfigurationLoading:
                 assert config.environment == "production"
                 assert config.endpoint == "https://env.api.com"
                 assert config.debug is True
+
+    def test_load_from_environment_with_service_version(self):
+        """NOVEUM_SERVICE_VERSION maps into the config service_version field."""
+        with patch.dict(os.environ, {"NOVEUM_SERVICE_VERSION": "v1.0.0"}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+
+                assert config.service_version == "v1.0.0"
+
+    def test_load_from_environment_without_service_version(self):
+        """service_version stays None when NOVEUM_SERVICE_VERSION is unset."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("noveum_trace.core.config.os.path.exists", return_value=False):
+                config = _load_from_environment()
+
+                assert config.service_version is None
 
     def test_load_from_environment_debug_values(self):
         """Test loading debug values from environment."""

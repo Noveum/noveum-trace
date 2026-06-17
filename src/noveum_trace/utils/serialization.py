@@ -39,15 +39,13 @@ def convert_to_json_string(value: Any) -> Any:
     """
     if isinstance(value, dict):
         try:
-            return json.dumps(value, default=str)
+            return json.dumps(value, default=str, ensure_ascii=False)
         except (TypeError, ValueError):
-            # If JSON serialization fails, fall back to string representation
             return str(value)
     elif isinstance(value, (list, tuple)):
         try:
-            return json.dumps(value, default=str)
+            return json.dumps(value, default=str, ensure_ascii=False)
         except (TypeError, ValueError):
-            # If JSON serialization fails, fall back to string representation
             return str(value)
     return value
 

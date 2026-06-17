@@ -31,6 +31,7 @@ noveum_trace.init(
     api_key="your-api-key",          # or NOVEUM_API_KEY env var
     project="my-app",                # or NOVEUM_PROJECT env var
     environment="production",        # optional — default "development"
+    service_version="v1.0.0",        # optional — or NOVEUM_SERVICE_VERSION env var; maps to service_version in ClickHouse
     endpoint="https://api.noveum.ai/api",  # optional — override for self-hosted
     transport_config={               # optional — tune batching
         "batch_size": 50,
@@ -904,6 +905,20 @@ The `docs/examples/` directory contains runnable examples from the test suite:
 | `agent_example.py` | `create_agent`, agent graph patterns |
 | `comprehensive_tool_calling_examples.py` | Tool call tracing |
 | `image_example.py` | Multimodal / image tracing |
+
+---
+
+## Environment variables
+
+| Variable | Description | Example |
+|---|---|---|
+| `NOVEUM_API_KEY` | Noveum API key | `nv-...` |
+| `NOVEUM_PROJECT` | Project name | `my-app` |
+| `NOVEUM_ENVIRONMENT` | Environment name | `production` |
+| `NOVEUM_ENDPOINT` | API endpoint override | `https://api.noveum.ai/api` |
+| `NOVEUM_SERVICE_VERSION` | The service/application version string | `v1.0.0` |
+
+`service_version` is exported as `service_version` on each trace and enables filtering/comparison in the Noveum UI and MCP.
 
 ---
 
