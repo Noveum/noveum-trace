@@ -235,16 +235,18 @@ async def confirm_order(params: FunctionCallParams):
         "message": f"Order confirmed! Your total is ${current_order['total']:.2f}. Please pull forward to the next window.",
     }
 
-    current_order["items"] = []
-    current_order["total"] = 0.0
-
     # Plain OTEL span — no Noveum import needed; captured automatically and
     # nested under the active pipecat.turn when capture_custom_spans=True.
     if _tracer is not None:
         with _tracer.start_as_current_span("order.finalize") as otel_span:
+            current_order["items"] = []
+            current_order["total"] = 0.0
             otel_span.set_attribute("order.item_count", len(order_summary["items"]))
             otel_span.set_attribute("order.number", order_summary["order_number"])
             otel_span.set_attribute("order.total_usd", order_summary["total"])
+    else:
+        current_order["items"] = []
+        current_order["total"] = 0.0
 
     await params.result_callback(order_summary)
 

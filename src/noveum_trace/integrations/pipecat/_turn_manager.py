@@ -463,7 +463,8 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 user_input = user_input[:MAX_TEXT_BUFFER_LENGTH]
             span.attributes["turn.user_input"] = user_input
 
-        span.attributes["pipecat_span_status"] = "ok"
+        if span.attributes.get("pipecat_span_status") != "error":
+            span.attributes["pipecat_span_status"] = "ok"
         span.finish()
 
         logger.debug("Ended turn %s", self._current_turn_number)

@@ -175,6 +175,7 @@ async def main() -> None:
     )
 
     runner = PipelineRunner(handle_sigint=False)
+    await noveum_obs.attach_to_task(task)
 
     # Kick off one LLM run. Delay the EndFrame so the LLM's async response frames
     # (LLMFullResponseStart/Text/End + MetricsFrame) are fully observed before the
@@ -193,6 +194,7 @@ async def main() -> None:
 
     # Flush both pipelines.
     noveum_trace.flush()
+    noveum_trace.shutdown()
     from opentelemetry import trace as otel_trace
 
     provider = otel_trace.get_tracer_provider()

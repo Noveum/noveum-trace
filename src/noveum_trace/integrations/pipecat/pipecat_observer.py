@@ -1224,9 +1224,10 @@ class NoveumTraceObserver(
 
         for span in filter(None, [self._active_llm_span, self._active_tts_span]):
             if not span.is_finished():
-                span.attributes["pipecat_span_status"] = (
-                    "cancelled" if cancelled else "ok"
-                )
+                if span.attributes.get("pipecat_span_status") != "error":
+                    span.attributes["pipecat_span_status"] = (
+                        "cancelled" if cancelled else "ok"
+                    )
                 span.finish()
         self._active_llm_span = None
         self._active_tts_span = None
@@ -1271,9 +1272,10 @@ class NoveumTraceObserver(
         if summary:
             self._trace.set_attributes(summary)
 
-        self._trace.attributes["pipecat_span_status"] = (
-            "cancelled" if cancelled else "ok"
-        )
+        if self._trace.attributes.get("pipecat_span_status") != "error":
+            self._trace.attributes["pipecat_span_status"] = (
+                "cancelled" if cancelled else "ok"
+            )
 
         trace = self._trace
         self._trace = None
