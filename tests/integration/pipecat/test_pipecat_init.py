@@ -78,6 +78,8 @@ def test_pipecat_all_exports() -> None:
 
     assert set(m.__all__) == {
         "NoveumTraceObserver",
+        "NoveumPipecatTracer",
+        "NoveumCustomSpanProcessor",
         "setup_pipecat_tracing",
         "NoveumRawAudioTapMixin",
         "NoveumDailyTransport",
