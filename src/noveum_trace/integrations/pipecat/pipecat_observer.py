@@ -74,6 +74,7 @@ from collections import deque
 from collections.abc import Iterator
 from typing import Any, Optional
 
+from noveum_trace.integrations.pipecat._error_capture import _ErrorCaptureMixin
 from noveum_trace.integrations.pipecat._handlers_llm import _LLMHandlersMixin
 from noveum_trace.integrations.pipecat._handlers_metrics import _MetricsHandlerMixin
 from noveum_trace.integrations.pipecat._handlers_stt import _STTHandlersMixin
@@ -112,6 +113,7 @@ class NoveumTraceObserver(
     _LLMHandlersMixin,
     _TTSHandlersMixin,
     _MetricsHandlerMixin,
+    _ErrorCaptureMixin,  # must precede _TurnManagerMixin so _handle_error resolves here
     _TurnManagerMixin,
     BaseObserver,
 ):
@@ -131,6 +133,10 @@ class NoveumTraceObserver(
         turn_end_timeout_secs: float = DEFAULT_TURN_END_TIMEOUT_SECS,
         turn_tracking_observer: Any = None,
         latency_observer: Any = None,
+        auto_enable_metrics: bool = True,
+        capture_errors: bool = True,
+        capture_system_logs: bool = False,
+        capture_session_metadata: bool = True,
         **kwargs: Any,
     ) -> None:
         """
@@ -152,6 +158,18 @@ class NoveumTraceObserver(
                 subscribe to for turn boundaries (or use :meth:`attach_to_task`).
             latency_observer: Optional ``UserBotLatencyObserver`` for
                 ``on_latency_measured`` (or use :meth:`attach_to_task`).
+            auto_enable_metrics: When ``True``, ``register_task_handlers``
+                will automatically set ``enable_metrics=True`` and
+                ``enable_usage_metrics=True`` on the task's ``PipelineParams`` if
+                they are not already enabled, ensuring ``MetricsFrame`` emission.
+            capture_errors: When ``True`` (default), ``ErrorFrame`` and
+                ``FatalErrorFrame`` are recorded as span errors and trace events.
+            capture_system_logs: When ``True``, ``SystemLogFrame`` entries
+                at warning/error/critical level are appended as span events.
+                Default ``False`` — opt-in because volume can be high.
+            capture_session_metadata: When ``True`` (default), transport
+                and runner metadata (room URL, transport type, idle timeout, etc.)
+                are stamped onto the root conversation trace at connection time.
             **kwargs: Forwarded to Pipecat ``BaseObserver`` / ``BaseObject``
                 (e.g. ``name=``).
         """
@@ -163,6 +181,11 @@ class NoveumTraceObserver(
         self._capture_text = capture_text
         self._capture_function_calls = capture_function_calls
         self._turn_end_timeout_secs = turn_end_timeout_secs
+
+        self._auto_enable_metrics = auto_enable_metrics
+        self._capture_errors = capture_errors
+        self._capture_system_logs = capture_system_logs
+        self._capture_session_metadata = capture_session_metadata
 
         # ------------------------------------------------------------------ #
         # Conversation-level state                                            #
@@ -241,6 +264,16 @@ class NoveumTraceObserver(
         # usually built outside any loop (setup time) and run under a different
         # loop, which would raise "got Future attached to a different loop".
         self._finish_lock: Optional[asyncio.Lock] = None
+
+        # Custom span processor (set by NoveumPipecatTracer.observe_pipeline when
+        # capture_custom_spans=True; None otherwise).
+        self._custom_span_processor: Any = None
+
+        # Transport reference and session metadata buffer.
+        # _store_transport() populates this dict at register_task_handlers time;
+        # _flush_session_metadata() writes it to self._trace at first connection.
+        self._transport: Any = None
+        self._session_metadata: dict[str, Any] = {}
 
         # Full-conversation audio (populated via AudioBufferProcessor wired in attach_to_task)
         # Holds raw PCM bytes from on_audio_data until EndFrame flushes them.
@@ -740,6 +773,18 @@ class NoveumTraceObserver(
             # Metrics                                                           #
             # ---------------------------------------------------------------- #
             _reg("MetricsFrame", self._handle_metrics)
+            # LLMUsageMetricsFrame — standalone token-usage frame added in newer
+            # Pipecat versions (may not exist in all releases).
+            try:
+                from pipecat.frames.frames import (  # noqa: PLC0415
+                    LLMUsageMetricsFrame as _LLMUsageMetricsFrame,
+                )
+
+                self._frame_handlers[_LLMUsageMetricsFrame] = (
+                    self._handle_llm_usage_metrics
+                )
+            except ImportError:
+                pass
 
             # ---------------------------------------------------------------- #
             # VAD / speaking state                                              #
@@ -782,6 +827,8 @@ class NoveumTraceObserver(
             _reg("ErrorFrame", self._handle_error)
             # FatalErrorFrame is a subclass of ErrorFrame; register explicitly
             _reg("FatalErrorFrame", self._handle_error)
+            # SystemLogFrame — structured pipeline log messages
+            _reg("SystemLogFrame", self._handle_system_log)
 
             # User audio frame name varies across pipecat versions
             for frame_name in ("UserAudioRawFrame", "InputAudioRawFrame"):
@@ -935,6 +982,172 @@ class NoveumTraceObserver(
             return None
 
     # ---------------------------------------------------------------------- #
+    # LLMUsageMetricsFrame handler                                           #
+    # ---------------------------------------------------------------------- #
+
+    async def _handle_llm_usage_metrics(self, data: Any) -> None:
+        """
+        ``LLMUsageMetricsFrame``: standalone token-usage frame (newer Pipecat).
+
+        Extracts token counts from the frame's ``tokens`` attribute (an
+        ``LLMTokenUsage`` object) or directly from the frame, then writes the
+        same set of attributes as ``_MetricsHandlerMixin._handle_metrics`` writes
+        for ``LLMUsageMetricsData`` inside a ``MetricsFrame``.
+
+        Idempotent: if both ``MetricsFrame`` and ``LLMUsageMetricsFrame`` are
+        emitted for the same LLM call, the last write wins (same span target).
+        """
+        from noveum_trace.integrations.pipecat.pipecat_utils import calculate_llm_cost
+
+        llm_target = self._active_llm_span or self._last_llm_span
+        if llm_target is None:
+            return
+
+        frame = data.frame
+        # Shape 1 (preferred): frame.tokens is an LLMTokenUsage object.
+        # Shape 2 (fallback): token counts are direct attributes on the frame.
+        tokens_obj = getattr(frame, "tokens", None) or frame
+        prompt = int(getattr(tokens_obj, "prompt_tokens", 0) or 0)
+        completion = int(getattr(tokens_obj, "completion_tokens", 0) or 0)
+        total = int(
+            getattr(tokens_obj, "total_tokens", prompt + completion)
+            or (prompt + completion)
+        )
+
+        if not (prompt or completion or total):
+            return
+
+        llm_target.attributes["llm.input_tokens"] = prompt
+        llm_target.attributes["llm.output_tokens"] = completion
+        llm_target.attributes["llm.total_tokens"] = total
+
+        for extra in ("cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"):
+            val = getattr(tokens_obj, extra, None)
+            if val is not None:
+                llm_target.attributes[f"llm.{extra}"] = int(val)
+
+        model = getattr(frame, "model", None) or llm_target.attributes.get(
+            "llm.model", ""
+        )
+        if model:
+            llm_target.attributes["llm.model"] = model
+            cost = calculate_llm_cost(model, prompt, completion)
+            if cost:
+                llm_target.attributes["llm.cost.input"] = cost["input"]
+                llm_target.attributes["llm.cost.output"] = cost["output"]
+                llm_target.attributes["llm.cost.total"] = cost["total"]
+                llm_target.attributes["llm.cost.currency"] = cost["currency"]
+                self._metrics_accumulator["total_cost"] = (
+                    self._metrics_accumulator["total_cost"] + cost["total"]
+                )
+
+        self._metrics_accumulator["total_input_tokens"] += prompt
+        self._metrics_accumulator["total_output_tokens"] += completion
+
+        logger.debug(
+            "LLMUsageMetricsFrame: prompt=%d completion=%d model=%s",
+            prompt,
+            completion,
+            model or "<unknown>",
+        )
+
+    # ---------------------------------------------------------------------- #
+    # Session metadata helpers                                               #
+    # ---------------------------------------------------------------------- #
+
+    def _store_transport(
+        self, transport: Any, runner_args: Optional[Any] = None
+    ) -> None:
+        """
+        Save the transport reference and extract static session metadata.
+
+        Called from ``NoveumPipecatTracer.register_task_handlers`` before
+        ``attach_to_task``.  The trace may not exist yet at this point, so
+        metadata is buffered in ``_session_metadata`` and flushed to the trace
+        by ``_flush_session_metadata`` at first client/bot connection.
+
+        Metadata extracted (all via ``getattr`` — degrades gracefully on any
+        transport shape):
+
+        From *transport*:
+          - ``session.transport_type`` — transport class name
+          - ``session.room_url`` — Daily / WebRTC room URL
+
+        From *runner_args* (``pipecat.runner.types.RunnerArguments``):
+          - ``session.room_url`` — authoritative room URL (fills gaps)
+          - ``session.idle_timeout_secs`` — ``pipeline_idle_timeout_secs``
+          - ``session.bot_name`` — ``bot_name`` if present
+        """
+        if not self._capture_session_metadata:
+            return
+
+        self._transport = transport
+        meta: dict[str, Any] = {}
+
+        try:
+            meta["session.transport_type"] = type(transport).__name__
+        except Exception:
+            pass
+
+        for attr in ("room_url", "room_name"):
+            val = getattr(transport, attr, None)
+            if val:
+                meta["session.room_url"] = val
+                break
+
+        if runner_args is not None:
+            try:
+                room_url = getattr(runner_args, "room_url", None) or getattr(
+                    runner_args, "room", None
+                )
+                if room_url:
+                    meta["session.room_url"] = room_url
+
+                idle = getattr(runner_args, "pipeline_idle_timeout_secs", None)
+                if idle is not None:
+                    meta["session.idle_timeout_secs"] = idle
+
+                bot_name = getattr(runner_args, "bot_name", None)
+                if bot_name:
+                    meta["session.bot_name"] = bot_name
+            except Exception:
+                pass
+
+        if meta:
+            self._session_metadata.update(meta)
+            logger.debug(
+                "NoveumTraceObserver: buffered session metadata: %s",
+                list(meta.keys()),
+            )
+
+    async def _flush_session_metadata(self) -> None:
+        """
+        Write buffered session metadata onto the root conversation trace.
+
+        Called from ``_handle_client_connected`` and ``_handle_bot_connected``
+        (whichever fires first) once ``self._trace`` is guaranteed to exist.
+        Clears the buffer after writing so subsequent calls are no-ops.
+        """
+        if not self._capture_session_metadata:
+            return
+        if not self._session_metadata:
+            return
+        if self._trace is None:
+            return
+        try:
+            self._trace.set_attributes(self._session_metadata)
+            logger.debug(
+                "NoveumTraceObserver: flushed session metadata to trace: %s",
+                list(self._session_metadata.keys()),
+            )
+        except Exception as exc:
+            logger.debug(
+                "NoveumTraceObserver: failed to flush session metadata: %s", exc
+            )
+        finally:
+            self._session_metadata.clear()
+
+    # ---------------------------------------------------------------------- #
     # Conversation finish                                                     #
     # ---------------------------------------------------------------------- #
 
@@ -975,6 +1188,20 @@ class NoveumTraceObserver(
         )
 
         await self._cancel_turn_end_timer()
+
+        # Drain any still-open custom spans before the trace closes.
+        proc = self._custom_span_processor
+        if proc is not None:
+            import datetime as _dt
+
+            _now = _dt.datetime.now(_dt.timezone.utc)
+            for nov_span in list(proc._map.values()):
+                try:
+                    if self._trace is not None:
+                        self._trace.finish_span(nov_span.span_id, end_time=_now)
+                except Exception:
+                    pass
+            proc._map.clear()
 
         # Discard any partial thought accumulated so far
         self._llm_thought_buffer.clear()
@@ -1064,6 +1291,14 @@ class NoveumTraceObserver(
         except Exception as e:
             logger.warning("Failed to finish pipecat trace: %s", e, exc_info=True)
 
+        # Tear down the OTEL provider if we created it.
+        proc = self._custom_span_processor
+        if proc is not None and getattr(proc, "_owns_provider", False):
+            try:
+                proc._provider.shutdown()
+            except Exception:
+                pass
+
         logger.debug(
             "_finish_conversation completed — trace flushed (cancelled=%s)", cancelled
         )
@@ -1087,6 +1322,10 @@ class NoveumTraceObserver(
         self._conversation_audio_chunks = []
         self._conversation_audio_sample_rate = None
         self._conversation_audio_num_channels = None
+
+        # Reset transport/metadata state for observer reuse.
+        self._transport = None
+        self._session_metadata.clear()
 
     async def _await_audio_buffer_pending_handlers(self) -> None:
         """

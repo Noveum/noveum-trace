@@ -4,6 +4,43 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
+"""
+Pipecat drive-thru order bot — Noveum Trace SDK v2 integration.
+
+Demonstrates the new two-call NoveumPipecatTracer API.  Compare with
+pipecat_integration_example.py (legacy, seven-step manual wiring) to see
+what changed.
+
+Noveum-specific additions vs. a plain Pipecat bot (6 lines total):
+
+    import noveum_trace                                                 # +1
+    from noveum_trace.integrations.pipecat import NoveumPipecatTracer  # +1
+
+    noveum_trace.init(api_key=..., project=...)                        # +1
+    tracer = NoveumPipecatTracer(record_audio=True, ...)               # +1
+    pipeline = tracer.observe_pipeline(pipeline)                        # +1
+    task = await tracer.register_task_handlers(task, transport=...)    # +1
+
+Everything else — transport, pipeline    , PipelineTask — is stock Pipecat.
+No manual AudioBufferProcessor needed: observe_pipeline auto-inserts one.
+
+Features enabled via NoveumPipecatTracer flags (all opt-out unless noted):
+  - observe_pipeline auto-inserts AudioBufferProcessor and optionally registers
+    an OTEL SpanProcessor for custom spans
+  - register_task_handlers taps transport for pre-filter raw audio
+  - PipelineParams.enable_metrics / enable_usage_metrics auto-patched True
+  - ErrorFrame / FatalErrorFrame → span errors + trace events
+  - SystemLogFrame (opt-in, capture_system_logs=True) → span events
+  - LLMUsageMetricsFrame (newer Pipecat standalone frame) → tokens + cost
+  - transport type, room URL, runner idle timeout stamped on root trace;
+    pass runner_args= to register_task_handlers to enrich further
+
+Plain OTEL spans emitted anywhere in customer code (see add_item_to_order and
+confirm_order below) are automatically captured by NoveumCustomSpanProcessor
+and nested under the active pipecat.turn — no noveum_trace import required in
+the business-logic code.  Requires: pip install 'noveum-trace[pipecat-otel]'
+"""
+
 import os
 
 from dotenv import load_dotenv
@@ -13,10 +50,8 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
-    Frame,
     FunctionCallResultProperties,
     LLMRunFrame,
-    TranscriptionFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -27,28 +62,28 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.runner.types import (
-    DailyRunnerArguments,
-    RunnerArguments,
-    SmallWebRTCRunnerArguments,
-)
+from pipecat.runner.types import RunnerArguments
+from pipecat.runner.utils import create_transport
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
-from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import noveum_trace
-from noveum_trace.integrations.pipecat import (
-    NoveumDailyTransport,
-    NoveumSmallWebRTCTransport,
-    NoveumTraceObserver,
-    setup_pipecat_tracing,
-)
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
+
+try:
+    from opentelemetry import trace as otel_trace
+
+    _tracer = otel_trace.get_tracer(__name__)
+    OTEL_AVAILABLE = True
+except ImportError:
+    otel_trace = None  # type: ignore[assignment]
+    _tracer = None
+    OTEL_AVAILABLE = False
 
 load_dotenv(override=True)
 
@@ -87,6 +122,16 @@ async def add_item_to_order(params: FunctionCallParams):
         return
 
     price = MENU[item]
+
+    # Plain OTEL span — captured automatically by NoveumCustomSpanProcessor
+    # and nested under the active pipecat.turn (requires capture_custom_spans=True).
+    # No noveum_trace import needed here; the processor intercepts it transparently.
+    if _tracer is not None:
+        with _tracer.start_as_current_span("menu.price_lookup") as otel_span:
+            otel_span.set_attribute("menu.item", item)
+            otel_span.set_attribute("menu.price", price)
+            otel_span.set_attribute("menu.quantity", quantity)
+
     current_order["items"].append({"name": item, "quantity": quantity, "price": price})
     current_order["total"] += price * quantity
 
@@ -109,7 +154,6 @@ async def remove_item_from_order(params: FunctionCallParams):
     """Remove an item from the current order."""
     item = params.arguments.get("item", "").lower().replace(" ", "_")
 
-    # Find and remove the item
     for order_item in current_order["items"]:
         if order_item["name"] == item:
             current_order["items"].remove(order_item)
@@ -191,22 +235,25 @@ async def confirm_order(params: FunctionCallParams):
         "message": f"Order confirmed! Your total is ${current_order['total']:.2f}. Please pull forward to the next window.",
     }
 
-    # Clear the order after confirmation
     current_order["items"] = []
     current_order["total"] = 0.0
+
+    # Plain OTEL span — no Noveum import needed; captured automatically and
+    # nested under the active pipecat.turn when capture_custom_spans=True.
+    if _tracer is not None:
+        with _tracer.start_as_current_span("order.finalize") as otel_span:
+            otel_span.set_attribute("order.item_count", len(order_summary["items"]))
+            otel_span.set_attribute("order.number", order_summary["order_number"])
+            otel_span.set_attribute("order.total_usd", order_summary["total"])
 
     await params.result_callback(order_summary)
 
 
-# We use lambdas to defer transport parameter creation until the transport
-# type is selected at runtime.
+# Stock transport params — no Noveum wrappers needed.
 transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        # RNNoise suppression on the caller's incoming audio, before STT.
-        # The Noveum transport taps the pre-filter (raw) audio separately, so
-        # stt.raw_audio_uuid != stt.audio_uuid once a filter is in place.
         audio_in_filter=RNNoiseFilter(),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
@@ -222,83 +269,11 @@ transport_params = {
 }
 
 
-class STTCustomSpanProcessor(FrameProcessor):
-    """Adds a custom Noveum span for each final STT transcription.
-
-    Sits immediately after the STT service in the pipeline. For every
-    TranscriptionFrame that arrives it opens a span on the active Noveum
-    trace, records transcript metadata, then finishes the span before
-    forwarding the frame downstream.
-
-    Receives the observer by reference so it can read _trace directly —
-    Pipecat runs each processor in its own asyncio Task, so contextvars
-    set by the observer are not visible here via get_current_trace().
-    """
-
-    def __init__(self, observer: "NoveumTraceObserver"):
-        super().__init__()
-        self._noveum_observer = observer
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, TranscriptionFrame):
-            trace = self._noveum_observer._trace
-            if trace is not None:
-                span = trace.create_span(
-                    name="custom.stt.transcription",
-                    attributes={
-                        "stt.transcript": frame.text,
-                        "stt.user_id": frame.user_id,
-                        "stt.language": str(frame.language) if frame.language else None,
-                        "stt.word_count": len(frame.text.split()),
-                        "stt.finalized": frame.finalized,
-                    },
-                )
-                span.finish()
-
-        await self.push_frame(frame, direction)
-
-
-async def _create_noveum_transport(
-    runner_args: RunnerArguments, observer: "NoveumTraceObserver"
-) -> BaseTransport:
-    """Construct the Noveum composite transport matching the runner's transport type.
-
-    Mirrors pipecat.runner.utils.create_transport but uses the Noveum* wrappers
-    so that pre-filter (raw) input audio is tapped at push_audio_frame time.
-    """
-    if isinstance(runner_args, DailyRunnerArguments):
-        return NoveumDailyTransport(
-            runner_args.room_url,
-            runner_args.token,
-            "Pipecat Bot",
-            params=transport_params["daily"](),
-            noveum_observer=observer,
-        )
-    if isinstance(runner_args, SmallWebRTCRunnerArguments):
-        return NoveumSmallWebRTCTransport(
-            webrtc_connection=runner_args.webrtc_connection,
-            params=transport_params["webrtc"](),
-            noveum_observer=observer,
-        )
-    raise ValueError(
-        f"Noveum example does not yet wrap transport type {type(runner_args).__name__}; "
-        "extend _create_noveum_transport to add support."
-    )
-
-
-async def run_bot(
-    transport: BaseTransport,
-    runner_args: RunnerArguments,
-    trace_obs: "NoveumTraceObserver",
-):
+async def run_bot(transport, runner_args: RunnerArguments, tracer: NoveumPipecatTracer):
     logger.info("Starting drive-thru order bot")
 
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
     tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
     llm = GoogleLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
         model="gemini-2.5-flash",
@@ -321,13 +296,11 @@ Be conversational, friendly, and efficient. Keep responses concise since this is
 If they ask for something not on the menu, politely let them know and suggest alternatives.""",
     )
 
-    # Register function handlers
     llm.register_function("add_item_to_order", add_item_to_order)
     llm.register_function("remove_item_from_order", remove_item_from_order)
     llm.register_function("view_current_order", view_current_order)
     llm.register_function("confirm_order", confirm_order)
 
-    # Define function schemas
     add_item_schema = FunctionSchema(
         name="add_item_to_order",
         description="Add an item to the customer's order. Use this when the customer requests an item.",
@@ -396,28 +369,23 @@ If they ask for something not on the menu, politely let them know and suggest al
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
-    # Records the full stereo conversation (user=left, bot=right) for Noveum Trace.
-    # NoveumTraceObserver auto-detects this in attach_to_task() and uploads a
-    # pipecat.full_conversation span at the end of the session.
-    audio_buffer = AudioBufferProcessor(num_channels=2)
-
-    # Observer was created in bot() so that the Noveum composite transport
-    # could be constructed with noveum_observer=trace_obs already wired in.
-    stt_span_processor = STTCustomSpanProcessor(trace_obs)
-
     pipeline = Pipeline(
         [
             transport.input(),  # Transport user input
             stt,  # Speech-to-Text
-            stt_span_processor,  # Custom Noveum span per transcription
             user_aggregator,  # User responses
             llm,  # LLM with function calling
             tts,  # Text-to-Speech
             transport.output(),  # Transport bot output
             assistant_aggregator,  # Assistant spoken responses
-            audio_buffer,  # Full-conversation stereo recording
+            # AudioBufferProcessor is auto-inserted at the tail by
+            # tracer.observe_pipeline() — no manual setup needed.
         ]
     )
+
+    # --- Noveum Trace wiring (2 calls) ---
+    # observe_pipeline auto-appends AudioBufferProcessor when absent.
+    pipeline = tracer.observe_pipeline(pipeline)
 
     task = PipelineTask(
         pipeline,
@@ -426,10 +394,14 @@ If they ask for something not on the menu, politely let them know and suggest al
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[trace_obs],
     )
 
-    await trace_obs.attach_to_task(task)
+    task = await tracer.register_task_handlers(
+        task,
+        transport=transport,  # raw audio tap + transport type + room_url
+        runner_args=runner_args,  # room URL, idle timeout → root trace attributes
+    )
+    # --- end Noveum wiring ---
 
     async def end_call(params: FunctionCallParams):
         """End the call: fixed goodbye via TTS, then graceful task shutdown."""
@@ -448,7 +420,6 @@ If they ask for something not on the menu, politely let them know and suggest al
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Customer connected to drive-thru")
-        # Kick off the conversation with a greeting
         context.add_message(
             {
                 "role": "user",
@@ -463,7 +434,6 @@ If they ask for something not on the menu, politely let them know and suggest al
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
-
     await runner.run(task)
 
 
@@ -473,9 +443,21 @@ async def bot(runner_args: RunnerArguments):
         api_key=os.getenv("NOVEUM_API_KEY"),
         project=os.getenv("NOVEUM_PROJECT", "pipecat-drive-thru"),
     )
-    trace_obs = setup_pipecat_tracing(record_audio=True)
-    transport = await _create_noveum_transport(runner_args, trace_obs)
-    await run_bot(transport, runner_args, trace_obs)
+
+    tracer = NoveumPipecatTracer(
+        record_audio=True,
+        record_raw_input_audio=True,  # taps transport.input().push_audio_frame
+        capture_custom_spans=True,  # plain-OTEL spans auto-nested under active turn
+        auto_enable_metrics=True,  # ensures MetricsFrame is always emitted
+        capture_errors=True,  # ErrorFrame/FatalErrorFrame → span errors
+        capture_system_logs=False,  # SystemLogFrame opt-in (high volume)
+        capture_session_metadata=True,  # room URL + transport type on root trace
+    )
+
+    # Stock transport — no Noveum*Transport class-swap needed.
+    transport = await create_transport(runner_args, transport_params)
+
+    await run_bot(transport, runner_args, tracer)
 
 
 if __name__ == "__main__":

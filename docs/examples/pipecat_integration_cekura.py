@@ -6,6 +6,7 @@
 
 import os
 
+from cekura.pipecat import PipecatTracer
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -27,28 +28,18 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.runner.types import (
-    DailyRunnerArguments,
-    RunnerArguments,
-    SmallWebRTCRunnerArguments,
-)
+from pipecat.runner.types import RunnerArguments
+from pipecat.runner.utils import create_transport
+from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.deepgram.tts import DeepgramTTSService
-from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
-import noveum_trace
-from noveum_trace.integrations.pipecat import (
-    NoveumDailyTransport,
-    NoveumSmallWebRTCTransport,
-    NoveumTraceObserver,
-    setup_pipecat_tracing,
-)
+from noveum_trace.integrations.pipecat import NoveumTraceObserver
 
 load_dotenv(override=True)
 
@@ -205,8 +196,6 @@ transport_params = {
         audio_in_enabled=True,
         audio_out_enabled=True,
         # RNNoise suppression on the caller's incoming audio, before STT.
-        # The Noveum transport taps the pre-filter (raw) audio separately, so
-        # stt.raw_audio_uuid != stt.audio_uuid once a filter is in place.
         audio_in_filter=RNNoiseFilter(),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
@@ -260,49 +249,25 @@ class STTCustomSpanProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-async def _create_noveum_transport(
-    runner_args: RunnerArguments, observer: "NoveumTraceObserver"
-) -> BaseTransport:
-    """Construct the Noveum composite transport matching the runner's transport type.
-
-    Mirrors pipecat.runner.utils.create_transport but uses the Noveum* wrappers
-    so that pre-filter (raw) input audio is tapped at push_audio_frame time.
-    """
-    if isinstance(runner_args, DailyRunnerArguments):
-        return NoveumDailyTransport(
-            runner_args.room_url,
-            runner_args.token,
-            "Pipecat Bot",
-            params=transport_params["daily"](),
-            noveum_observer=observer,
-        )
-    if isinstance(runner_args, SmallWebRTCRunnerArguments):
-        return NoveumSmallWebRTCTransport(
-            webrtc_connection=runner_args.webrtc_connection,
-            params=transport_params["webrtc"](),
-            noveum_observer=observer,
-        )
-    raise ValueError(
-        f"Noveum example does not yet wrap transport type {type(runner_args).__name__}; "
-        "extend _create_noveum_transport to add support."
-    )
-
-
 async def run_bot(
     transport: BaseTransport,
     runner_args: RunnerArguments,
-    trace_obs: "NoveumTraceObserver",
 ):
     logger.info("Starting drive-thru order bot")
 
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
-    tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+    tts = CartesiaTTSService(
+        api_key=os.getenv("CARTESIA_API_KEY"),
+        settings=CartesiaTTSService.Settings(
+            voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        ),
+    )
 
-    llm = GoogleLLMService(
-        api_key=os.getenv("GEMINI_API_KEY"),
-        model="gemini-2.5-flash",
-        system_instruction="""You are a friendly drive-thru order taker at a fast food restaurant.
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        settings=OpenAILLMService.Settings(
+            system_instruction="""You are a friendly drive-thru order taker at a fast food restaurant.
 
 Your menu includes:
 - Burgers: burger ($5.99), cheeseburger ($6.99), double burger ($8.99)
@@ -319,6 +284,7 @@ Your job:
 
 Be conversational, friendly, and efficient. Keep responses concise since this is voice-based.
 If they ask for something not on the menu, politely let them know and suggest alternatives.""",
+        ),
     )
 
     # Register function handlers
@@ -396,28 +362,29 @@ If they ask for something not on the menu, politely let them know and suggest al
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
-    # Records the full stereo conversation (user=left, bot=right) for Noveum Trace.
-    # NoveumTraceObserver auto-detects this in attach_to_task() and uploads a
-    # pipecat.full_conversation span at the end of the session.
-    audio_buffer = AudioBufferProcessor(num_channels=2)
-
-    # Observer was created in bot() so that the Noveum composite transport
-    # could be constructed with noveum_observer=trace_obs already wired in.
-    stt_span_processor = STTCustomSpanProcessor(trace_obs)
-
     pipeline = Pipeline(
         [
             transport.input(),  # Transport user input
             stt,  # Speech-to-Text
-            stt_span_processor,  # Custom Noveum span per transcription
+            # To re-enable custom tracing, wire up a NoveumTraceObserver and insert
+            # STTCustomSpanProcessor(observer) here (see the class above).
             user_aggregator,  # User responses
             llm,  # LLM with function calling
             tts,  # Text-to-Speech
             transport.output(),  # Transport bot output
             assistant_aggregator,  # Assistant spoken responses
-            audio_buffer,  # Full-conversation stereo recording
         ]
     )
+
+    # Cekura production observability: wraps the pipeline to capture transcripts,
+    # tool calls, logs, dual-channel audio, and OpenTelemetry traces. Credentials
+    # come from the environment — never hardcode the API key.
+    cekura = PipecatTracer(
+        api_key=os.getenv("CEKURA_API_KEY"),
+        # TODO: set CEKURA_AGENT_ID (Cekura dashboard → agent settings)
+        agent_id=os.getenv("CEKURA_AGENT_ID"),
+    )
+    pipeline = cekura.observe_pipeline(pipeline, context, runner_args=runner_args)
 
     task = PipelineTask(
         pipeline,
@@ -426,10 +393,12 @@ If they ask for something not on the menu, politely let them know and suggest al
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[trace_obs],
+        # Required by Cekura for OTel traces + per-turn tracking.
+        enable_tracing=True,
+        enable_turn_tracking=True,
     )
-
-    await trace_obs.attach_to_task(task)
+    # Hooks task/transport lifecycle for cleanup (e.g. on participant disconnect).
+    task = cekura.register_task_handlers(task, transport=transport)
 
     async def end_call(params: FunctionCallParams):
         """End the call: fixed goodbye via TTS, then graceful task shutdown."""
@@ -469,13 +438,8 @@ If they ask for something not on the menu, politely let them know and suggest al
 
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point compatible with Pipecat Cloud."""
-    noveum_trace.init(
-        api_key=os.getenv("NOVEUM_API_KEY"),
-        project=os.getenv("NOVEUM_PROJECT", "pipecat-drive-thru"),
-    )
-    trace_obs = setup_pipecat_tracing(record_audio=True)
-    transport = await _create_noveum_transport(runner_args, trace_obs)
-    await run_bot(transport, runner_args, trace_obs)
+    transport = await create_transport(runner_args, transport_params)
+    await run_bot(transport, runner_args)
 
 
 if __name__ == "__main__":

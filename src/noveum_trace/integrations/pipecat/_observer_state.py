@@ -72,6 +72,14 @@ class _PipecatObserverState:
 
     _metrics_accumulator: dict[str, Any]
 
+    _capture_errors: bool
+    _capture_system_logs: bool
+    _capture_session_metadata: bool
+
+    # Transport metadata buffer
+    _transport: Any
+    _session_metadata: dict[str, Any]
+
     _turn_tracker: Any
     _latency_tracker: Any
     _using_external_turn_tracking: bool
@@ -105,6 +113,8 @@ class _PipecatObserverMethods(Protocol):
 
     def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...
 
+    async def _flush_session_metadata(self) -> None: ...
+
 
 # Do not inherit _PipecatObserverMethods (Protocol) at runtime: it inserts
 # typing.Protocol / Generic before BaseObserver in NoveumTraceObserver's MRO, so
@@ -129,3 +139,5 @@ class _PipecatObserverMixinBase(_PipecatObserverState):
         async def _finish_conversation(self, cancelled: bool = False) -> None: ...
 
         def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...
+
+        async def _flush_session_metadata(self) -> None: ...
