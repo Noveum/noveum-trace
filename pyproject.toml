@@ -262,6 +262,8 @@ explicit_package_bases = true
 module = [
     "openai.*",
     "anthropic.*",
+    "opentelemetry",
+    "opentelemetry.*",
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",
