@@ -517,7 +517,56 @@ pip install "noveum-trace[pipecat]"
 The observer **always uses the globally initialised Noveum client** — call
 `noveum_trace.init()` before creating the pipeline.
 
-### Using `setup_pipecat_tracing` (recommended factory)
+### Using `NoveumPipecatTracer` (recommended — two-call API)
+
+The preferred way to integrate. Uses stock Pipecat transport (no class-swap).
+The two call sites stay stable; additional capability is added inside them
+without requiring changes to customer code.
+
+```python
+import noveum_trace
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.runner.utils import create_transport
+
+noveum_trace.init(api_key="your-api-key", project="pipecat-bot")
+
+async def main():
+    transport = await create_transport(runner_args, transport_params)  # stock transport
+
+    tracer = NoveumPipecatTracer(
+        record_audio=True,             # buffer audio → upload WAV per span
+        record_raw_input_audio=True,   # pre-filter raw audio
+        capture_custom_spans=False,    # OTEL custom spans
+        # any NoveumTraceObserver kwarg also accepted:
+        # trace_name_prefix="my-bot",
+        # capture_function_calls=True,
+        # turn_end_timeout_secs=3.0,
+    )
+
+    pipeline = Pipeline([...])  # your processors; AudioBufferProcessor auto-inserted
+
+    pipeline = tracer.observe_pipeline(pipeline)
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+    )
+
+    task = await tracer.register_task_handlers(task, transport=transport)
+
+    runner = PipelineRunner()
+    await runner.run(task)
+```
+
+`tracer.observer` exposes the underlying `NoveumTraceObserver` for advanced use.
+
+### Using `setup_pipecat_tracing` (legacy factory)
+
+Still supported. Returns a raw `NoveumTraceObserver` for manual wiring.
+Use `NoveumPipecatTracer` for new integrations.
 
 ```python
 import noveum_trace
@@ -856,6 +905,8 @@ setup_livekit_tracing(session, metadata={"key": "val"}) # same — no metadata
 # Wrong Pipecat
 setup_pipecat_tracing(api_key="...", project="...")  # raises TypeError
 NoveumTraceObserver(api_key="...")                   # raises TypeError
+NoveumPipecatTracer(api_key="...", project="...")    # no such params — use noveum_trace.init()
+tracer.register_task_handlers(task)                  # forgot await — must be awaited
 
 # Wrong span status
 span.set_status("success")   # silently fails — use "ok"
@@ -898,7 +949,8 @@ The `docs/examples/` directory contains runnable examples from the test suite:
 | `langgraph_routing_example.py` | LangGraph routing tracking |
 | `langchain_long_conversation_example.py` | Multi-turn LangChain tracing |
 | `livekit_integration_example.py` | STT/TTS wrappers + `setup_livekit_tracing` |
-| `pipecat_integration_example.py` | `NoveumTraceObserver` + `attach_to_task` |
+| `pipecat_integration_example.py` | Legacy: `NoveumTraceObserver` + manual `attach_to_task` wiring |
+| `pipecat_integration_example_v2.py` | **New:** `NoveumPipecatTracer` two-call API, stock transport |
 | `crewai_e2e_test.py` | Full CrewAI crew with listener |
 | `streaming_example.py` | `streaming_llm`, `trace_streaming`, callbacks |
 | `thread_example.py` | `create_thread`, `trace_thread_llm` |

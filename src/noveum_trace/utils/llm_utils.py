@@ -748,6 +748,9 @@ def _apply_usage_key_conversions(usage_model: dict[str, Any]) -> dict[str, Any]:
         ("inputTokenCount", "input_tokens"),  # Bedrock
         ("outputTokenCount", "output_tokens"),
         ("totalTokenCount", "total_tokens"),
+        ("inputTokens", "input_tokens"),  # Bedrock Converse
+        ("outputTokens", "output_tokens"),
+        ("totalTokens", "total_tokens"),
         ("input_token_count", "input_tokens"),  # Watsonx
         ("generated_token_count", "output_tokens"),
     ]

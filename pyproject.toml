@@ -58,6 +58,7 @@ langchain = [
 ]
 livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 pipecat = ["pipecat-ai>=0.0.108"]
+pipecat-otel = ["pipecat-ai>=0.0.108", "opentelemetry-api>=1.0.0", "opentelemetry-sdk>=1.0.0"]
 crewai = ["crewai>=0.177.0; python_version>='3.10'"]
 
 # Optional: spaCy for ``PiiPseudonymizer`` NER (heavier than the core SDK; regex-only
@@ -261,6 +262,8 @@ explicit_package_bases = true
 module = [
     "openai.*",
     "anthropic.*",
+    "opentelemetry",
+    "opentelemetry.*",
     "tiktoken",
     "tiktoken.*",
     "langchain_core.*",

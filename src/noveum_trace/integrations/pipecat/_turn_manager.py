@@ -170,38 +170,8 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         """``InterruptionFrame``: cancel active spans and mark turn as interrupted."""
         await self._handle_interruption_internal(interrupted_by_user=True)
 
-    async def _handle_error(self, data: Any) -> None:
-        """``ErrorFrame``: propagate error status to active spans and trace."""
-        frame = data.frame
-        error_msg = str(getattr(frame, "error", "Unknown error"))
-
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
-            span.attributes["pipecat_span_status"] = "error"
-            span.attributes["pipecat_span_status_message"] = error_msg
-
-        if self._current_turn_span:
-
-            self._current_turn_span.attributes["pipecat_span_status"] = "error"
-
-            self._current_turn_span.attributes["pipecat_span_status_message"] = (
-                error_msg
-            )
-            try:
-                self._current_turn_span.events.append(
-                    SpanEvent(
-                        name="error",
-                        timestamp=datetime.now(timezone.utc),
-                        attributes={"error.message": error_msg},
-                    )
-                )
-            except Exception:  # pylint: disable=broad-except
-                pass
-
-        if self._trace:
-
-            self._trace.attributes["pipecat_span_status"] = "error"
-
-            self._trace.attributes["pipecat_span_status_message"] = error_msg
+    # _handle_error is implemented by _ErrorCaptureMixin, which sits before
+    # _TurnManagerMixin in NoveumTraceObserver's MRO.
 
     # ---------------------------------------------------------------------- #
     # Session / mute event handlers                                          #
@@ -248,8 +218,8 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         """
         ``ClientConnectedFrame``: a client (participant) connected to the transport.
 
-        Appends a ``client.connected`` ``SpanEvent`` to the trace. Useful for
-        measuring time from session start to first utterance.
+        Appends a ``client.connected`` ``SpanEvent`` to the trace and flushes any
+        buffered session metadata onto the root trace attributes.
         """
         if self._trace:
             try:
@@ -262,12 +232,14 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 )
             except Exception:  # pylint: disable=broad-except
                 pass
+        await self._flush_session_metadata()
 
     async def _handle_bot_connected(self, _data: Any) -> None:
         """
         ``BotConnectedFrame``: the bot successfully joined the SFU room.
 
-        Appends a ``bot.connected`` ``SpanEvent`` to the trace.
+        Appends a ``bot.connected`` ``SpanEvent`` to the trace and flushes any
+        buffered session metadata.
         """
         if self._trace:
             try:
@@ -280,6 +252,7 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 )
             except Exception:  # pylint: disable=broad-except
                 pass
+        await self._flush_session_metadata()
 
     async def _handle_stop_frame(self, _data: Any) -> None:
         """
@@ -490,7 +463,8 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 user_input = user_input[:MAX_TEXT_BUFFER_LENGTH]
             span.attributes["turn.user_input"] = user_input
 
-        span.attributes["pipecat_span_status"] = "ok"
+        if span.attributes.get("pipecat_span_status") != "error":
+            span.attributes["pipecat_span_status"] = "ok"
         span.finish()
 
         logger.debug("Ended turn %s", self._current_turn_number)

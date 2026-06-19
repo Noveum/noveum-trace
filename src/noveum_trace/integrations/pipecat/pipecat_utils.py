@@ -71,7 +71,9 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
             "seed",
         ):
             val = getattr(raw, attr, None)
-            if val is not None and val != {}:
+            # Skip None, empty dicts, and provider "NOT_GIVEN" sentinels (e.g.
+            # OpenAI's), which otherwise leak into spans as ``llm.top_p = NOT_GIVEN``.
+            if val is not None and val != {} and "NOT_GIVEN" not in repr(val):
                 settings[attr] = val
 
     except Exception as e:

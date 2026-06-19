@@ -50,7 +50,9 @@ Or use the convenience helper::
 
 from typing import Any
 
+from noveum_trace.integrations.pipecat.custom_spans import NoveumCustomSpanProcessor
 from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+from noveum_trace.integrations.pipecat.tracer import NoveumPipecatTracer
 from noveum_trace.integrations.pipecat.transports import (
     NoveumDailyTransport,
     NoveumFastAPIWebsocketTransport,
@@ -75,6 +77,13 @@ def setup_pipecat_tracing(**kwargs: Any) -> NoveumTraceObserver:
     Tracing uses the global Noveum client only — call ``noveum_trace.init()``
     (or equivalent) before running the pipeline.
 
+    For the new two-call API (recommended), use :class:`NoveumPipecatTracer`
+    instead::
+
+        tracer = NoveumPipecatTracer(record_audio=True)
+        pipeline = tracer.observe_pipeline(pipeline)
+        task = await tracer.register_task_handlers(task, transport=transport)
+
     Args:
         **kwargs: Forwarded to ``NoveumTraceObserver`` (e.g. ``record_audio``,
             ``trace_name_prefix``, ``name=`` for Pipecat's ``BaseObject``).
@@ -96,6 +105,8 @@ def setup_pipecat_tracing(**kwargs: Any) -> NoveumTraceObserver:
 
 __all__ = [
     "NoveumTraceObserver",
+    "NoveumPipecatTracer",
+    "NoveumCustomSpanProcessor",
     "setup_pipecat_tracing",
     "NoveumRawAudioTapMixin",
     "NoveumDailyTransport",
