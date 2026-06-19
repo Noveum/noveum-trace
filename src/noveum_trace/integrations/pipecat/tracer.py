@@ -340,7 +340,18 @@ class NoveumPipecatTracer:
                     )
                     input_transport = None
 
-                if input_transport is not None:
+                if input_transport is not None and getattr(
+                    input_transport, "_noveum_tap_applied", False
+                ):
+                    # Idempotency guard: never wrap an already-tapped instance.
+                    # Re-tapping (observer reuse, retry, a second
+                    # register_task_handlers) would stack wrappers and capture
+                    # each frame once per layer.
+                    logger.debug(
+                        "NoveumPipecatTracer: raw audio tap already applied on "
+                        "input transport — skipping (idempotent)"
+                    )
+                elif input_transport is not None:
                     _original = getattr(input_transport, "push_audio_frame", None)
                     if _original is None:
                         logger.debug(
@@ -353,10 +364,20 @@ class NoveumPipecatTracer:
                         async def _patched(
                             frame: Any, *args: Any, **kwargs: Any
                         ) -> Any:
-                            _observer_ref.capture_raw_input_audio(frame)
+                            # Side-band: a capture failure must NEVER propagate
+                            # onto the audio path (non-intrusive guarantee).
+                            try:
+                                _observer_ref.capture_raw_input_audio(frame)
+                            except Exception:
+                                logger.debug(
+                                    "NoveumPipecatTracer: raw audio capture failed; "
+                                    "continuing without it",
+                                    exc_info=True,
+                                )
                             return await _original(frame, *args, **kwargs)
 
                         input_transport.push_audio_frame = _patched
+                        input_transport._noveum_tap_applied = True
                         logger.debug(
                             "NoveumPipecatTracer: monkeypatched push_audio_frame "
                             "on input transport for raw audio capture"

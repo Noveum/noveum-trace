@@ -166,7 +166,12 @@ class NoveumCustomSpanProcessor(SpanProcessor):
                     status_code is not None
                     and getattr(status_code, "name", "") == "ERROR"
                 ):
-                    nov.set_status("error", status.description or "")
+                    # Span.set_status expects a SpanStatus enum; passing the bare
+                    # string "error" makes Span.to_dict() raise on status.value
+                    # when the trace is exported.
+                    from noveum_trace.core.span import SpanStatus
+
+                    nov.set_status(SpanStatus.ERROR, status.description or "")
 
             end_time = _ns_to_dt(span.end_time) if span.end_time else None
             self._obs._trace.finish_span(nov.span_id, end_time=end_time)
