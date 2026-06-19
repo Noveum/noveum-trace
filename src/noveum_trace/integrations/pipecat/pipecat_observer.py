@@ -1021,10 +1021,26 @@ class NoveumTraceObserver(
         llm_target.attributes["llm.output_tokens"] = completion
         llm_target.attributes["llm.total_tokens"] = total
 
-        for extra in ("cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"):
-            val = getattr(tokens_obj, extra, None)
+        # Read from the source-of-truth field names first, falling back to the
+        # span-attribute names, so both Pipecat naming conventions are covered.
+        for dst, srcs in (
+            ("cache_read_tokens", ("cache_read_input_tokens", "cache_read_tokens")),
+            (
+                "cache_creation_tokens",
+                ("cache_creation_input_tokens", "cache_creation_tokens"),
+            ),
+            ("reasoning_tokens", ("reasoning_tokens",)),
+        ):
+            val = next(
+                (
+                    v
+                    for v in (getattr(tokens_obj, s, None) for s in srcs)
+                    if v is not None
+                ),
+                None,
+            )
             if val is not None:
-                llm_target.attributes[f"llm.{extra}"] = int(val)
+                llm_target.attributes[f"llm.{dst}"] = int(val)
 
         model = getattr(frame, "model", None) or llm_target.attributes.get(
             "llm.model", ""
