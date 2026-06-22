@@ -1755,8 +1755,9 @@ class TestTraceCreationEdgeCases:
                                 # Check that job context was used in trace name
                                 call_args = mock_client.start_trace.call_args
                                 assert call_args is not None
-            except (ImportError, ModuleNotFoundError):
-                # Skip if livekit.agents not available
+            except (ImportError, ModuleNotFoundError, AttributeError):
+                # Skip if livekit.agents not available (a broken namespace
+                # package raises AttributeError, not ImportError)
                 pytest.skip("livekit.agents not available")
 
     @pytest.mark.asyncio
@@ -1836,7 +1837,7 @@ class TestTraceCreationEdgeCases:
                                 await manager.session.start(mock_agent)
 
                                 mock_client.start_trace.assert_called_once()
-            except (ImportError, ModuleNotFoundError):
+            except (ImportError, ModuleNotFoundError, AttributeError):
                 pytest.skip("livekit.agents not available")
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
