@@ -1,12 +1,106 @@
 # Custom Spans in Pipecat Pipelines
 
-This guide covers how to emit your own Noveum spans from inside a Pipecat pipeline — alongside the spans that `NoveumTraceObserver` produces automatically.
+This guide covers how to fold your own spans into a Pipecat conversation trace —
+alongside the spans that `NoveumPipecatTracer` produces automatically.
+
+There are two ways to do it:
+
+| Method | When to use | Import in your code |
+|---|---|---|
+| **OTEL spans** (`capture_custom_spans=True`) | You want zero coupling — emit plain OpenTelemetry spans from business logic | `opentelemetry` only |
+| **Direct observer reference** (`tracer.observer._trace`) | You're already writing a custom `FrameProcessor` / subclassed service and want explicit control over span placement | `noveum_trace` |
+
+Both share the same `trace_id` as the Pipecat spans. Pick whichever fits your
+code; you can use both in the same pipeline.
 
 ---
 
-## Why this needs special handling
+## Method 1 — Plain OpenTelemetry spans (recommended)
 
-Pipecat runs every processor in the pipeline as its own asyncio Task. Noveum's `get_current_trace()` uses Python's `ContextVar` system, which is **task-local** — each Task gets its own isolated copy of the context at the moment it is created.
+You emit **plain OpenTelemetry spans** from anywhere in your code; the tracer
+captures them and nests them under the active `pipecat.turn`. Your business logic
+needs **no `noveum_trace` import** — it only depends on OpenTelemetry.
+
+### Installation
+
+OTEL-span capture uses an OTEL `SpanProcessor`, so install the `pipecat-otel`
+extra:
+
+```bash
+pip install "noveum-trace[pipecat-otel]"
+```
+
+### Enable capture
+
+Pass `capture_custom_spans=True` to the tracer. The OTEL `SpanProcessor` is
+registered inside `observe_pipeline()`:
+
+```python
+import noveum_trace
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
+
+noveum_trace.init(api_key="...", project="my-voice-bot")
+
+tracer = NoveumPipecatTracer(record_audio=True, capture_custom_spans=True)
+
+pipeline = tracer.observe_pipeline(pipeline)   # registers the SpanProcessor
+task = PipelineTask(pipeline, params=PipelineParams(...))
+task = await tracer.register_task_handlers(task, transport=transport)
+```
+
+### Emit a span
+
+Use the standard OpenTelemetry API anywhere — inside a function-call handler, a
+custom `FrameProcessor`, a subclassed service, or plain business logic:
+
+```python
+from opentelemetry import trace as otel_trace
+
+_tracer = otel_trace.get_tracer(__name__)
+
+
+async def add_item_to_order(params):
+    item = params.arguments.get("item")
+    price = MENU[item]
+
+    # Plain OTEL span — captured automatically and nested under the active
+    # pipecat.turn. No noveum_trace import needed here.
+    with _tracer.start_as_current_span("menu.price_lookup") as span:
+        span.set_attribute("menu.item", item)
+        span.set_attribute("menu.price", price)
+        span.set_attribute("menu.quantity", params.arguments.get("quantity", 1))
+
+    ...
+```
+
+That's all. The `NoveumCustomSpanProcessor` intercepts the span on export and
+attaches it to the active Noveum conversation trace.
+
+### Notes
+
+- Spans are captured on export, so always close them — use the
+  `with _tracer.start_as_current_span(...)` context manager (or call
+  `span.end()`) so the span is flushed.
+- Attribute values follow OTEL rules: strings, numbers, booleans, and sequences
+  of those. Complex objects should be serialized to a string first.
+- `capture_custom_spans` defaults to `False`. Enable it only when you actually
+  emit custom spans; it adds an OTEL `SpanProcessor` to the process.
+- If the `pipecat-otel` extra is not installed, the tracer logs a warning and
+  custom-span capture stays inactive — the rest of tracing is unaffected.
+
+---
+
+## Method 2 — Direct observer reference (no OTEL)
+
+If you'd rather not depend on OpenTelemetry, you can create Noveum spans directly
+from inside a custom `FrameProcessor` (or a subclassed service) by holding a
+reference to the tracer's observer and reading its `_trace` field.
+
+### Why this needs special handling
+
+Pipecat runs every processor in the pipeline as its own asyncio Task. Noveum's
+`get_current_trace()` uses Python's `ContextVar` system, which is **task-local** —
+each Task gets its own isolated copy of the context at the moment it is created.
 
 This means:
 
@@ -15,11 +109,10 @@ NoveumTraceObserver task  →  creates trace, calls set_current_trace(trace)
 YourCustomProcessor task  →  calls get_current_trace() → returns None  ❌
 ```
 
-The observer's write never crosses the Task boundary. The fix is to **not go through `get_current_trace()` at all** — instead, hold a direct reference to the observer and read its `_trace` field. A plain object reference has no notion of task ownership, so both tasks see the same value.
-
----
-
-## Pattern: custom FrameProcessor with a Noveum span
+The observer's write never crosses the Task boundary. The fix is to **not go
+through `get_current_trace()` at all** — instead, hold a direct reference to the
+observer and read its `_trace` field. A plain object reference has no notion of
+task ownership, so both tasks see the same value.
 
 ### 1. Define your processor
 
@@ -66,26 +159,23 @@ Two things to notice:
 - `self._observer._trace` instead of `noveum_trace.get_current_trace()` — this is the key difference.
 - `await self.push_frame(frame, direction)` must always be called, otherwise the frame never reaches the next processor.
 
----
-
 ### 2. Wire it into the pipeline
 
-The observer must be created **before** the processor, since the processor holds a reference to it.
+The tracer owns the observer (`tracer.observer`). Create the tracer **before** the
+processor, since the processor holds a reference to the observer.
 
 ```python
 import noveum_trace
-from noveum_trace.integrations.pipecat import NoveumTraceObserver
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
 
 noveum_trace.init(
     api_key="...",
     project="my-voice-bot",
 )
 
-# Create observer first
-trace_obs = NoveumTraceObserver(record_audio=True)
-
-# Pass it to your custom processor
-stt_logger = STTLogger(trace_obs)
+# Create the tracer first, then hand its observer to your custom processor
+tracer = NoveumPipecatTracer(record_audio=True)
+stt_logger = STTLogger(tracer.observer)
 
 pipeline = Pipeline([
     transport.input(),
@@ -98,15 +188,17 @@ pipeline = Pipeline([
     assistant_aggregator,
 ])
 
-task = PipelineTask(pipeline, observers=[trace_obs])
-await trace_obs.attach_to_task(task)
+pipeline = tracer.observe_pipeline(pipeline)
+task = PipelineTask(pipeline, params=PipelineParams(...))
+task = await tracer.register_task_handlers(task, transport=transport)
 ```
 
----
+### Where your spans appear in the trace
 
-## Where your spans appear in the trace
-
-Custom spans created this way share the same `trace_id` as all the Pipecat spans. They appear as top-level children of the trace (siblings of the turn spans), because the observer does not push individual turn/LLM spans onto the ContextVar stack.
+Custom spans created this way share the same `trace_id` as all the Pipecat spans.
+They appear as top-level children of the trace (siblings of the turn spans),
+because the observer does not push individual turn/LLM spans onto the ContextVar
+stack.
 
 ```text
 pipecat.conversation  (trace root)
@@ -118,7 +210,8 @@ pipecat.conversation  (trace root)
 └── ...
 ```
 
-If you need your span nested inside a specific turn span, pass the turn span explicitly:
+If you need your span nested inside a specific turn span, pass the turn span
+explicitly:
 
 ```python
 span = trace.create_span(
@@ -128,11 +221,11 @@ span = trace.create_span(
 )
 ```
 
----
+### If your custom logic lives inside a subclassed service
 
-## If your custom logic lives inside a subclassed STT service
-
-The same rule applies. A subclass of the STT service still runs in its own pipeline Task, separate from the observer's Task. Pass the observer reference in via `__init__` the same way:
+The same rule applies. A subclass of the STT service still runs in its own
+pipeline Task, separate from the observer's Task. Pass the observer reference in
+via `__init__` the same way:
 
 ```python
 class TracingSTTService(DeepgramSTTService):
@@ -154,14 +247,13 @@ class TracingSTTService(DeepgramSTTService):
                 span.finish()
 ```
 
-The inheritance hierarchy does not affect Task isolation — position in the pipeline determines the Task boundary, not the class hierarchy.
+The inheritance hierarchy does not affect Task isolation — position in the
+pipeline determines the Task boundary, not the class hierarchy.
 
----
-
-## Summary
+### Summary
 
 | Approach | Works? | Why |
 |---|---|---|
 | `noveum_trace.get_current_trace()` inside a pipeline processor | No | ContextVar is task-local; observer's write is invisible here |
-| `self._observer._trace` inside a pipeline processor | Yes | Plain object reference; no task boundary |
+| `tracer.observer._trace` inside a pipeline processor | Yes | Plain object reference; no task boundary |
 | Passing the observer via `__init__` | Yes | Same as above; direct pointer to shared heap object |

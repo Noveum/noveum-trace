@@ -1,6 +1,6 @@
 # Pipecat Integration Guide
 
-Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversation is recorded as a structured trace with per-turn spans for STT, LLM, TTS; tool/function-call details are attached to the LLM span as attributes, along with latency and token usage.
+Add automatic tracing to your Pipecat voice pipeline in two calls. Every conversation is recorded as a structured trace with per-turn spans for STT, LLM, TTS; tool/function-call details are attached to the LLM span as attributes, along with latency and token usage.
 
 ---
 
@@ -11,8 +11,9 @@ Add automatic tracing to your Pipecat voice pipeline in minutes. Every conversat
 3. [Quick Start](#quick-start)
 4. [What Gets Traced](#what-gets-traced)
 5. [Configuration Options](#configuration-options)
-6. [Capturing pre-filter (raw) audio](#capturing-pre-filter-raw-audio)
-7. [Troubleshooting](#troubleshooting)
+6. [Raw (pre-filter) audio capture](#raw-pre-filter-audio-capture)
+7. [Custom spans](#custom-spans)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -34,17 +35,16 @@ pip install "noveum-trace[pipecat]"
 
 ## Quick Start
 
-Three changes to your existing pipeline code:
+Integration is two calls on the `NoveumPipecatTracer`. Your transport, pipeline,
+and `PipelineTask` stay stock Pipecat — no wrappers, no class-swaps.
 
 ```python
-import asyncio
-
 import noveum_trace
-from noveum_trace.integrations.pipecat import NoveumTraceObserver
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
 
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.task import PipelineTask
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
 
 # 1. Initialize noveum-trace once at startup
 noveum_trace.init(
@@ -52,37 +52,62 @@ noveum_trace.init(
     project="my-voice-bot",
 )
 
-# --- your existing pipeline setup ---
-pipeline = Pipeline([
-    transport.input(),
-    stt,
-    context_aggregator.user(),
-    llm,
-    tts,
-    transport.output(),
-    context_aggregator.assistant(),
-])
+# 2. Create a tracer
+tracer = NoveumPipecatTracer(record_audio=True)
+
 
 async def main():
-    # 2. Add NoveumTraceObserver to your PipelineTask
-    trace_obs = NoveumTraceObserver()
+    # --- your existing pipeline setup (stock Pipecat) ---
+    pipeline = Pipeline([
+        transport.input(),
+        stt,
+        context_aggregator.user(),
+        llm,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
+
+    # 3. Wrap the pipeline — auto-inserts an AudioBufferProcessor when needed.
+    #    You MUST use the return value.
+    pipeline = tracer.observe_pipeline(pipeline)
 
     task = PipelineTask(
         pipeline,
-        observers=[trace_obs],
+        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
     )
 
-    # 3. Wire turn tracking — this is required
-    await trace_obs.attach_to_task(task)
+    # 4. Register handlers — adds the observer, wires turn tracking, taps the
+    #    transport for raw audio, and stamps session metadata. You MUST use the
+    #    return value.
+    task = await tracer.register_task_handlers(task, transport=transport)
 
     runner = PipelineRunner()
     await runner.run(task)
 
 
+import asyncio
 asyncio.run(main())
 ```
 
-That's it. Traces are flushed automatically when the pipeline ends (`EndFrame` / `CancelFrame`).
+That's it. Traces are flushed automatically when the pipeline ends
+(`EndFrame` / `CancelFrame`).
+
+> **Two rules:** always use the return value of both `observe_pipeline()` and
+> `register_task_handlers()` — each may return a new/modified object.
+
+### Even shorter
+
+When you don't need to set anything on the `PipelineTask` between wrapping and
+registration, collapse both calls into one:
+
+```python
+task = await tracer.observe_and_create_task(
+    pipeline,
+    transport=transport,
+    params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+)
+```
 
 ---
 
@@ -134,68 +159,118 @@ Trace: pipecat.conversation
 
 ## Configuration Options
 
+All options are passed to the `NoveumPipecatTracer` constructor:
+
 ```python
-trace_obs = NoveumTraceObserver(
-    # Prefix for the conversation trace name (default: "pipecat")
-    # Produces trace named "pipecat.conversation"
-    trace_name_prefix="pipecat",
-
-    # Capture LLM input/output text and TTS text in spans (default: True)
-    capture_text=True,
-
-    # Record tool/function calls on the existing `pipecat.llm` span as
-    # `llm.function_calls` / `llm.function_call_results` lists (default: True)
-    capture_function_calls=True,
-
-    # Buffer and upload STT/TTS audio as WAV files per span (default: True)
-    # Adds stt.audio_uuid / tts.audio_uuid attributes when enabled
+tracer = NoveumPipecatTracer(
+    # Buffer and upload STT/TTS/conversation audio as WAV files per span
+    # (default: True). Adds stt.audio_uuid / tts.audio_uuid attributes.
+    # When True, observe_pipeline() auto-inserts an AudioBufferProcessor
+    # at the pipeline tail if one isn't already present.
     record_audio=True,
 
-    # Also capture pre-filter mic bytes via Noveum*Transport wrappers (default: True)
-    # Adds stt.raw_audio_uuid on the STT span (~2x audio storage per turn)
+    # Also capture pre-filter mic bytes by tapping the transport
+    # (default: True). Adds stt.raw_audio_uuid on the STT span.
+    # See "Raw (pre-filter) audio capture" below.
     record_raw_input_audio=True,
+
+    # Fold plain-OTEL spans emitted anywhere in your code into the active
+    # conversation trace, nested under the active turn (default: False).
+    # Requires: pip install "noveum-trace[pipecat-otel]". See "Custom spans".
+    capture_custom_spans=False,
+
+    # Force PipelineParams.enable_metrics / enable_usage_metrics to True on
+    # the task so MetricsFrame (tokens, TTFB, latency) is always emitted,
+    # even if you forgot to set them (default: True).
+    auto_enable_metrics=True,
+
+    # Record ErrorFrame / FatalErrorFrame as span errors + trace events
+    # (default: True).
+    capture_errors=True,
+
+    # Record SystemLogFrame entries (warning/error/critical) as span events
+    # (default: False — opt-in, volume can be high).
+    capture_system_logs=False,
+
+    # Stamp transport type, room URL, and runner idle timeout onto the root
+    # trace at connection time (default: True). Pass runner_args= to
+    # register_task_handlers to enrich this further.
+    capture_session_metadata=True,
+
+    # Any NoveumTraceObserver kwarg is also accepted and forwarded verbatim,
+    # e.g.:
+    trace_name_prefix="pipecat",      # trace named "pipecat.conversation"
+    capture_text=True,                # capture LLM/TTS text in spans
+    capture_function_calls=True,      # record tool calls on the pipecat.llm span
 )
 ```
+
+The underlying observer is available as `tracer.observer` for advanced use.
 
 ---
 
-## Capturing pre-filter (raw) audio
+## Raw (pre-filter) audio capture
 
 By default, `stt.audio_uuid` contains audio **after** Pipecat's `audio_in_filter`
-(Krisp, Koala, etc.). To also capture **pre-filter** bytes for STT efficacy or
-filter A/B analysis, swap your transport for a `Noveum*Transport` wrapper and pass
-the observer:
+(Krisp, Koala, RNNoise, …). To also capture **pre-filter** mic bytes — useful for
+STT efficacy or filter A/B analysis — leave `record_raw_input_audio=True` (the
+default) and pass your transport to `register_task_handlers`:
 
 ```python
-from noveum_trace.integrations.pipecat import NoveumTraceObserver, NoveumDailyTransport
+tracer = NoveumPipecatTracer(record_audio=True, record_raw_input_audio=True)
 
-trace_obs = NoveumTraceObserver(record_audio=True, record_raw_input_audio=True)
-
-transport = NoveumDailyTransport(
-    room_url,
-    token,
-    "Bot",
-    DailyParams(...),
-    noveum_observer=trace_obs,
-)
-
-task = PipelineTask(pipeline, observers=[trace_obs])
-await trace_obs.attach_to_task(task)
+pipeline = tracer.observe_pipeline(pipeline)
+task = PipelineTask(pipeline, params=PipelineParams(...))
+task = await tracer.register_task_handlers(task, transport=transport)
 ```
 
-- **`stt.audio_uuid`** — unchanged; post-filter audio the STT path consumed.
-- **`stt.raw_audio_uuid`** — pre-filter snapshot (requires `Noveum*Transport` or a
-  custom mixin; see [PIPECAT_CUSTOM_TRANSPORTS.md](./PIPECAT_CUSTOM_TRANSPORTS.md)).
+`register_task_handlers` taps `transport.input().push_audio_frame` — the single
+hook that runs before any filter mutates the audio. This works with **any**
+transport, stock or custom; no wrapper class is needed.
+
+- **`stt.audio_uuid`** — post-filter audio the STT path consumed.
+- **`stt.raw_audio_uuid`** — pre-filter snapshot (set when raw capture is enabled
+  and the transport tap succeeds).
 - **`record_raw_input_audio`** defaults to `True`; set `False` to opt out.
 - Upload status is all-or-nothing: both enabled uploads must succeed for
   `pipecat_span_status="ok"` on the STT span.
-- “Raw” means pre-pipecat-filter, not pre-SDK or hardware processing.
+- "Raw" means pre-Pipecat-filter, not pre-SDK or hardware processing.
+- Requires an STT processor in the pipeline; otherwise raw buffering is a no-op.
+  The tap is idempotent (safe to re-run `register_task_handlers`), and the buffer
+  is capped (oldest frames dropped on overflow).
 
-Available wrappers: `NoveumDailyTransport`, `NoveumLiveKitTransport`,
-`NoveumSmallWebRTCTransport`, `NoveumFastAPIWebsocketTransport`,
-`NoveumWebsocketServerTransport`, `NoveumWebsocketClientTransport`,
-`NoveumLocalAudioTransport`, `NoveumTkTransport`, `NoveumTavusTransport`,
-`NoveumHeyGenTransport`, `NoveumLemonSliceTransport`.
+---
+
+## Custom spans
+
+To fold your own instrumentation into the conversation trace, emit **plain OpenTelemetry
+spans** anywhere in your code and enable `capture_custom_spans=True`. They are
+captured automatically and nested under the active `pipecat.turn` — no
+`noveum_trace` import needed in your business logic.
+
+```bash
+pip install "noveum-trace[pipecat-otel]"
+```
+
+```python
+tracer = NoveumPipecatTracer(record_audio=True, capture_custom_spans=True)
+pipeline = tracer.observe_pipeline(pipeline)   # registers the OTEL SpanProcessor
+```
+
+```python
+from opentelemetry import trace as otel_trace
+
+_tracer = otel_trace.get_tracer(__name__)
+
+async def add_item_to_order(params):
+    with _tracer.start_as_current_span("menu.price_lookup") as span:
+        span.set_attribute("menu.item", item)
+        span.set_attribute("menu.price", price)
+    ...
+```
+
+See [PIPECAT_CUSTOM_SPANS.md](./PIPECAT_CUSTOM_SPANS.md) for details and trace
+placement.
 
 ---
 
@@ -204,21 +279,36 @@ Available wrappers: `NoveumDailyTransport`, `NoveumLiveKitTransport`,
 **No traces appearing**
 
 - Verify `noveum_trace.init()` is called before the pipeline starts.
-- Check that `await trace_obs.attach_to_task(task)` is called (from async code) after `PipelineTask` is constructed and before the runner starts. Missing this call means turn spans won't have accurate boundaries.
+- Make sure you assigned the return values: `pipeline = tracer.observe_pipeline(pipeline)`
+  and `task = await tracer.register_task_handlers(task, ...)`. Discarding either
+  return value means the wiring is lost.
 - Confirm your API key is correct and the project name matches what you set up in the Noveum dashboard.
 
 **Turn spans missing or not splitting correctly**
 
-- `await trace_obs.attach_to_task(task)` is required for accurate turn tracking. Make sure it is called before `runner.run(task)`.
-- Ensure your `PipelineTask` has turn tracking enabled (so `task.turn_tracking_observer` is present for `trace_obs.attach_to_task(task)` to wire external turn boundaries; it is on by default in recent Pipecat versions).
+- Turn tracking is enabled by default in recent Pipecat versions
+  (`task.turn_tracking_observer`). `register_task_handlers` also installs a
+  fallback `TurnTrackingObserver` if you explicitly built the task with
+  `enable_turn_tracking=False`.
 
 **LLM token counts not appearing**
 
-- Token counts come from Pipecat's `MetricsFrame`. Confirm your LLM processor emits metrics (most standard Pipecat LLM services do).
+- Token counts come from Pipecat's `MetricsFrame`. With `auto_enable_metrics=True`
+  (the default), `register_task_handlers` forces `enable_metrics` /
+  `enable_usage_metrics` on the task, so this is handled for you. Confirm your LLM
+  processor emits metrics (most standard Pipecat LLM services do).
 
 **Function call spans missing**
 
-- Set `capture_function_calls=True` (the default) on the observer.
-- Confirm your LLM processor emits `FunctionCallInProgressFrame` / `FunctionCallResultFrame`.
+- `capture_function_calls=True` (the default) records tool calls on the
+  `pipecat.llm` span.
+- Confirm your LLM processor emits `FunctionCallInProgressFrame` /
+  `FunctionCallResultFrame`.
+
+**Raw audio (`stt.raw_audio_uuid`) missing**
+
+- Pass `transport=` to `register_task_handlers` so the input transport can be
+  tapped.
+- Keep `record_audio=True` and `record_raw_input_audio=True` (both defaults).
 
 ---

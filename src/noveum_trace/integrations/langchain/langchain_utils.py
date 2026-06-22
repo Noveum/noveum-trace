@@ -11,7 +11,8 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -928,8 +929,8 @@ def _convert_tools_to_dict_list(tools: Any) -> list[dict[str, Any]]:
 
 def extract_tool_calls_from_response(
     response: Any,
-    tool_call_id_callback: Optional[Callable[[str, str], None]] = None,
-    run_id: Optional[str] = None,
+    tool_call_id_callback: Optional[Callable[[str, Union[UUID, str]], None]] = None,
+    run_id: Optional[Union[UUID, str]] = None,
 ) -> list[dict[str, Any]]:
     """
     Extract tool calls from LangChain LLM response.
@@ -1017,3 +1018,41 @@ def extract_tool_calls_from_response(
                             logger.debug(f"Error extracting function_call: {e}")
 
     return tool_calls
+
+
+def extract_finish_reason(response: Any) -> Optional[str]:
+    """Extract the finish_reason from a LangChain LLM response.
+
+    Checks, in priority order:
+    1. ``response.llm_output["finish_reason"]`` (completion-style providers)
+    2. each generation's ``generation_info["finish_reason"]``
+    3. the generation message's ``response_metadata["finish_reason"]``
+
+    Chat models commonly carry ``finish_reason`` on the message's
+    ``response_metadata`` rather than on ``llm_output``, so reading only
+    ``llm_output`` (the previous behavior) dropped it for those models.
+
+    The ``isinstance(..., dict)`` guards keep this safe against ``Mock``
+    attributes whose accessors return truthy mocks rather than real dicts.
+    """
+    llm_output = getattr(response, "llm_output", None)
+    if isinstance(llm_output, dict) and llm_output.get("finish_reason"):
+        return llm_output["finish_reason"]
+
+    generations = getattr(response, "generations", None) or []
+    for generation_list in generations:
+        for gen in generation_list:
+            generation_info = getattr(gen, "generation_info", None)
+            if isinstance(generation_info, dict) and generation_info.get(
+                "finish_reason"
+            ):
+                return generation_info["finish_reason"]
+
+            message = getattr(gen, "message", None)
+            response_metadata = getattr(message, "response_metadata", None)
+            if isinstance(response_metadata, dict) and response_metadata.get(
+                "finish_reason"
+            ):
+                return response_metadata["finish_reason"]
+
+    return None

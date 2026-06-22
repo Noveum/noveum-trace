@@ -828,6 +828,12 @@ def _extract_generation_usage_metadata(response: Any) -> list[dict[str, Any]]:
             if usage_metadata:
                 sources.append(_to_dict(usage_metadata))
             message = _get_value(gen, "message")
+            # Canonical langchain_core location: AIMessage.usage_metadata. Read it
+            # before response_metadata so the normalized field wins (first source
+            # to set a token key wins via _set_usage_attr).
+            message_usage = _get_value(message, "usage_metadata")
+            if message_usage:
+                sources.append(_to_dict(message_usage))
             response_metadata = _get_value(message, "response_metadata")
             if response_metadata:
                 metadata_dict = _to_dict(response_metadata)
