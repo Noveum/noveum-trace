@@ -2,10 +2,37 @@
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+
+def _require(modname: str) -> Any:
+    """Import ``modname`` or skip — robust to a missing *optional backend*.
+
+    ``pytest.importorskip`` only skips when the requested module itself is
+    absent. pytest>=9.1 re-raises (rather than skips) when importing the
+    pipecat transport module fails on a *deeper* missing dependency — e.g. the
+    optional ``daily`` / ``fastapi`` / webrtc backend — which makes these
+    optional-transport tests ERROR on installs without that extra (notably the
+    pipecat-0.0.x matrix leg, where transport backends are not installed).
+    Treat any ImportError as "backend unavailable -> skip cleanly".
+    """
+    try:
+        return importlib.import_module(modname)
+    except ImportError as exc:  # 1.x style: a deep backend ModuleNotFoundError
+        pytest.skip(f"{modname} unavailable (optional backend missing): {exc}")
+    except Exception as exc:
+        # 0.0.x style: pipecat re-raises a missing transport backend as a
+        # *generic* Exception ("Missing module: No module named 'daily'"), not
+        # ImportError (mirrors transports.py's own `except Exception`). Skip on
+        # those; re-raise anything that is not a missing-backend signal.
+        msg = str(exc)
+        if any(s in msg for s in ("Missing module", "No module named", "pip install")):
+            pytest.skip(f"{modname} unavailable (optional backend missing): {exc}")
+        raise
 
 
 @pytest.fixture
@@ -107,7 +134,7 @@ def test_local_audio_stub_raises_import_error_when_backend_unavailable() -> None
 
 
 def test_wrap_input_sets_observer_on_instance() -> None:
-    pytest.importorskip("pipecat.transports.daily.transport")
+    _require("pipecat.transports.daily.transport")
     from pipecat.transports.daily.transport import DailyInputTransport
 
     from noveum_trace.integrations.pipecat.transports import _wrap_input
@@ -158,7 +185,8 @@ def test_noveum_websocket_client_transport_input_sets_observer() -> None:
 
 
 def test_noveum_fastapi_websocket_transport_input_sets_observer() -> None:
-    pytest.importorskip("pipecat.transports.websocket.fastapi")
+    _require("fastapi")
+    _require("pipecat.transports.websocket.fastapi")
     from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
     from noveum_trace.integrations.pipecat.transports import (
@@ -175,7 +203,7 @@ def test_noveum_fastapi_websocket_transport_input_sets_observer() -> None:
 
 
 def test_noveum_smallwebrtc_transport_input_sets_observer() -> None:
-    pytest.importorskip("pipecat.transports.smallwebrtc.transport")
+    _require("pipecat.transports.smallwebrtc.transport")
     from pipecat.transports.base_transport import TransportParams
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
@@ -191,7 +219,7 @@ def test_noveum_smallwebrtc_transport_input_sets_observer() -> None:
 
 
 def test_noveum_daily_transport_input_sets_observer(monkeypatch) -> None:
-    pytest.importorskip("pipecat.transports.daily.transport")
+    _require("pipecat.transports.daily.transport")
     import pipecat.transports.daily.transport as daily_mod
     from pipecat.transports.daily.transport import DailyParams
 
@@ -258,7 +286,7 @@ def test_missing_backend_does_not_hide_other_transports(monkeypatch) -> None:
 
     importlib.reload(transports_mod)
 
-    pytest.importorskip("pipecat.transports.daily.transport")
+    _require("pipecat.transports.daily.transport")
     from pipecat.transports.daily.transport import DailyTransport
 
     assert issubclass(transports_mod.NoveumDailyTransport, DailyTransport)
