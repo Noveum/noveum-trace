@@ -75,6 +75,44 @@ def _anthropic_success_response(
     )
 
 
+def _openai_request(
+    model: str = "gpt-4o-mini",
+    max_tokens: int = 100,
+) -> httpx.Request:
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "What is 2+2?"}],
+        "max_tokens": max_tokens,
+    }
+    return httpx.Request(
+        "POST",
+        "https://api.openai.com/v1/chat/completions",
+        content=json.dumps(payload).encode(),
+        headers={"content-type": "application/json"},
+    )
+
+
+def _openai_success_response(
+    model: str = "gpt-4o-mini",
+    prompt_tokens: int = 20,
+    completion_tokens: int = 10,
+) -> httpx.Response:
+    body = json.dumps(
+        {
+            "id": "chatcmpl-test",
+            "model": model,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+            "choices": [{"message": {"content": "4"}, "finish_reason": "stop"}],
+        }
+    )
+    return httpx.Response(
+        200, content=body.encode(), headers={"content-type": "application/json"}
+    )
+
+
 class _MockInner(httpx.BaseTransport):
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
@@ -200,13 +238,21 @@ class TestMixedRegistry:
 
         registry = AdapterRegistry([OpenAIAdapter(), AnthropicAdapter()])
 
-        # Anthropic call
+        # Anthropic call — verify Anthropic adapter is selected correctly.
         inner_a = _MockInner(_anthropic_success_response())
         transport_a = NoveumTransport(
             engine=engine, context=_ctx(), inner=inner_a, registry=registry
         )
         resp_a = transport_a.handle_request(_anthropic_request())
         assert resp_a.status_code == 200
+
+        # OpenAI call — verify OpenAI adapter is also selected correctly.
+        inner_o = _MockInner(_openai_success_response())
+        transport_o = NoveumTransport(
+            engine=engine, context=_ctx(), inner=inner_o, registry=registry
+        )
+        resp_o = transport_o.handle_request(_openai_request())
+        assert resp_o.status_code == 200
 
     def test_spend_tracked_across_providers(self):
         from noveum_trace.guard.transport.adapters.openai_adapter import OpenAIAdapter
@@ -220,15 +266,28 @@ class TestMixedRegistry:
         )
 
         registry = AdapterRegistry([OpenAIAdapter(), AnthropicAdapter()])
+        ctx = _ctx("multi-proj")
 
-        # Anthropic call
-        inner = _MockInner(
+        # Anthropic call — contributes to multi-proj spend.
+        inner_a = _MockInner(
             _anthropic_success_response(input_tokens=100, output_tokens=50)
         )
-        transport = NoveumTransport(
-            engine=engine, context=_ctx("multi-proj"), inner=inner, registry=registry
+        transport_a = NoveumTransport(
+            engine=engine, context=ctx, inner=inner_a, registry=registry
         )
-        transport.handle_request(_anthropic_request(max_tokens=100))
+        transport_a.handle_request(_anthropic_request(max_tokens=100))
+        spend_after_anthropic = api.current_spend("multi-proj")
+        assert spend_after_anthropic > 0, "Anthropic spend should be recorded"
 
-        spend = api.current_spend("multi-proj")
-        assert spend > 0
+        # OpenAI call — must further increase the same project's spend.
+        inner_o = _MockInner(
+            _openai_success_response(prompt_tokens=100, completion_tokens=50)
+        )
+        transport_o = NoveumTransport(
+            engine=engine, context=ctx, inner=inner_o, registry=registry
+        )
+        transport_o.handle_request(_openai_request(max_tokens=100))
+        spend_after_openai = api.current_spend("multi-proj")
+        assert (
+            spend_after_openai > spend_after_anthropic
+        ), "OpenAI spend should be added on top of Anthropic spend"

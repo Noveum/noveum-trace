@@ -89,6 +89,22 @@ class AbstractPolicy(ABC):
         Default: no-op. Policies that reserve resources must override.
         """
 
+    def update_params(  # noqa: B027 - optional override hook, default no-op by design
+        self, config: dict[str, Any]
+    ) -> None:
+        """Apply a parameter update received from the backend poller.
+
+        Called by ``PolicyPoller`` when the backend returns a config dict for a
+        policy that is already registered in the engine (upsert path: the poller
+        adds the policy if it is absent, or calls this method if it already exists).
+
+        ``config`` is the raw dict from the backend response for this policy.
+        Subclasses that expose mutable parameters (e.g. ``max_usd``, ``window``)
+        must override this method and apply changes thread-safely under ``self._lock``.
+
+        Default: no-op (policy parameters are treated as immutable at construction).
+        """
+
     def poll(self, deps: PolicyDeps) -> None:  # noqa: B027 - optional override hook
         """Background refresh of data_map from remote config.
 

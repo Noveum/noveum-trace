@@ -62,7 +62,10 @@ class PolicyEngine:
             decision = self._safe_invoke(policy, policy.pre, parsed, ctx, deps)
             ran.append((policy, decision))
             if decision.is_blocking:
-                for p, prev_d in ran[:-1]:
+                # Include the blocking policy itself: if it called reserve() before
+                # throwing (causing _safe_invoke to synthesize a block), its inflight
+                # entry must be cleaned up even though state may carry reserved_usd=0.
+                for p, prev_d in ran:
                     self._safe_invoke(p, p.release, prev_d, ctx, deps)
                 return decision, ran
 

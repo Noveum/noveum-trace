@@ -125,6 +125,12 @@ def _resolve(
     engine: Optional[PolicyEngine],
     context: Optional[PolicyContext],
 ) -> tuple[PolicyEngine, PolicyContext]:
+    # Reject partial provision early: both must be supplied together or both omitted.
+    if (engine is None) != (context is None):
+        raise ValueError(
+            "engine and context must be provided together or both omitted; "
+            "supplying only one leads to mismatched policy binding."
+        )
     if engine is not None and context is not None:
         return engine, context
     from noveum_trace.guard import _state
@@ -133,7 +139,8 @@ def _resolve(
     resolved_context = _state.get_context()
     if resolved_engine is None or resolved_context is None:
         raise RuntimeError(
-            "NovaGuard not initialized. Call noveum_trace.init(policies=[...]) first, "
+            "NovaGuard not initialized. Call "
+            'noveum_trace.init(api_key="...", project="...", policies=[...]) first, '
             "or pass engine and context explicitly."
         )
     return resolved_engine, resolved_context
@@ -148,7 +155,7 @@ def http_client(
 ) -> httpx.Client:
     """Return a sync httpx.Client wired through the Guard transport.
 
-    Zero-arg form (after noveum_trace.init(policies=[...])):
+    Zero-arg form (after noveum_trace.init(api_key="...", project="...", policies=[...])):
         openai.OpenAI(http_client=noveum_trace.guard.http_client())
 
     Explicit form:
@@ -170,7 +177,7 @@ def async_http_client(
 ) -> httpx.AsyncClient:
     """Return an async httpx.AsyncClient wired through the Guard transport.
 
-    Zero-arg form (after noveum_trace.init(policies=[...])):
+    Zero-arg form (after noveum_trace.init(api_key="...", project="...", policies=[...])):
         anthropic.AsyncAnthropic(http_client=noveum_trace.guard.async_http_client())
 
     Explicit form:

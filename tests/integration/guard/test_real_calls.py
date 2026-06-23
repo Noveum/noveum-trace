@@ -217,9 +217,9 @@ class ResultsCollector:
 _results_collector = ResultsCollector()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def _auto_write_results():
-    """Auto-write results after all tests complete."""
+    """Auto-write results after all tests in this module complete."""
     yield
     _results_collector.write()
 

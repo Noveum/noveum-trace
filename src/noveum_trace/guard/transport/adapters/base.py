@@ -61,10 +61,21 @@ class AdapterRegistry:
     def register(self, adapter: ProviderAdapter) -> None:
         self._adapters.append(adapter)
 
+    @staticmethod
+    def _host_matches(host: str, pattern: str) -> bool:
+        """Return True only when pattern is an exact match or a proper ancestor domain.
+
+        Prevents substring spoofing: "openai.com" must NOT match
+        "api.openai.com.evil.example", but MUST match "api.openai.com".
+        """
+        return host == pattern or host.endswith("." + pattern)
+
     def for_request(self, req: httpx.Request) -> Optional[ProviderAdapter]:
         host = req.url.host
         for adapter in self._adapters:
-            if any(pattern in host for pattern in adapter.host_patterns):
+            if any(
+                self._host_matches(host, pattern) for pattern in adapter.host_patterns
+            ):
                 return adapter
 
         # Body-shape fallback for custom base_url — most specific signature wins.

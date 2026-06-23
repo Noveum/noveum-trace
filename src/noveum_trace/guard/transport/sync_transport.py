@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import uuid
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Optional
@@ -9,6 +10,8 @@ import httpx
 
 from noveum_trace.guard.transport.adapters.base import AdapterRegistry, default_registry
 from noveum_trace.guard.types import ParsedRequest, PolicyContext
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from noveum_trace.guard.decision import PolicyDecision
@@ -100,6 +103,11 @@ class NoveumTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         adapter = self._registry.for_request(request)
         if adapter is None:
+            _log.error(
+                "NovaGuard: no adapter found for request %s %s — passing through unguarded",
+                request.method,
+                request.url,
+            )
             return self._inner.handle_request(request)
 
         parsed_req = adapter.parse_request(request)
@@ -132,12 +140,16 @@ class NoveumTransport(httpx.BaseTransport):
 
         # Materialize the body before parsing — a real inner transport returns
         # an unread stream and .content would raise httpx.ResponseNotRead.
-        response.read()
-        parsed_resp = adapter.parse_response(request, response)
-        post_block = self._engine.post_call(parsed_resp, ctx, ran)
-        if post_block is not None:
-            return adapter.synthetic_block_response(
-                request, post_block, post_block.block_response_mode
-            )
+        try:
+            response.read()
+            parsed_resp = adapter.parse_response(request, response)
+            post_block = self._engine.post_call(parsed_resp, ctx, ran)
+            if post_block is not None:
+                return adapter.synthetic_block_response(
+                    request, post_block, post_block.block_response_mode
+                )
+        except Exception:
+            self._engine.release_all(ctx, ran)
+            raise
 
         return response

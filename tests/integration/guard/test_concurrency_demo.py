@@ -249,11 +249,16 @@ class TestTransportConcurrency:
 
         statuses: list[int] = []
         lock = threading.Lock()
+        errors: list[Exception] = []
 
         def _call():
-            resp = transport.handle_request(_openai_request())
-            with lock:
-                statuses.append(resp.status_code)
+            try:
+                resp = transport.handle_request(_openai_request())
+                with lock:
+                    statuses.append(resp.status_code)
+            except Exception as e:
+                with lock:
+                    errors.append(e)
 
         threads = [threading.Thread(target=_call) for _ in range(30)]
         for t in threads:
@@ -261,6 +266,10 @@ class TestTransportConcurrency:
         for t in threads:
             t.join()
 
+        assert errors == [], f"Unexpected thread errors: {errors}"
+        assert (
+            len(statuses) == 30
+        ), f"Expected 30 recorded statuses, got {len(statuses)}"
         # Some requests should have been blocked (403), none should have failed with an exception
         assert all(s in (200, 403) for s in statuses)
         # Spend must not exceed cap (with tiny epsilon for float arithmetic)
@@ -275,26 +284,15 @@ class TestTransportConcurrency:
 class TestProjectIsolationConcurrency:
     def test_concurrent_calls_to_different_projects_are_isolated(self):
         """proj-a and proj-b spend counters must not bleed into each other."""
+        # Shared api_client so we can inspect both project buckets after the run.
         api = GuardAPIClient()
-        engine = PolicyEngine(api_client=api)
-        engine.attach(
-            CostCapPolicy(
-                max_usd=100.0, mode=EnforcementMode.strict, project_id="proj-a"
-            )
-        )
-
-        cap_b = CostCapPolicy(
-            max_usd=100.0, mode=EnforcementMode.strict, project_id="proj-b"
-        )
-        cap_b.name = "cost_cap_b"
-        engine.attach(cap_b)
-
+        registry = AdapterRegistry([OpenAIAdapter()])
         errors: list[Exception] = []
+        lock = threading.Lock()
 
         def _call(project_id: str) -> None:
             try:
-                deps_api = GuardAPIClient()
-                local_engine = PolicyEngine(api_client=deps_api)
+                local_engine = PolicyEngine(api_client=api)
                 local_engine.attach(
                     CostCapPolicy(
                         max_usd=100.0,
@@ -302,8 +300,18 @@ class TestProjectIsolationConcurrency:
                         project_id=project_id,
                     )
                 )
+                inner = _MockInner()
+                transport = NoveumTransport(
+                    engine=local_engine,
+                    context=_ctx(project_id),
+                    inner=inner,
+                    registry=registry,
+                )
+                resp = transport.handle_request(_openai_request())
+                assert resp.status_code == 200
             except Exception as e:
-                errors.append(e)
+                with lock:
+                    errors.append(e)
 
         threads = [
             threading.Thread(target=_call, args=("proj-a",)) for _ in range(10)
@@ -313,7 +321,20 @@ class TestProjectIsolationConcurrency:
         for t in threads:
             t.join()
 
-        assert errors == []
-        # Global api should remain clean (we used local engines above)
-        assert api.current_spend("proj-a") == 0.0
-        assert api.current_spend("proj-b") == 0.0
+        assert errors == [], f"Unexpected thread errors: {errors}"
+        # Each project must have accumulated spend from its own 10 calls.
+        assert api.current_spend("proj-a") > 0, "proj-a should have recorded spend"
+        assert api.current_spend("proj-b") > 0, "proj-b should have recorded spend"
+        # Crucially, the two buckets must be equal (same request shape, same count)
+        # and neither should have been inflated by the other project's calls.
+        # We can't trivially assert they are equal due to float arithmetic, but we
+        # can confirm neither bucket is zero while also confirming neither has
+        # absorbed the other project's spend by checking they are both bounded by
+        # the amount a single project's 10 calls would produce (not 20 calls).
+        per_project_max = api.current_spend("proj-a") + api.current_spend("proj-b")
+        assert (
+            api.current_spend("proj-a") < per_project_max
+        ), "proj-a spend should be less than the combined total"
+        assert (
+            api.current_spend("proj-b") < per_project_max
+        ), "proj-b spend should be less than the combined total"

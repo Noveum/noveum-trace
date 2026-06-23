@@ -128,15 +128,11 @@ class TestOpenAIAllowPath:
         assert "choices" in body
 
     def test_spend_accumulates_after_call(self):
-        _, api = _build_stack()
-        transport, _ = _build_stack()
-        # Make a call
+        transport, api = _build_stack(project_id="proj-spend")
+        # Make a call through the same stack whose api we'll inspect.
         transport.handle_request(_openai_request())
-        # Spend tracked in the api client of the transport's engine
-        # We verify via the build_stack api reference
-        transport2, api2 = _build_stack(project_id="proj-spend")
-        transport2.handle_request(_openai_request())
-        assert api2.current_spend("proj-spend") >= 0  # at least exists
+        # Spend must be positive — a zero result means cost tracking is broken.
+        assert api.current_spend("proj-spend") > 0
 
 
 # ---------------------------------------------------------------------------

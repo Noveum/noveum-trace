@@ -26,49 +26,56 @@ class NoveumCrewAIInterceptor:
 
     Usage:
         interceptor = NoveumCrewAIInterceptor(engine, ctx)
-        interceptor.before_llm_call(payload)   # raises on block
+        call_id, ran = interceptor.before_llm_call(payload)   # raises on block
         response = llm.call(payload)
-        interceptor.after_llm_call(payload, response, ran)
+        interceptor.after_llm_call(call_id, payload, response, ran)
     """
 
     def __init__(self, engine: PolicyEngine, context: PolicyContext) -> None:
         self._engine = engine
         self._context = context
+        # Maps call_id -> PolicyContext for calls currently in flight.
+        # A dict (rather than a single attribute) keeps each concurrent call's
+        # context independent so post_call always reads the right ctx.
+        self._pending_ctx: dict[str, PolicyContext] = {}
 
     def before_llm_call(
         self, payload: dict[str, Any]
-    ) -> list[tuple[AbstractPolicy, PolicyDecision]]:
+    ) -> tuple[str, list[tuple[AbstractPolicy, PolicyDecision]]]:
         """Run pre_call on all policies.
 
-        Returns the `ran` list so after_llm_call can pass it to post_call for
-        correct reconciliation. Raises NoveumGuardBlocked on block (engine has
-        already rolled back any reservations).
+        Returns (call_id, ran) so after_llm_call can pass call_id for correct
+        reconciliation. Raises NoveumGuardBlocked on block (engine has already
+        rolled back any reservations).
         """
         ctx = dataclasses.replace(self._context, call_id=str(uuid.uuid4()))
+        call_id = ctx.call_id
         parsed_req = self._parse_request(payload)
 
         block, ran = self._engine.pre_call(parsed_req, ctx)
         if block is not None:
             raise NoveumGuardBlocked(block.policy_name, block.reason, block)
 
-        # Stash ctx on the instance keyed by call_id so after_llm_call can retrieve it.
-        # Single-threaded CrewAI: one active call at a time, so a simple attribute is fine.
-        self._pending_ctx = ctx
-        return ran
+        # Stash ctx keyed by call_id so after_llm_call can retrieve it
+        # independently of any other concurrent call.
+        self._pending_ctx[call_id] = ctx
+        return call_id, ran
 
     def after_llm_call(
         self,
+        call_id: str,
         payload: dict[str, Any],
         response: dict[str, Any],
         ran: list[tuple[AbstractPolicy, PolicyDecision]],
     ) -> None:
         """Run post_call on all policies that fired in before_llm_call.
 
+        `call_id` must be the value returned by before_llm_call.
         `ran` must be the list returned by before_llm_call — it carries each
         policy's pre-decision (including reserved_usd in state) so reconcile works.
         Raises NoveumGuardBlocked if any policy blocks in post.
         """
-        ctx = getattr(self, "_pending_ctx", self._context)
+        ctx = self._pending_ctx.pop(call_id, self._context)
         parsed_resp = self._parse_response(payload, response)
 
         post_block = self._engine.post_call(parsed_resp, ctx, ran)

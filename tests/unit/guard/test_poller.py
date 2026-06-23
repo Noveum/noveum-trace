@@ -201,15 +201,16 @@ class TestAttachMidRun:
 
 class TestIntervalPolling:
     def test_policy_fires_when_interval_elapsed(self):
-        """Simulate enough monotonic time passing to trigger polling."""
+        """Simulate enough monotonic time passing to trigger interval-based polling."""
+        import unittest.mock
+
         spy = _PollSpy(poll_interval=10.0)
         engine = _engine_with(spy)
         poller = PolicyPoller(engine, tick=0.01)
 
-        # Patch monotonic so the poller thinks 15 seconds have passed
+        # Patch monotonic so the poller thinks 15 seconds have passed after a few ticks.
         base = time.monotonic()
         call_count = [0]
-
         original_monotonic = time.monotonic
 
         def fake_monotonic():
@@ -219,7 +220,17 @@ class TestIntervalPolling:
                 return base + 15.0
             return original_monotonic()
 
-        poller.start()
-        poller.stop()  # stop immediately — we only care about the initial poll
-        # The start() performs an immediate force_refresh, so spy should have fired
-        assert len(spy.poll_calls) >= 1
+        # Patch inside the poller module so the background thread sees the fake clock.
+        with unittest.mock.patch(
+            "noveum_trace.guard.poller.time.monotonic", fake_monotonic
+        ):
+            poller.start()
+            # Give the background thread a moment to tick at least once past startup.
+            time.sleep(0.1)
+            poller.stop()
+
+        # start() fires an immediate force_refresh AND the interval logic should
+        # have fired at least one additional poll once fake time jumped 15 s.
+        assert (
+            len(spy.poll_calls) >= 2
+        ), f"Expected at least 2 poll calls (initial + interval), got {len(spy.poll_calls)}"

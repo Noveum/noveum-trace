@@ -180,8 +180,13 @@ class TestCostCapRollbackOnPreBlock:
         assert block_decision is not None
         assert block_decision.is_blocking
 
-    def test_blocker_policy_itself_is_not_released(self):
-        """Only policies that ran BEFORE the blocker get released — not the blocker itself."""
+    def test_blocker_policy_is_released_on_rollback(self):
+        """All policies in ran — including the blocker — get release() called.
+
+        The blocker must be released so that any inflight reservation it made
+        before throwing (causing _safe_invoke to synthesise a block decision with
+        empty state) is cleaned up; otherwise the inflight entry leaks permanently.
+        """
         api = GuardAPIClient()
         engine = PolicyEngine(api_client=api)
 
@@ -196,7 +201,7 @@ class TestCostCapRollbackOnPreBlock:
         engine.pre_call(_req(), _ctx())
 
         assert len(allow_spy.release_calls) == 1  # rolled back
-        assert len(blocker.release_calls) == 0  # blocker never gets released
+        assert len(blocker.release_calls) == 1  # blocker is also released
 
     def test_inflight_entry_cleared_after_rollback(self):
         """reserve() adds to _inflight; release() via reconcile() removes it."""

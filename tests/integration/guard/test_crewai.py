@@ -92,7 +92,7 @@ class TestBeforeLlmCallAllow:
         )
 
         interceptor = NoveumCrewAIInterceptor(engine, _ctx())
-        ran = interceptor.before_llm_call(_payload())
+        call_id, ran = interceptor.before_llm_call(_payload())
 
         assert isinstance(ran, list)
         assert len(ran) > 0
@@ -205,10 +205,10 @@ class TestAfterLlmCall:
         )
 
         interceptor = NoveumCrewAIInterceptor(engine, _ctx())
-        ran = interceptor.before_llm_call(_payload())
+        call_id, ran = interceptor.before_llm_call(_payload())
 
         # Should not raise
-        interceptor.after_llm_call(_payload(), _response(), ran)
+        interceptor.after_llm_call(call_id, _payload(), _response(), ran)
 
     def test_raises_guard_blocked_on_post_block(self):
         api = GuardAPIClient()
@@ -216,10 +216,10 @@ class TestAfterLlmCall:
         engine.attach(_BlockInPostPolicy())
 
         interceptor = NoveumCrewAIInterceptor(engine, _ctx())
-        ran = interceptor.before_llm_call(_payload())
+        call_id, ran = interceptor.before_llm_call(_payload())
 
         with pytest.raises(NoveumGuardBlocked):
-            interceptor.after_llm_call(_payload(), _response(), ran)
+            interceptor.after_llm_call(call_id, _payload(), _response(), ran)
 
     def test_cost_tracked_after_response(self):
         api = GuardAPIClient()
@@ -231,9 +231,9 @@ class TestAfterLlmCall:
         )
 
         interceptor = NoveumCrewAIInterceptor(engine, _ctx("test-proj"))
-        ran = interceptor.before_llm_call(_payload())
+        call_id, ran = interceptor.before_llm_call(_payload())
         interceptor.after_llm_call(
-            _payload(), _response(input_tokens=100, output_tokens=50), ran
+            call_id, _payload(), _response(input_tokens=100, output_tokens=50), ran
         )
 
         # Spend should have been reconciled (actual < reserved)
