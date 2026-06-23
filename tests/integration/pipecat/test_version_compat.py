@@ -120,6 +120,7 @@ def _start_frame_has_allow_interruptions() -> bool:
     return hasattr(sf, "allow_interruptions")
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     not _start_frame_has_allow_interruptions(),
     reason="0.0.x-only: StartFrame.allow_interruptions removed on 1.x",
@@ -138,6 +139,7 @@ async def test_vc2_start_frame_captures_pipeline_allow_interruptions_old() -> No
     assert obs._trace is trace
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     _start_frame_has_allow_interruptions(),
     reason="1.x-only: StartFrame still carries allow_interruptions on 0.0.x",
@@ -173,6 +175,7 @@ def _obs_with_open_llm_context() -> tuple[NoveumTraceObserver, Trace, Any]:
     return obs, trace, turn
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     getattr(ff, "LLMMessagesFrame", None) is None,
     reason="0.0.x-only: LLMMessagesFrame removed on 1.x",
@@ -191,6 +194,7 @@ async def test_vc3_llm_messages_frame_replace_path_old() -> None:
     assert json.loads(span.attributes["llm.input"]) == msgs
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     getattr(ff, "LLMMessagesFrame", None) is not None,
     reason="1.x-only: LLMMessagesFrame still present on 0.0.x",
@@ -231,6 +235,7 @@ def test_vc4_start_interruption_frame_registered_old() -> None:
     assert obs._frame_handlers[start_interruption].__name__ == "_handle_interruption"
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     getattr(ff, "StartInterruptionFrame", None) is not None,
     reason="1.x-only: StartInterruptionFrame still present on 0.0.x",

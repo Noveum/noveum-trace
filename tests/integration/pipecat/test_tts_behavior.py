@@ -22,6 +22,10 @@ import pytest
 pytest.importorskip("pipecat.frames.frames")
 pytest.importorskip("pipecat.metrics.metrics")
 
+# Make the async intent explicit (the repo's asyncio_mode="auto" already
+# auto-discovers these, but this keeps them portable across pytest configs).
+pytestmark = pytest.mark.asyncio
+
 _UPLOAD = "noveum_trace.integrations.pipecat._handlers_tts.upload_audio_frames"
 
 

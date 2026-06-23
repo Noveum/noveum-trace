@@ -251,11 +251,17 @@ async def test_on_metrics_collected_updates_tracked_speech_span(lk_trace, lk_cli
         )
     )
 
+    before = set(asyncio.all_tasks())
     mgr._on_metrics_collected(ev)
-    # drain the task the handler scheduled (deterministic; no sleep)
-    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    if pending:
-        await asyncio.gather(*pending)
+    # drain only the task(s) this handler scheduled (deterministic; no sleep) --
+    # awaiting every pending task could pull in unrelated background tasks.
+    created = [
+        t
+        for t in (set(asyncio.all_tasks()) - before)
+        if t is not asyncio.current_task()
+    ]
+    if created:
+        await asyncio.gather(*created)
 
     assert speech_span.attributes["llm.input_tokens"] == 10
     assert speech_span.attributes["llm.total_tokens"] == 15

@@ -241,8 +241,8 @@ class TestE2EKickoff:
 
             spans = _exported_spans(client)
             crew_spans = _by_name(spans, "crewai.crew")
-            # If a crew span was exported, it must reflect the failure, not "ok".
-            if crew_spans:
-                assert _status(crew_spans[0]) == "error"
+            # A crew span must be exported and reflect the failure, not "ok".
+            assert crew_spans, "expected a crew span export on task failure"
+            assert _status(crew_spans[0]) == "error"
         finally:
             lnr.shutdown()

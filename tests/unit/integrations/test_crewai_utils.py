@@ -404,8 +404,10 @@ class TestCalculateLlmCost:
 
     def test_none_tokens_treated_as_zero(self) -> None:
         out = u.calculate_llm_cost("gpt-4o", None, None)
-        # total should be 0 (no tokens) — and must not raise.
-        assert out == {} or out.get("total") == 0.0
+        # "gpt-4o" is a known model, so the pricing lookup must return a proper
+        # cost structure (zero tokens -> zero cost), not an empty dict.
+        assert out["total"] == 0.0
+        assert out["currency"] == "USD"
 
 
 # ---------------------------------------------------------------------------

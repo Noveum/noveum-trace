@@ -18,7 +18,6 @@ import uuid
 import pytest
 
 import noveum_trace
-from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 from ._helpers import (  # noqa: F401
     LANGCHAIN_AVAILABLE,
@@ -32,6 +31,11 @@ from ._helpers import (  # noqa: F401
 pytestmark = pytest.mark.skipif(
     not LANGCHAIN_AVAILABLE, reason="LangChain not available"
 )
+
+# Guard the optional-dependency import so the module imports cleanly (and the
+# skip marker above can take effect) on installs without LangChain.
+if LANGCHAIN_AVAILABLE:
+    from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler
 
 
 def _start_keepalive_chain(handler):

@@ -361,12 +361,8 @@ async def test_attach_to_task_idempotent_pipeline_finished_registration() -> Non
 async def test_client_connected_frame_flushes_session_metadata_e2e() -> None:
     # Guards: the production frame-handler path (on_push_frame -> dispatch ->
     # _handle_client_connected -> _flush_session_metadata), not a direct call.
-    # NOTE (adapted from plan OBS-10): the plan also asked to assert a
-    # `client.connected` SpanEvent in trace.events, but the real Noveum Trace
-    # has NO `.events` attribute, so `_handle_client_connected`'s
-    # `self._trace.events.append(...)` raises AttributeError that the handler
-    # swallows — the event is silently dropped. That assertion is infeasible on
-    # this Trace API, so only the metadata-flush contract is asserted.
+    # Trace now exposes `.events`, so we also assert the `client.connected`
+    # SpanEvent that `_handle_client_connected` appends to the trace.
     obs = NoveumTraceObserver(record_audio=False)
     trace = Trace(name="pipecat.conversation")
     obs._trace = trace
@@ -387,6 +383,7 @@ async def test_client_connected_frame_flushes_session_metadata_e2e() -> None:
     assert trace.attributes["session.transport_type"] == "FakeTransport"
     assert trace.attributes["session.idle_timeout_secs"] == 30
     assert obs._session_metadata == {}  # cleared after flush
+    assert any(e.name == "client.connected" for e in trace.events)
 
 
 # --------------------------------------------------------------------------- #

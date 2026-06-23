@@ -22,8 +22,13 @@ def _require(modname: str) -> Any:
     """
     try:
         return importlib.import_module(modname)
-    except ImportError as exc:  # 1.x style: a deep backend ModuleNotFoundError
+    except ModuleNotFoundError as exc:  # 1.x style: a deep backend missing
         pytest.skip(f"{modname} unavailable (optional backend missing): {exc}")
+    except ImportError:
+        # An ImportError that is *not* a ModuleNotFoundError (e.g. a bad symbol
+        # import inside an importable module) signals a real regression, not a
+        # missing optional backend — surface it instead of masking with a skip.
+        raise
     except Exception as exc:
         # 0.0.x style: pipecat re-raises a missing transport backend as a
         # *generic* Exception ("Missing module: No module named 'daily'"), not

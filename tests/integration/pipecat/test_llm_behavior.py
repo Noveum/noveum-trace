@@ -21,6 +21,8 @@ import pytest
 
 pytest.importorskip("pipecat.frames.frames")
 
+from noveum_trace.utils.llm_utils import estimate_cost  # noqa: E402
+
 
 # --------------------------------------------------------------------------- #
 # Local harness (does not touch conftest)                                      #
@@ -328,9 +330,12 @@ async def test_metrics_token_usage_and_cost_pinned() -> None:
     assert span.attributes["llm.output_tokens"] == 1000
     assert span.attributes["llm.total_tokens"] == 2000
     assert span.attributes["llm.model"] == "gpt-4o-mini"
-    assert span.attributes["llm.cost.input"] == pytest.approx(0.0006)
-    assert span.attributes["llm.cost.output"] == pytest.approx(0.0024)
-    assert span.attributes["llm.cost.total"] == pytest.approx(0.003)
+    # Derive expected costs from the pricing table rather than hard-coding
+    # literals, so intentional price-table updates don't break this test.
+    expected = estimate_cost("gpt-4o-mini", input_tokens=1000, output_tokens=1000)
+    assert span.attributes["llm.cost.input"] == pytest.approx(expected["input_cost"])
+    assert span.attributes["llm.cost.output"] == pytest.approx(expected["output_cost"])
+    assert span.attributes["llm.cost.total"] == pytest.approx(expected["total_cost"])
     assert span.attributes["llm.cost.currency"] == "USD"
     assert obs._metrics_accumulator["total_input_tokens"] == 1000
     assert obs._metrics_accumulator["total_output_tokens"] == 1000

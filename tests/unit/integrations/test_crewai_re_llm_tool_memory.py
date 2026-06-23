@@ -61,6 +61,7 @@ from crewai.events.types.tool_usage_events import (  # noqa: E402
     ToolUsageStartedEvent,
 )
 
+from noveum_trace.core.span import SpanStatus  # noqa: E402
 from noveum_trace.integrations.crewai.crewai_constants import (  # noqa: E402
     ATTR_STATUS_ERROR,
     ATTR_STATUS_SUCCESS,
@@ -246,7 +247,10 @@ class TestLLMRealEvents:
         assert "c1" not in lnr._llm_call_spans
         attrs = span.attributes
         assert "rate_limit" in str(attrs.get("error.message", ""))
-        span.set_status.assert_called()  # SpanStatus.ERROR
+        # Verify the exact status enum, not just that set_status was called --
+        # any value other than the SpanStatus members silently no-ops in source.
+        span.set_status.assert_called_once()
+        assert span.set_status.call_args[0][0] == SpanStatus.ERROR
         lnr.shutdown()
 
     def test_stream_and_thinking_chunks_join_on_completion(self) -> None:
@@ -379,7 +383,9 @@ class TestToolRealEvents:
         assert attrs["tool.status"] == ATTR_STATUS_ERROR
         assert "connection refused" in str(attrs.get("error.message", ""))
         assert "tool.output" not in attrs
-        span.set_status.assert_called()  # SpanStatus.ERROR
+        # Verify the exact status enum, not just that set_status was called.
+        span.set_status.assert_called_once()
+        assert span.set_status.call_args[0][0] == SpanStatus.ERROR
         lnr.shutdown()
 
     def test_tool_args_string_not_truncated_known_bug(self) -> None:
