@@ -31,7 +31,6 @@ from noveum_trace.guard import (
     async_http_client,
     http_client,
 )
-from noveum_trace.guard.integrations.crewai import NoveumCrewAIInterceptor
 from noveum_trace.guard.types import PolicyContext
 
 # ---------------------------------------------------------------------------
@@ -79,18 +78,19 @@ async def anthropic_example() -> None:
     try:
         import anthropic
 
-        guarded_async_client = async_http_client()
-        anthropic_client = anthropic.AsyncAnthropic(
-            api_key="your-anthropic-api-key",
-            http_client=guarded_async_client,
-        )
-
-        message = await anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=200,
-            messages=[{"role": "user", "content": "What is the capital of France?"}],
-        )
-        print("Anthropic response:", message.content[0].text)
+        async with async_http_client() as guarded_async_client:
+            async with anthropic.AsyncAnthropic(
+                api_key="your-anthropic-api-key",
+                http_client=guarded_async_client,
+            ) as anthropic_client:
+                message = await anthropic_client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    max_tokens=200,
+                    messages=[
+                        {"role": "user", "content": "What is the capital of France?"}
+                    ],
+                )
+                print("Anthropic response:", message.content[0].text)
 
     except Exception as e:
         print(f"Call blocked or failed: {e}")
@@ -131,8 +131,10 @@ def manual_guard_example() -> None:
     poller = PolicyPoller(engine, project_id="my-llm-app")
     poller.start()
 
-    # Simulate an LLM call using the NoveumCrewAIInterceptor (works for any framework).
-    # The interceptor pattern is framework-agnostic — just wrap your LLM call.
+    # NoveumCrewAIInterceptor implements the pre/post call contract and works with
+    # any framework — the name reflects its origin, not a CrewAI requirement.
+    from noveum_trace.guard.integrations.crewai import NoveumCrewAIInterceptor
+
     interceptor = NoveumCrewAIInterceptor(engine, ctx)
 
     payload = {
@@ -164,3 +166,4 @@ def manual_guard_example() -> None:
 
 if __name__ == "__main__":
     manual_guard_example()
+    noveum_trace.shutdown()

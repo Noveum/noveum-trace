@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,8 @@ from noveum_trace.utils.llm_utils import estimate_cost, estimate_token_count
 if TYPE_CHECKING:
     from noveum_trace.guard.decision import PolicyDecision
     from noveum_trace.guard.engine import PolicyEngine
+
+logger = logging.getLogger(__name__)
 
 
 class NoveumCrewAIInterceptor:
@@ -75,7 +78,14 @@ class NoveumCrewAIInterceptor:
         policy's pre-decision (including reserved_usd in state) so reconcile works.
         Raises NoveumGuardBlocked if any policy blocks in post.
         """
-        ctx = self._pending_ctx.pop(call_id, self._context)
+        ctx = self._pending_ctx.pop(call_id, None)
+        if ctx is None:
+            logger.warning(
+                "after_llm_call: call_id %r not found in _pending_ctx — "
+                "mismatched or already processed; skipping post_call",
+                call_id,
+            )
+            return
         parsed_resp = self._parse_response(payload, response)
 
         post_block = self._engine.post_call(parsed_resp, ctx, ran)
@@ -83,6 +93,22 @@ class NoveumCrewAIInterceptor:
             raise NoveumGuardBlocked(
                 post_block.policy_name, post_block.reason, post_block
             )
+
+    def on_llm_call_failed(
+        self,
+        call_id: str,
+        ran: list[tuple[AbstractPolicy, PolicyDecision]],
+    ) -> None:
+        """Release reservations when the LLM call raises before after_llm_call.
+
+        Call this from an except block so in-flight budget reservations are not
+        stranded when the provider raises before returning a response.
+        Removes call_id from _pending_ctx to prevent memory leaks.
+        """
+        ctx = self._pending_ctx.pop(call_id, None)
+        if ctx is None:
+            return
+        self._engine.release_all(ctx, ran)
 
     # ------------------------------------------------------------------
     # Internal helpers

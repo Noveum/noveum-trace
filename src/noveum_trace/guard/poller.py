@@ -98,8 +98,8 @@ class PolicyPoller:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._poll_all_now()  # immediate first poll before background loop starts
         self._fetch_backend_policies()  # immediate first backend fetch
+        self._poll_all_now()  # immediate first poll before background loop starts
         self._last_backend_fetch = time.monotonic()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="noveum-guard-poller"
@@ -117,8 +117,8 @@ class PolicyPoller:
         Also triggers a backend policy fetch so any new policies are picked up
         immediately rather than waiting for the next scheduled fetch.
         """
-        self._poll_all_now()
         self._fetch_backend_policies()
+        self._poll_all_now()
         self._last_backend_fetch = time.monotonic()
 
     # Internal

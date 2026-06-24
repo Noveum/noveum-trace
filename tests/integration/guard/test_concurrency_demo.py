@@ -325,16 +325,13 @@ class TestProjectIsolationConcurrency:
         # Each project must have accumulated spend from its own 10 calls.
         assert api.current_spend("proj-a") > 0, "proj-a should have recorded spend"
         assert api.current_spend("proj-b") > 0, "proj-b should have recorded spend"
-        # Crucially, the two buckets must be equal (same request shape, same count)
-        # and neither should have been inflated by the other project's calls.
-        # We can't trivially assert they are equal due to float arithmetic, but we
-        # can confirm neither bucket is zero while also confirming neither has
-        # absorbed the other project's spend by checking they are both bounded by
-        # the amount a single project's 10 calls would produce (not 20 calls).
-        per_project_max = api.current_spend("proj-a") + api.current_spend("proj-b")
-        assert (
-            api.current_spend("proj-a") < per_project_max
-        ), "proj-a spend should be less than the combined total"
-        assert (
-            api.current_spend("proj-b") < per_project_max
-        ), "proj-b spend should be less than the combined total"
+        # Crucially, the two buckets must be equal (same request shape, same count).
+        # Each project ran 10 identical requests so their spend must match within
+        # floating-point tolerance. A large discrepancy means one bucket absorbed
+        # the other project's spend (isolation failure).
+        spend_a = api.current_spend("proj-a")
+        spend_b = api.current_spend("proj-b")
+        assert abs(spend_a - spend_b) < max(spend_a, spend_b) * 0.01, (
+            f"proj-a and proj-b should have equal spend from identical requests: "
+            f"proj-a={spend_a:.6f}, proj-b={spend_b:.6f}"
+        )

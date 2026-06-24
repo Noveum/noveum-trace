@@ -107,12 +107,17 @@ class CostCapPolicy(AbstractPolicy):
             return PolicyDecision.allow(self.name, Phase.pre)
 
         reserved_usd = self._estimate_reserved_usd(parsed)
+        # Snapshot scope and mode at pre() time so post()/release() use the same
+        # values even if update_params() fires concurrently between pre and post.
+        scope_id = self._scope_id(ctx)
+        with self._lock:
+            mode = self.mode
 
-        if self.mode == EnforcementMode.strict:
+        if mode == EnforcementMode.strict:
             try:
                 result = deps.api.reserve(
                     call_id=ctx.call_id,
-                    project_id=self._scope_id(ctx),
+                    project_id=scope_id,
                     reserved_usd=reserved_usd,
                     max_usd=self.max_usd,
                     window=self.window,
@@ -123,18 +128,41 @@ class CostCapPolicy(AbstractPolicy):
                         Phase.pre,
                         reason=f"Cost cap ${self.max_usd:.2f} reached (spend=${result.current_spend_usd:.4f})",
                         state={
-                            "reserved_usd": 0.0
+                            "reserved_usd": 0.0,
+                            "scope_id": scope_id,
+                            "mode": mode.value,
                         },  # nothing reserved; release is a no-op
                     )
                 return PolicyDecision.allow(
-                    self.name, Phase.pre, state={"reserved_usd": reserved_usd}
+                    self.name,
+                    Phase.pre,
+                    state={
+                        "reserved_usd": reserved_usd,
+                        "scope_id": scope_id,
+                        "mode": mode.value,
+                    },
                 )
             except Exception as exc:
                 if self.fail_closed:
                     return PolicyDecision.block(
-                        self.name, Phase.pre, reason=f"backend error: {exc}"
+                        self.name,
+                        Phase.pre,
+                        reason=f"backend error: {exc}",
+                        state={
+                            "reserved_usd": 0.0,
+                            "scope_id": scope_id,
+                            "mode": mode.value,
+                        },
                     )
-                return PolicyDecision.allow(self.name, Phase.pre)
+                return PolicyDecision.allow(
+                    self.name,
+                    Phase.pre,
+                    state={
+                        "reserved_usd": 0.0,
+                        "scope_id": scope_id,
+                        "mode": mode.value,
+                    },
+                )
 
         else:  # non_strict — local counter, advisory
             with self._lock:
@@ -150,10 +178,20 @@ class CostCapPolicy(AbstractPolicy):
                     self.name,
                     Phase.pre,
                     reason=f"Cost cap ${self.max_usd:.2f} reached (advisory, spend=${spend:.4f})",
-                    state={"reserved_usd": 0.0},
+                    state={
+                        "reserved_usd": 0.0,
+                        "scope_id": scope_id,
+                        "mode": mode.value,
+                    },
                 )
             return PolicyDecision.allow(
-                self.name, Phase.pre, state={"reserved_usd": reserved_usd}
+                self.name,
+                Phase.pre,
+                state={
+                    "reserved_usd": reserved_usd,
+                    "scope_id": scope_id,
+                    "mode": mode.value,
+                },
             )
 
     def post(
@@ -165,6 +203,14 @@ class CostCapPolicy(AbstractPolicy):
     ) -> PolicyDecision:
         actual_usd = resp.cost_usd
         reserved_usd = decision.state.get("reserved_usd", 0.0)
+        # Use scope/mode snapshotted at pre() time; fall back to current values for
+        # decisions created before this fix (e.g. state dict without scope_id).
+        scope_id: str = decision.state.get("scope_id") or self._scope_id(ctx)
+        mode = (
+            EnforcementMode(decision.state["mode"])
+            if "mode" in decision.state
+            else self.mode
+        )
 
         # Update local counter regardless of mode — keeps poll() sync coherent.
         # In non_strict this mirrors report_usage()'s backend increment; both
@@ -176,26 +222,22 @@ class CostCapPolicy(AbstractPolicy):
             )
 
         try:
-            if self.mode == EnforcementMode.strict:
+            if mode == EnforcementMode.strict:
                 if actual_usd <= reserved_usd:
                     # Return the unused headroom so the budget stays accurate.
-                    deps.api.reconcile(
-                        ctx.call_id, self._scope_id(ctx), reserved_usd - actual_usd
-                    )
+                    deps.api.reconcile(ctx.call_id, scope_id, reserved_usd - actual_usd)
                 else:
                     # Tokenizer underestimated; clear the inflight entry then charge
                     # the excess so spend never understates reality.
-                    deps.api.reconcile(ctx.call_id, self._scope_id(ctx), 0.0)
+                    deps.api.reconcile(ctx.call_id, scope_id, 0.0)
                     deps.api.report_usage(
                         ctx.call_id,
-                        self._scope_id(ctx),
+                        scope_id,
                         actual_usd - reserved_usd,
                         resp.model,
                     )
             else:
-                deps.api.report_usage(
-                    ctx.call_id, self._scope_id(ctx), actual_usd, resp.model
-                )
+                deps.api.report_usage(ctx.call_id, scope_id, actual_usd, resp.model)
         except Exception:
             pass  # reporting failure is non-blocking; local counter already updated
 
@@ -205,13 +247,19 @@ class CostCapPolicy(AbstractPolicy):
         self, decision: PolicyDecision, ctx: PolicyContext, deps: PolicyDeps
     ) -> None:
         """Return reservation to the pool after a pre-block by another policy or call error."""
-        if self.mode == EnforcementMode.strict:
+        scope_id: str = decision.state.get("scope_id") or self._scope_id(ctx)
+        mode = (
+            EnforcementMode(decision.state["mode"])
+            if "mode" in decision.state
+            else self.mode
+        )
+        if mode == EnforcementMode.strict:
             reserved_usd = decision.state.get("reserved_usd", 0.0)
             try:
                 # Always reconcile in strict mode — even with reserved_usd=0 this
                 # pops any inflight entry that reserve() created before an exception
                 # caused _safe_invoke to return a block decision with empty state.
-                deps.api.reconcile(ctx.call_id, self._scope_id(ctx), reserved_usd)
+                deps.api.reconcile(ctx.call_id, scope_id, reserved_usd)
             except Exception:
                 pass  # TTL on backend eventually cleans up inflight entries
 

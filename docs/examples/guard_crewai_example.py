@@ -35,6 +35,10 @@ from noveum_trace.guard import (
     NoveumGuardBlocked,
     http_client,
 )
+
+# get_context / get_engine are not in the public __all__; import directly from
+# _state for now. Prefer the zero-arg http_client() approach (Approach 1) which
+# resolves engine/context automatically without touching internal modules.
 from noveum_trace.guard._state import get_context, get_engine
 
 # ---------------------------------------------------------------------------
@@ -72,39 +76,38 @@ def run_crew_transport_approach() -> None:
         print("crewai not installed — skipping transport approach demo.")
         return
 
-    # http_client() pulls the engine/context from noveum_trace.guard._state
-    # automatically after init() — no explicit engine/ctx needed.
-    guarded_client = http_client()
+    # http_client() returns an httpx.Client; use it as a context manager so the
+    # underlying connection pool is closed after the crew run completes.
+    with http_client() as guarded_client:
+        llm = LLM(
+            model="gpt-4o-mini",
+            api_key="your-openai-api-key",
+            # Pass the guarded httpx client so Guard intercepts every provider call.
+            client_params={"http_client": guarded_client},
+        )
 
-    llm = LLM(
-        model="gpt-4o-mini",
-        api_key="your-openai-api-key",
-        # Pass the guarded httpx client so Guard intercepts every provider call.
-        client_params={"http_client": guarded_client},
-    )
+        researcher = Agent(
+            role="Research Analyst",
+            goal="Find key facts about quantum computing",
+            backstory="Expert researcher with deep knowledge of quantum physics.",
+            llm=llm,
+            verbose=True,
+        )
 
-    researcher = Agent(
-        role="Research Analyst",
-        goal="Find key facts about quantum computing",
-        backstory="Expert researcher with deep knowledge of quantum physics.",
-        llm=llm,
-        verbose=True,
-    )
+        research_task = Task(
+            description="Summarize the top 3 applications of quantum computing in 100 words.",
+            expected_output="A concise 100-word summary of quantum computing applications.",
+            agent=researcher,
+        )
 
-    research_task = Task(
-        description="Summarize the top 3 applications of quantum computing in 100 words.",
-        expected_output="A concise 100-word summary of quantum computing applications.",
-        agent=researcher,
-    )
+        crew = Crew(agents=[researcher], tasks=[research_task], verbose=True)
 
-    crew = Crew(agents=[researcher], tasks=[research_task], verbose=True)
-
-    try:
-        result = crew.kickoff()
-        print("Crew result:", result)
-    except Exception as e:
-        # Guard blocks surface as HTTP 403 errors from the provider SDK.
-        print(f"Crew blocked by Guard: {e}")
+        try:
+            result = crew.kickoff()
+            print("Crew result:", result)
+        except Exception as e:
+            # Guard blocks surface as HTTP 403 errors from the provider SDK.
+            print(f"Crew blocked by Guard: {e}")
 
 
 # ---------------------------------------------------------------------------
