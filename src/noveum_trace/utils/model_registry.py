@@ -689,7 +689,7 @@ MODEL_ALIASES: dict[str, str] = {
     "claude-3-opus-20240229": "claude-3-opus-20240229",  # identity (normaliser strips date)
     "claude-3-sonnet-20240229": "claude-3-sonnet-20240229",
     "claude-3-haiku-20240307": "claude-3-haiku-20240307",
-    "claude-3.5-sonnet-20241022": "claude-3.5-sonnet-20241022",
+    "claude-3.5-sonnet-20241022": "claude-3.5-sonnet",
     "claude-3.5-haiku-20241022": "claude-3.5-haiku-20241022",
     # Alternate Claude 4 spellings
     "claude-4-opus": "claude-opus-4",
