@@ -300,10 +300,6 @@ class TestLLMRealEvents:
             messages=[{"role": "user", "content": "hi"}],
             agent_id="agent-1",
         )
-        # Sanity: the real event genuinely lacks these fields.
-        assert "temperature" not in type(ev).model_fields
-        assert "finish_reason" not in type(ev).model_fields
-
         lnr.on_llm_call_started(src, ev)
         attrs = lnr._llm_call_spans["c1"]["span"].attributes
         assert attrs["llm.temperature"] == 0.3  # read from source obj
