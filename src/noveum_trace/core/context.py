@@ -27,6 +27,9 @@ class TraceContext:
     trace: Optional[Trace] = None
     span: Optional[Span] = None
     attributes: dict[str, Any] = field(default_factory=dict)
+    project_id: Optional[str] = None
+    organization_id: Optional[str] = None
+    environment: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Initialize attributes if None."""

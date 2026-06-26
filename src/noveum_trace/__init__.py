@@ -40,6 +40,7 @@ __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
 
 import threading
+import warnings
 from typing import Any, Optional
 
 # Agent imports
@@ -129,6 +130,8 @@ def init(
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
     service_version: Optional[str] = None,
+    policies: Optional[list[Any]] = None,
+    guard_enabled: bool = False,
     **kwargs: Any,
 ) -> None:
     """
@@ -210,6 +213,74 @@ def init(
 
         _register_client(_client)
 
+        # Bootstrap guard if requested
+        if guard_enabled or policies:
+            import uuid
+
+            # Warn when caller passes explicit policies alongside guard_enabled.
+            # The backend poller is now the single source of truth; local policy
+            # definitions may conflict with backend-fetched ones for the same name.
+            if policies and guard_enabled:
+                warnings.warn(
+                    "Passing 'policies' together with 'guard_enabled=True' is "
+                    "deprecated. When guard_enabled=True the backend poller "
+                    "becomes the single source of truth for policy definitions. "
+                    "Remove the 'policies' argument and configure policies via "
+                    "the Noveum dashboard instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+            try:
+                from noveum_trace.guard._state import set_guard
+                from noveum_trace.guard.api_client import GuardAPIClient
+                from noveum_trace.guard.engine import PolicyEngine
+                from noveum_trace.guard.poller import PolicyPoller
+                from noveum_trace.guard.types import PolicyContext
+
+                _api_client = GuardAPIClient(
+                    api_key=api_key or "",
+                    base_url=endpoint or DEFAULT_ENDPOINT,
+                )
+                _engine = PolicyEngine(_api_client)
+                # Use a unique sentinel when project is not provided so that
+                # different uninamed callers do not share the same spend scope.
+                _project_id = (
+                    project if project is not None else f"__unscoped_{uuid.uuid4()}"
+                )
+                _ctx = PolicyContext(
+                    project_id=_project_id,
+                    organization_id=None,
+                    environment=environment or "production",
+                    trace_id=None,
+                    span_id=None,
+                    call_id=str(uuid.uuid4()),
+                )
+                # Bind the ambient context before attaching so each policy can adopt
+                # the project scope its background poll() needs.
+                for _policy in policies or []:
+                    _policy.bind_context(_ctx)
+                    _engine.attach(_policy)
+                # Pass project_id explicitly so the poller can fetch backend
+                # policies even before the first pre_call() sets context.
+                _poller = PolicyPoller(_engine, project_id=_project_id)
+                try:
+                    _poller.start()
+                except Exception:
+                    # Don't leave the poller half-started; guard stays uninitialized.
+                    _poller.stop()
+                    raise
+                set_guard(_engine, _ctx, _poller)
+            except Exception:
+                # Roll back the global client registration so the SDK is not
+                # left in a partially-initialized state. A subsequent init()
+                # call will retry the full bootstrap.
+                _client = None
+                from noveum_trace.core import _unregister_client
+
+                _unregister_client()
+                raise
+
 
 def shutdown() -> None:
     """
@@ -220,6 +291,14 @@ def shutdown() -> None:
     """
     global _client
     with _client_lock:
+        # Stop the guard poller thread and clear guard state if running
+        from noveum_trace.guard import _state as _guard_state
+
+        _guard_poller = _guard_state.get_poller()
+        if _guard_poller is not None:
+            _guard_poller.stop()
+        _guard_state.clear()
+
         if _client:
             _client.shutdown()
             _client = None
