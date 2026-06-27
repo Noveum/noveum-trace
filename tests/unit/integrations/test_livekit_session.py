@@ -1728,36 +1728,42 @@ class TestTraceCreationEdgeCases:
             mock_agent.tools = []
             mock_agent.instructions = None
 
-            # Mock get_job_context if available
-            try:
-                with patch(
+            with (
+                patch(
                     "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
-                ):
-                    with patch(
-                        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-                        new_callable=AsyncMock,
-                    ):
-                        with patch("noveum_trace.get_client", return_value=mock_client):
-                            with patch(
-                                "livekit.agents.get_job_context", create=True
-                            ) as mock_get_job_context:
-                                mock_job_ctx = Mock()
-                                mock_job = Mock()
-                                mock_job.id = "job_123"
-                                mock_job_ctx.job = mock_job
-                                mock_get_job_context.return_value = mock_job_ctx
+                ),
+                patch(
+                    "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ),
+                patch("noveum_trace.get_client", return_value=mock_client),
+            ):
+                # Narrow the skip guard to dependency resolution only: a missing
+                # or broken livekit.agents namespace raises AttributeError when
+                # the patch is entered. Test logic/assertions run outside the
+                # guard so a real failure there is not masked as a skip.
+                job_ctx_patch = patch("livekit.agents.get_job_context", create=True)
+                try:
+                    mock_get_job_context = job_ctx_patch.__enter__()
+                except (ImportError, ModuleNotFoundError, AttributeError):
+                    pytest.skip("livekit.agents not available")
+                try:
+                    mock_job_ctx = Mock()
+                    mock_job = Mock()
+                    mock_job.id = "job_123"
+                    mock_job_ctx.job = mock_job
+                    mock_get_job_context.return_value = mock_job_ctx
 
-                                manager._original_start = AsyncMock(return_value=None)
+                    manager._original_start = AsyncMock(return_value=None)
 
-                                await manager.session.start(mock_agent)
+                    await manager.session.start(mock_agent)
 
-                                mock_client.start_trace.assert_called_once()
-                                # Check that job context was used in trace name
-                                call_args = mock_client.start_trace.call_args
-                                assert call_args is not None
-            except (ImportError, ModuleNotFoundError):
-                # Skip if livekit.agents not available
-                pytest.skip("livekit.agents not available")
+                    mock_client.start_trace.assert_called_once()
+                    # Check that job context was used in trace name
+                    call_args = mock_client.start_trace.call_args
+                    assert call_args is not None
+                finally:
+                    job_ctx_patch.__exit__(None, None, None)
 
     @pytest.mark.asyncio
     async def test_wrapped_start_with_instructions_via_private(
@@ -1815,29 +1821,33 @@ class TestTraceCreationEdgeCases:
             mock_agent.tools = []
             mock_agent.instructions = None
 
-            try:
-                with patch(
+            with (
+                patch(
                     "noveum_trace.integrations.livekit.livekit_session.set_current_trace"
-                ):
-                    with patch(
-                        "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
-                        new_callable=AsyncMock,
-                    ):
-                        with patch("noveum_trace.get_client", return_value=mock_client):
-                            with patch(
-                                "livekit.agents.get_job_context", create=True
-                            ) as mock_get_job:
-                                mock_get_job.side_effect = Exception(
-                                    "Job context error"
-                                )
+                ),
+                patch(
+                    "noveum_trace.integrations.livekit.livekit_session.asyncio.sleep",
+                    new_callable=AsyncMock,
+                ),
+                patch("noveum_trace.get_client", return_value=mock_client),
+            ):
+                # Narrow the skip guard to dependency resolution only (see the
+                # sibling test above); assertions run outside the guard.
+                job_ctx_patch = patch("livekit.agents.get_job_context", create=True)
+                try:
+                    mock_get_job = job_ctx_patch.__enter__()
+                except (ImportError, ModuleNotFoundError, AttributeError):
+                    pytest.skip("livekit.agents not available")
+                try:
+                    mock_get_job.side_effect = Exception("Job context error")
 
-                                manager._original_start = AsyncMock(return_value=None)
+                    manager._original_start = AsyncMock(return_value=None)
 
-                                await manager.session.start(mock_agent)
+                    await manager.session.start(mock_agent)
 
-                                mock_client.start_trace.assert_called_once()
-            except (ImportError, ModuleNotFoundError):
-                pytest.skip("livekit.agents not available")
+                    mock_client.start_trace.assert_called_once()
+                finally:
+                    job_ctx_patch.__exit__(None, None, None)
 
     @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
     @patch("noveum_trace.get_client")

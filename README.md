@@ -147,7 +147,7 @@ from noveum_trace.core.client import NoveumClient
 | Client class | `from noveum_trace import NoveumClient` | `from noveum_trace.core.client import NoveumClient` |
 | LangChain integration | `from noveum_trace.integrations.langchain import NoveumTraceCallbackHandler` | `from noveum_trace.integrations import NoveumTraceCallbackHandler` (also works) |
 | LiveKit integration | `from noveum_trace.integrations.livekit import setup_livekit_tracing` | `from noveum_trace.integrations.livekit import LiveKitSTTWrapper, LiveKitTTSWrapper` |
-| Pipecat integration | `from noveum_trace.integrations.pipecat import NoveumTraceObserver, setup_pipecat_tracing` | requires `pip install "noveum-trace[pipecat]"` |
+| Pipecat integration | `from noveum_trace.integrations.pipecat import NoveumPipecatTracer` | requires `pip install "noveum-trace[pipecat]"` |
 | CrewAI integration | `from noveum_trace.integrations.crewai import NoveumCrewAIListener, setup_crewai_tracing` | requires Python 3.10+, `pip install "noveum-trace[crewai]"` |
 
 ## ⚙️ Setup
@@ -392,26 +392,34 @@ For detailed API documentation, see the [LiveKit Integration Docs](docs/LIVEKIT_
 
 ## 🤖 Pipecat Integration
 
-Automatically trace Pipecat voice agent pipelines:
+Automatically trace Pipecat voice agent pipelines with the two-call `NoveumPipecatTracer` API — stock transport, no wrappers:
 
 ```python
 import noveum_trace
-from noveum_trace.integrations.pipecat import NoveumTraceObserver, setup_pipecat_tracing
+from noveum_trace.integrations.pipecat import NoveumPipecatTracer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.task import PipelineParams, PipelineTask
 
 # Initialize Noveum Trace
 noveum_trace.init(project="pipecat-agent", api_key="your-api-key")
 
+# Create a tracer
+tracer = NoveumPipecatTracer(record_audio=True)
+
 async def run_agent():
     pipeline = Pipeline([...])  # Your Pipecat pipeline
 
-    # Create observer using factory
-    observer = setup_pipecat_tracing(trace_name_prefix="my-bot")
+    # 1. Wrap the pipeline (use the return value)
+    pipeline = tracer.observe_pipeline(pipeline)
 
-    task = PipelineTask(pipeline, observers=[observer])
-    await observer.attach_to_task(task)  # Wires turn tracking
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+    )
+
+    # 2. Register handlers (use the return value)
+    task = await tracer.register_task_handlers(task, transport=transport)
 
     runner = PipelineRunner()
     await runner.run(task)
@@ -423,7 +431,7 @@ async def run_agent():
 pip install "noveum-trace[pipecat]"
 ```
 
-For full documentation, see the [Pipecat Integration Guide](docs/PIPECAT_INTEGRATION.md).
+For full documentation, see the [Pipecat Integration Guide](docs/PIPECAT_INTEGRATION_GUIDE.md).
 
 ## 🤝 CrewAI Integration
 
