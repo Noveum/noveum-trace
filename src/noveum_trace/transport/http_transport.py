@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from noveum_trace.core.trace import Trace
 from noveum_trace.transport.batch_processor import BatchProcessor
+from noveum_trace.utils import otel_compat
 from noveum_trace.utils.exceptions import TransportError
 from noveum_trace.utils.logging import (
     get_sdk_logger,
@@ -761,7 +762,59 @@ class HttpTransport:
         if self.config.environment:
             trace_data["environment"] = self.config.environment
 
+        # Additively emit OpenTelemetry-aligned fields alongside the legacy payload.
+        if getattr(self.config, "otel_compat", False):
+            self._augment_trace_otel(trace_data)
+
         return trace_data
+
+    def _augment_trace_otel(self, trace_data: dict[str, Any]) -> None:
+        """
+        Add OpenTelemetry-aligned fields to an exported trace, in place.
+
+        Adds a top-level
+        ``schema_version`` marker, a trace-level ``otel`` block (W3C trace id +
+        resource), and a per-span ``otel`` block plus mirrored ``gen_ai.*`` attributes.
+        """
+        sdk_version = self._get_sdk_version()
+        trace_data["schema_version"] = otel_compat.SCHEMA_VERSION
+        trace_data["otel"] = {
+            "trace_id": otel_compat.to_otel_trace_id(trace_data.get("trace_id")),
+            "resource": otel_compat.build_resource(
+                service_name=self.config.project,
+                sdk_version=sdk_version,
+                environment=self.config.environment,
+                service_version=self.config.service_version,
+            ),
+        }
+
+        for span in trace_data.get("spans", []):
+            if not isinstance(span, dict):
+                continue
+            attrs = span.get("attributes")
+            if not isinstance(attrs, dict):
+                attrs = {}
+            gen_ai = otel_compat.derive_gen_ai_attributes(attrs)
+            if gen_ai:
+                attrs.update(gen_ai)
+                span["attributes"] = attrs
+            name = span.get("name") or ""
+            span["otel"] = {
+                "trace_id": otel_compat.to_otel_trace_id(span.get("trace_id")),
+                "span_id": otel_compat.to_otel_span_id(span.get("span_id")),
+                "parent_span_id": otel_compat.to_otel_span_id(
+                    span.get("parent_span_id")
+                ),
+                "kind": otel_compat.infer_span_kind(name, attrs),
+                "status": otel_compat.to_otel_status(
+                    span.get("status"), span.get("status_message")
+                ),
+                "name": otel_compat.otel_span_name(name, attrs),
+                "scope": {
+                    "name": otel_compat.DEFAULT_SCOPE_NAME,
+                    "version": sdk_version,
+                },
+            }
 
     def _dev_trace_filename_stem(self, trace: dict[str, Any]) -> str:
         """Filesystem-safe filename stem from a single trace's trace_id."""

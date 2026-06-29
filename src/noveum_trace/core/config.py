@@ -142,6 +142,10 @@ class Config:
     log_level: str = "ERROR"
     dev_mode: bool = False
     dev_traces_dir: Optional[str] = None
+    # Additively emit OpenTelemetry-aligned fields (gen_ai.* attrs, span kind, status
+    # object, resource, scope, W3C-format ids) alongside the legacy payload. On by
+    # default; set NOVEUM_OTEL_COMPAT=false to emit the exact legacy payload.
+    otel_compat: bool = True
 
     # Private field to store endpoint override
     _endpoint_override: Optional[str] = field(default=None, init=False, repr=False)
@@ -176,6 +180,7 @@ class Config:
         log_level: str = "ERROR",
         dev_mode: bool = False,
         dev_traces_dir: Optional[str] = None,
+        otel_compat: bool = True,
     ) -> "Config":
         """Create a Config instance with optional endpoint override."""
         # Create the config instance
@@ -192,6 +197,7 @@ class Config:
             log_level=log_level,
             dev_mode=dev_mode,
             dev_traces_dir=dev_traces_dir,
+            otel_compat=otel_compat,
         )
 
         # Handle endpoint override after initialization
@@ -307,6 +313,7 @@ class Config:
             "log_level": self.log_level,
             "dev_mode": self.dev_mode,
             "dev_traces_dir": self.dev_traces_dir,
+            "otel_compat": self.otel_compat,
         }
 
     @classmethod
@@ -321,6 +328,10 @@ class Config:
         config.service_version = data.get("service_version")
         config.debug = data.get("debug", False)
         config.log_level = data.get("log_level", "ERROR")
+        if "otel_compat" in data:
+            config.otel_compat = _parse_config_bool(
+                data["otel_compat"], field_name="otel_compat"
+            )
         if "dev_mode" in data:
             config.dev_mode = _parse_config_bool(
                 data["dev_mode"], field_name="dev_mode"
@@ -570,6 +581,12 @@ def _load_from_environment() -> Config:
     dev_mode_env = os.getenv("NOVEUM_DEV_MODE")
     if dev_mode_env:
         config_data["dev_mode"] = dev_mode_env.lower() in ("true", "1", "yes")
+
+    otel_compat_env = os.getenv("NOVEUM_OTEL_COMPAT")
+    if otel_compat_env is not None:
+        config_data["otel_compat"] = _parse_config_bool(
+            otel_compat_env, field_name="NOVEUM_OTEL_COMPAT"
+        )
 
     pii_enabled_env = os.getenv("NOVEUM_PII_ENABLED")
     if pii_enabled_env is not None:
