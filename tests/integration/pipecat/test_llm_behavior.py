@@ -339,7 +339,9 @@ async def test_metrics_token_usage_and_cost_pinned() -> None:
     assert span.attributes["llm.cost.currency"] == "USD"
     assert obs._metrics_accumulator["total_input_tokens"] == 1000
     assert obs._metrics_accumulator["total_output_tokens"] == 1000
-    assert obs._metrics_accumulator["total_cost"] == pytest.approx(0.003)
+    assert obs._metrics_accumulator["total_cost"] == pytest.approx(
+        expected["total_cost"]
+    )
 
 
 # --------------------------------------------------------------------------- #
