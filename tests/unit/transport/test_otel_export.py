@@ -70,6 +70,8 @@ class TestOtelExportAdditive:
         result = transport._format_trace_for_export(trace)
 
         span_otel = result["spans"][0]["otel"]
+        assert span_otel["trace_id"] == trace.trace_id.replace("-", "")
+        assert len(span_otel["trace_id"]) == 32
         assert span_otel["span_id"] == span.span_id.replace("-", "")[:16]
         assert len(span_otel["span_id"]) == 16
         assert span_otel["parent_span_id"] is None

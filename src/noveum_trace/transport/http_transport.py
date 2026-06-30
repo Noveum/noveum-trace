@@ -194,7 +194,7 @@ class HttpTransport:
             return f"<Response contains sensitive data, length: {len(response.text)} chars>"
 
         # Return truncated version if too long
-        if len(response.text) > max_length:
+        if max_length is not None and len(response.text) > max_length:
             return f"{response.text[:max_length]}... (truncated, total length: {len(response.text)} chars)"
 
         return response.text
@@ -530,6 +530,7 @@ class HttpTransport:
             )
             # Suppress InsecureRequestWarning
             import urllib3
+            import urllib3.exceptions
 
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         else:
