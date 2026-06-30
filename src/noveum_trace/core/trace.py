@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from noveum_trace.core.span import Span, SpanStatus
+from noveum_trace.core.span import Span, SpanEvent, SpanStatus
 from noveum_trace.utils.exceptions import NoveumTraceError
 
 
@@ -57,6 +57,10 @@ class Trace:
         self.end_time: Optional[datetime] = None
         self.metadata = metadata or TraceMetadata()
         self.attributes: dict[str, Any] = attributes or {}
+        # Trace-level events (session milestones not tied to a single span,
+        # e.g. client.connected / bot.connected / pipecat.error). Mirrors
+        # Span.events so producers can append SpanEvent objects to the trace.
+        self.events: list[SpanEvent] = []
 
         # Span management
         self.spans: list[Span] = []
@@ -256,6 +260,39 @@ class Trace:
             self.status_message = message
         return self
 
+    def add_event(
+        self,
+        name: str,
+        attributes: Optional[dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> "Trace":
+        """
+        Add a trace-level event (mirrors ``Span.add_event``).
+
+        Trace-level events capture session milestones that are not tied to a
+        single span — e.g. ``client.connected`` / ``bot.connected`` from a
+        transport, or a session-level ``pipecat.error``.
+
+        Args:
+            name: Event name
+            attributes: Event attributes (native types preserved)
+            timestamp: Event timestamp (defaults to current time)
+
+        Returns:
+            Self for method chaining
+        """
+        if self._finished:
+            return self
+
+        self.events.append(
+            SpanEvent(
+                name=name,
+                timestamp=timestamp or datetime.now(timezone.utc),
+                attributes=attributes or {},
+            )
+        )
+        return self
+
     def finish(self, end_time: Optional[datetime] = None) -> None:
         """
         Finish the trace.
@@ -331,6 +368,14 @@ class Trace:
                 "custom_attributes": self.metadata.custom_attributes,
             },
             "spans": [span.to_dict() for span in self.spans],
+            "events": [
+                {
+                    "name": event.name,
+                    "timestamp": event.timestamp.isoformat(),
+                    "attributes": event.attributes,
+                }
+                for event in self.events
+            ],
         }
 
     @classmethod
@@ -383,6 +428,16 @@ class Trace:
             # Add to active spans if not finished
             if not span.is_finished():
                 trace.active_spans[span.span_id] = span
+
+        # Restore trace-level events
+        for event_data in data.get("events", []):
+            trace.events.append(
+                SpanEvent(
+                    name=event_data["name"],
+                    timestamp=datetime.fromisoformat(event_data["timestamp"]),
+                    attributes=event_data.get("attributes", {}),
+                )
+            )
 
         return trace
 

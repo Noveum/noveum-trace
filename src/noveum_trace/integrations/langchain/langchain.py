@@ -32,6 +32,7 @@ from noveum_trace.integrations.langchain.langchain_utils import (
     extract_agent_type,
     extract_available_tools,
     extract_code_location_info,
+    extract_finish_reason,
     extract_function_definition_info,
     extract_langgraph_metadata,
     extract_noveum_metadata,
@@ -1830,7 +1831,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
             tool_calls = extract_tool_calls_from_response(
                 response,
                 tool_call_id_callback=self._set_tool_call_id_to_llm,
-                run_id=str(run_id),
+                run_id=run_id,
             )
 
             # Flatten usage attributes to match ContextManager format
@@ -1892,11 +1893,7 @@ class NoveumTraceCallbackHandler(BaseCallbackHandler):
                 # Output attributes
                 "llm.output.response": generations,
                 "llm.output.response_count": len(generations),
-                "llm.output.finish_reason": (
-                    response.llm_output.get("finish_reason")
-                    if hasattr(response, "llm_output") and response.llm_output
-                    else None
-                ),
+                "llm.output.finish_reason": extract_finish_reason(response),
                 # Flattened usage attributes
                 **usage_attrs,
                 **cost_attrs,

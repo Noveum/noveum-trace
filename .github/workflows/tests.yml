@@ -49,10 +49,22 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Run integration tests on all PRs and pushes
+  # Run integration tests across the supported pipecat range on all PRs/pushes.
+  #
+  # The pipecat integration must work on both the declared floor (pipecat-ai
+  # >=0.0.108, the 0.0.x API) and the current 1.x line. It absorbs the 0.0.x<->1.x
+  # API differences via getattr/try-import dispatch; the version-forked tests
+  # self-gate (hasattr / skipif), so the 0.0.x-only paths execute *nowhere*
+  # unless an old pipecat is actually installed. This matrix installs both the
+  # floor and latest so each leg exercises its own code paths.
   integration-test:
     runs-on: ubuntu-latest
     needs: [unit-test]
+    name: integration-test (pipecat ${{ matrix.pipecat-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        pipecat-version: ["latest", "0.0.108"]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,14 +78,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y portaudio19-dev
 
-      - name: Install dependencies
+      - name: Install dependencies (latest pipecat + transport extras)
+        if: matrix.pipecat-version == 'latest'
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev,pipecat]"
           pip install "pipecat-ai[daily,livekit,webrtc,websocket,local,tavus,heygen,lemonslice]"
           pip install livekit livekit-agents
 
-      - name: Run integration tests with coverage
+      - name: Install dependencies (pinned pipecat floor)
+        if: matrix.pipecat-version != 'latest'
+        # Pin to the declared floor. Transport backends (daily/webrtc/...) are
+        # intentionally NOT installed for the floor leg: the transport tests skip
+        # cleanly when an optional backend is absent (see _require() in
+        # tests/integration/pipecat/test_pipecat_transports.py). otel IS needed
+        # so the custom-span tests run.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,pipecat-otel]"
+          pip install "pipecat-ai==${{ matrix.pipecat-version }}"
+          pip install livekit livekit-agents
+
+      - name: Run full integration suite with coverage (latest)
+        if: matrix.pipecat-version == 'latest'
         run: |
           python -m pytest tests/integration/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
         env:
@@ -82,14 +109,23 @@ jobs:
           NOVEUM_ENDPOINT: ${{ secrets.NOVEUM_ENDPOINT }}
           NOVEUM_API_KEY: ${{ secrets.NOVEUM_API_KEY }}
 
+      - name: Run pipecat integration tests (pinned floor — cross-version regression)
+        if: matrix.pipecat-version != 'latest'
+        # The version_compat suite's 0.0.x-only legs (StartFrame.allow_interruptions,
+        # LLMMessagesFrame replace path, StartInterruptionFrame registration) execute
+        # only here; on the latest leg they skip.
+        run: |
+          python -m pytest tests/integration/pipecat/ -v -o junit_family=legacy
+
       - name: Upload coverage reports to Codecov
+        if: matrix.pipecat-version == 'latest'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: Noveum/noveum-trace
 
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.pipecat-version == 'latest' }}
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

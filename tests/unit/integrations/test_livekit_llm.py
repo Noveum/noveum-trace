@@ -104,6 +104,7 @@ class TestLiveKitLLMWrapper:
 
         assert wrapper._job_context == {}
 
+    @patch("noveum_trace.integrations.livekit.livekit_llm.LIVEKIT_AVAILABLE", True)
     def test_model_property(self, mock_base_llm):
         """Test model property delegation."""
         wrapper = LiveKitLLMWrapper(
@@ -113,6 +114,7 @@ class TestLiveKitLLMWrapper:
 
         assert wrapper.model == "gpt-4"
 
+    @patch("noveum_trace.integrations.livekit.livekit_llm.LIVEKIT_AVAILABLE", True)
     def test_provider_property(self, mock_base_llm):
         """Test provider property delegation."""
         wrapper = LiveKitLLMWrapper(
@@ -122,6 +124,7 @@ class TestLiveKitLLMWrapper:
 
         assert wrapper.provider == "openai"
 
+    @patch("noveum_trace.integrations.livekit.livekit_llm.LIVEKIT_AVAILABLE", True)
     def test_label_property(self, mock_base_llm):
         """Test label property delegation."""
         wrapper = LiveKitLLMWrapper(
