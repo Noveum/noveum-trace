@@ -946,11 +946,18 @@ class NoveumTraceObserver(
         if self._trace:
             frame = data.frame
             attrs: dict[str, Any] = {}
-            # B2: pipecat 1.x StartFrame fields. The pre-1.x names
-            # (allow_interruptions / sample_rate / audio_sample_rate) no longer
-            # exist, so every read used to return None and pipeline.* was always
-            # empty. These are the real 1.x fields.
+            # B2: read the UNION of both pipecat lines' StartFrame fields. The
+            # original bug was reading ONLY the pre-1.x names (which don't exist on
+            # 1.x → pipeline.* always empty); the fix must ADD the 1.x fields, not
+            # drop the legacy ones — ``getattr(..., None)`` is safe for names absent
+            # on whichever version is running, so 0.0.x still captures
+            # ``allow_interruptions`` and 1.x captures the new audio/enable fields.
             for attr in (
+                # 0.0.x fields (absent on 1.x → skipped)
+                "allow_interruptions",
+                "sample_rate",
+                "audio_sample_rate",
+                # 1.x fields (absent on 0.0.x → skipped)
                 "audio_in_sample_rate",
                 "audio_out_sample_rate",
                 "enable_metrics",
