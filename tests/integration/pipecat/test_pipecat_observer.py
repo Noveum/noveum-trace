@@ -177,8 +177,11 @@ async def test_handle_start_frame_ensures_trace_and_attrs(pipecat_frames) -> Non
     assert call_kw.get("pipeline.audio_in_sample_rate") == 16000
     assert call_kw.get("pipeline.audio_out_sample_rate") == 24000
     assert call_kw.get("pipeline.enable_metrics") is True
-    # The removed pre-1.x names must not be captured.
-    assert "pipeline.allow_interruptions" not in call_kw
+    # NOTE: no "allow_interruptions not captured" assertion here — this test runs on
+    # BOTH pipecat lines, and on 0.0.x the bare StartFrame carries
+    # allow_interruptions (correctly captured by the union read). The 1.x-only
+    # "removed names not captured" invariant lives in the version-gated tests
+    # test_handle_start_frame_captures_pipeline_attrs_on_1x / vc2 ...attrs_new.
 
 
 @pytest.mark.asyncio
