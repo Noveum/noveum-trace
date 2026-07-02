@@ -508,8 +508,16 @@ def extract_function_call_data(frame: Any) -> dict[str, Any]:
                     data["result"] = json.dumps(res, default=str)
                 except Exception:
                     data["result"] = str(res)
-        if hasattr(frame, "run_llm"):
-            data["run_llm"] = bool(frame.run_llm)
+        # run_llm: pipecat's FunctionCallResultFrame.run_llm defaults to None
+        # ("let the aggregator decide", the common case). Do NOT coerce None->False
+        # (that misrecords turns that did re-run the LLM); also consult
+        # frame.properties.run_llm where an explicit value lives. Omit when unknown.
+        run_llm = getattr(frame, "run_llm", None)
+        if run_llm is None:
+            props = getattr(frame, "properties", None)
+            run_llm = getattr(props, "run_llm", None) if props is not None else None
+        if run_llm is not None:
+            data["run_llm"] = bool(run_llm)
     except Exception as e:
         logger.debug("Failed to extract function call data: %s", e)
 

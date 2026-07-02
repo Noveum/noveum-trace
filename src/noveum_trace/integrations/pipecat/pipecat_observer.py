@@ -203,13 +203,13 @@ class NoveumTraceObserver(
         # Active operation spans
         self._active_llm_span: Any = None
         self._active_tts_span: Any = None
-        # tool_call_id → call dict
+        # tool_call_id → call dict (kept for InProgress dedup + result enrichment)
         self._pending_function_calls: dict[str, dict[str, Any]] = {}
-        # completed/cancelled results
-        self._function_call_results: list[dict[str, Any]] = []
-        # tool_call_ids written directly to _last_llm_span (between span 1 close and
-        # span 2 open); filtered out of span 2's llm.function_calls to avoid double-counting.
-        self._pre_span_function_call_ids: set[str] = set()
+        # tool_call_id → the LLM span that REQUESTED the call, so a result/cancel
+        # lands on the requesting span even after a follow-up span has opened.
+        self._function_call_owner: dict[str, Any] = {}
+        # tool_call_ids whose result/cancel has been written (dedup double-broadcast).
+        self._resolved_function_call_ids: set[str] = set()
 
         # Backrefs to the most-recently-closed LLM/TTS span.
         #
@@ -224,7 +224,10 @@ class NoveumTraceObserver(
 
         # Text buffers
         self._llm_text_buffer: list[str] = []
-        self._tts_text_buffer: list[str] = []
+        # TTS text buffers hold (text, includes_inter_frame_spaces) tuples so spacing
+        # can be reconstructed; final = sentence-aggregated, interim = word/token.
+        self._tts_text_buffer: list[tuple[str, bool]] = []
+        self._tts_text_interim_buffer: list[tuple[str, bool]] = []
         self._transcription_buffer: list[str] = []
 
         # LLM context stash (filled by LLMContextFrame, flushed on LLMFullResponseStartFrame)
@@ -1251,7 +1254,8 @@ class NoveumTraceObserver(
         self._last_tts_span = None
 
         self._pending_function_calls.clear()
-        self._function_call_results.clear()
+        self._function_call_owner.clear()
+        self._resolved_function_call_ids.clear()
 
         if self._pending_turn_eou_metrics:
             logger.debug(
@@ -1309,13 +1313,21 @@ class NoveumTraceObserver(
         except Exception as e:
             logger.warning("Failed to finish pipecat trace: %s", e, exc_info=True)
 
-        # Tear down the OTEL provider if we created it.
+        # Tear down / detach the custom-span processor so it does not leak on the
+        # customer's global TracerProvider (OTEL has no public remove API): if we
+        # own the provider, shut it down; otherwise best-effort unregister and
+        # detach so a lingering processor holds no observer graph and no-ops.
         proc = self._custom_span_processor
-        if proc is not None and getattr(proc, "_owns_provider", False):
+        if proc is not None:
             try:
-                proc._provider.shutdown()
+                from noveum_trace.integrations.pipecat.custom_spans import (
+                    unregister_custom_span_processor,
+                )
+
+                unregister_custom_span_processor(proc)
             except Exception:
-                pass
+                logger.debug("custom-span processor teardown failed", exc_info=True)
+            self._custom_span_processor = None
 
         logger.debug(
             "_finish_conversation completed — trace flushed (cancelled=%s)", cancelled

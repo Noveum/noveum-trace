@@ -16,7 +16,7 @@ Usage::
     tracer = NoveumPipecatTracer(
         record_audio=True,
         record_raw_input_audio=True,
-        capture_custom_spans=False,
+        capture_custom_spans=True,
         auto_enable_metrics=True,
         capture_errors=True,
         capture_system_logs=False,
@@ -60,7 +60,7 @@ class NoveumPipecatTracer:
         *,
         record_audio: bool = True,
         record_raw_input_audio: bool = True,
-        capture_custom_spans: bool = False,
+        capture_custom_spans: bool = True,
         auto_enable_metrics: bool = True,
         capture_errors: bool = True,
         capture_system_logs: bool = False,
@@ -79,7 +79,9 @@ class NoveumPipecatTracer:
             capture_custom_spans: Register an OTEL ``SpanProcessor``
                 in ``observe_pipeline`` that folds customer plain-OTEL spans
                 into the active Noveum conversation trace, nested under the
-                active turn.  Requires the ``pipecat-otel`` extra.
+                active turn.  Default ``True``.  If the OTEL dependencies are
+                unavailable, registration fails gracefully (logged warning) and
+                tracing continues without custom-span capture.
             auto_enable_metrics: Automatically set
                 ``PipelineParams.enable_metrics=True`` and
                 ``enable_usage_metrics=True`` on the task in
@@ -182,19 +184,31 @@ class NoveumPipecatTracer:
                     pipeline = _Pipeline(inner)
 
         # --- register OTEL SpanProcessor for custom spans ---
-        if self._capture_custom_spans:
-            try:
-                from noveum_trace.integrations.pipecat.custom_spans import (
-                    register_custom_span_processor,
-                )
+        if self._capture_custom_spans and self._span_processor is None:
+            from noveum_trace.integrations.pipecat.custom_spans import (
+                OTEL_AVAILABLE,
+                register_custom_span_processor,
+            )
 
-                self._span_processor = register_custom_span_processor(self.observer)
-            except Exception:
-                logger.warning(
-                    "NoveumPipecatTracer: failed to register custom span processor — "
-                    "capture_custom_spans will be inactive for this session",
-                    exc_info=True,
+            if not OTEL_AVAILABLE:
+                # Expected on the plain noveum-trace[pipecat] install (no
+                # opentelemetry-sdk). Degrade quietly — no scary traceback on the
+                # default (now capture_custom_spans=True) configuration.
+                logger.debug(
+                    "capture_custom_spans: opentelemetry-sdk not installed; "
+                    "custom-span capture disabled for this session (install "
+                    "noveum-trace[pipecat-otel] to enable)."
                 )
+            else:
+                try:
+                    self._span_processor = register_custom_span_processor(self.observer)
+                except Exception:
+                    logger.warning(
+                        "NoveumPipecatTracer: failed to register custom span "
+                        "processor — capture_custom_spans will be inactive for "
+                        "this session",
+                        exc_info=True,
+                    )
 
         return pipeline
 

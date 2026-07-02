@@ -65,14 +65,14 @@ def test_constructor_forwards_extra_observer_kwargs() -> None:
 
 def test_constructor_defaults_match_spec() -> None:
     """Spec/plan defaults: audio + raw audio + metrics + session metadata ON,
-    custom spans OFF (opt-in OTEL extra)."""
+    custom spans ON (registration degrades gracefully if OTEL is unavailable)."""
     tracer = _tracer()
     obs = tracer.observer
     assert obs._record_audio is True
     assert obs._record_raw_input_audio is True
     assert obs._auto_enable_metrics is True
     assert obs._capture_session_metadata is True
-    assert tracer._capture_custom_spans is False
+    assert tracer._capture_custom_spans is True
 
 
 # --------------------------------------------------------------------------- #

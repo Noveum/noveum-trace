@@ -34,14 +34,15 @@ class _PipecatObserverState:
     _active_llm_span: Any
     _active_tts_span: Any
     _pending_function_calls: dict[str, dict[str, Any]]
-    _function_call_results: list[dict[str, Any]]
-    _pre_span_function_call_ids: set[str]
+    _function_call_owner: dict[str, Any]
+    _resolved_function_call_ids: set[str]
 
     _last_llm_span: Any
     _last_tts_span: Any
 
     _llm_text_buffer: list[str]
-    _tts_text_buffer: list[str]
+    _tts_text_buffer: list[tuple[str, bool]]
+    _tts_text_interim_buffer: list[tuple[str, bool]]
     _transcription_buffer: list[str]
 
     _pending_llm_context: dict[str, Any]

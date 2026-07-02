@@ -508,9 +508,11 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
 
         self._llm_text_buffer.clear()
         self._tts_text_buffer.clear()
+        self._tts_text_interim_buffer.clear()
         self._tts_audio_buffer.clear()
         self._pending_function_calls.clear()
-        self._function_call_results.clear()
+        self._function_call_owner.clear()
+        self._resolved_function_call_ids.clear()
 
     # ---------------------------------------------------------------------- #
     # Standalone turn-end timer                                              #

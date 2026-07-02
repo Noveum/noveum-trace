@@ -227,7 +227,7 @@ async def test_function_call_result_dict_carries_full_content() -> None:
     )
     await obs._handle_llm_response_end(types.SimpleNamespace())
 
-    assert span.attributes["llm.function_call_results"] == [
+    assert json.loads(span.attributes["llm.function_call_results"]) == [
         {
             "tool_call_id": "c1",
             "name": "get_weather",
@@ -236,8 +236,11 @@ async def test_function_call_result_dict_carries_full_content() -> None:
             "run_llm": True,
         }
     ]
-    # Call moved into results — it must NOT also appear in llm.function_calls.
-    assert "llm.function_calls" not in span.attributes
+    # Executed family (design §3): the call is recorded in llm.function_calls AND its
+    # result in llm.function_call_results — both present, both JSON-encoded strings.
+    assert json.loads(span.attributes["llm.function_calls"]) == [
+        {"tool_call_id": "c1", "name": "get_weather", "arguments": '{"city":"SF"}'}
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -264,7 +267,7 @@ async def test_duplicate_function_call_in_progress_deduped_by_tool_call_id() -> 
     await obs._handle_function_call_start(_data(f2))
     await obs._handle_llm_response_end(types.SimpleNamespace())
 
-    assert span.attributes["llm.function_calls"] == [
+    assert json.loads(span.attributes["llm.function_calls"]) == [
         {"tool_call_id": "d1", "name": "dup", "arguments": "{}"}
     ]
 
@@ -274,7 +277,8 @@ async def test_duplicate_function_call_in_progress_deduped_by_tool_call_id() -> 
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_pre_span_function_call_not_double_counted_on_span2() -> None:
-    # Guards: the _pre_span_function_call_ids exclusion (no double-count across spans).
+    # Guards: a call arriving between span 1 close and span 2 open lands on span 1
+    # (the requesting span) and is NOT re-listed on span 2.
     obs, _trace, _turn = _new_obs()
     source = types.SimpleNamespace(_settings=None)
     ff = _ff()
@@ -299,11 +303,187 @@ async def test_pre_span_function_call_not_double_counted_on_span2() -> None:
     await obs._handle_llm_response_end(types.SimpleNamespace())
 
     assert span1 is not span2
-    assert span1.attributes["llm.function_calls"] == [
+    assert json.loads(span1.attributes["llm.function_calls"]) == [
         {"tool_call_id": "late1", "name": "late", "arguments": "{}"}
     ]
-    # span2 must not re-list the pre-span call.
+    # span2 must not re-list the call.
     assert "llm.function_calls" not in span2.attributes
+
+
+# --------------------------------------------------------------------------- #
+# LLM-8b — result captured even when NO follow-up LLM response fires (B0)       #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_function_result_captured_without_followup_response() -> None:
+    # Regression for the dropped-results bug (B0): when a tool returns run_llm=False
+    # (or is a terminal tool), no second LLMFullResponseEndFrame fires. The result
+    # must still be captured on the requesting span, not dropped.
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    ff = _ff()
+
+    # Requesting LLM span opens and closes (the model asked for the tool).
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span1 = obs._active_llm_span
+    await obs._handle_llm_response_end(types.SimpleNamespace())
+
+    # Call + result arrive AFTER the response ended (the real pipecat ordering), and
+    # the result sets run_llm=False so NO second LLM response is generated.
+    await obs._handle_function_call_start(
+        _data(
+            ff.FunctionCallInProgressFrame(
+                function_name="end_call", tool_call_id="e1", arguments="{}"
+            )
+        )
+    )
+    await obs._handle_function_call_result(
+        _data(
+            ff.FunctionCallResultFrame(
+                function_name="end_call",
+                tool_call_id="e1",
+                arguments="{}",
+                result="bye",
+                run_llm=False,
+            )
+        )
+    )
+
+    # The result is captured on the requesting span (previously dropped).
+    assert json.loads(span1.attributes["llm.function_call_results"]) == [
+        {
+            "tool_call_id": "e1",
+            "name": "end_call",
+            "arguments": "{}",
+            "result": "bye",
+            "run_llm": False,
+        }
+    ]
+    assert json.loads(span1.attributes["llm.function_calls"]) == [
+        {"tool_call_id": "e1", "name": "end_call", "arguments": "{}"}
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# LLM-8c — result NOT dropped when InProgress arrives BEFORE ResponseEnd (#5)   #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_function_result_captured_inprogress_before_response_end() -> None:
+    # Some LLM services emit FunctionCallInProgress *before* LLMFullResponseEnd.
+    # The response-end must not wipe pending state such that the later result frame
+    # is dropped (the residual ordering the earlier fix didn't cover).
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    ff = _ff()
+
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span1 = obs._active_llm_span
+    # in-progress arrives DURING the response (before end)
+    await obs._handle_function_call_start(
+        _data(
+            ff.FunctionCallInProgressFrame(
+                function_name="get_weather", tool_call_id="w1", arguments="{}"
+            )
+        )
+    )
+    await obs._handle_llm_response_end(types.SimpleNamespace())  # used to clear pending
+    await obs._handle_function_call_result(
+        _data(
+            ff.FunctionCallResultFrame(
+                function_name="get_weather",
+                tool_call_id="w1",
+                arguments="{}",
+                result="sunny",
+            )
+        )
+    )
+
+    results = json.loads(span1.attributes["llm.function_call_results"])
+    assert [r["tool_call_id"] for r in results] == ["w1"]
+    assert results[0]["result"] == "sunny"
+
+
+# --------------------------------------------------------------------------- #
+# LLM-8d — parallel-tool straggler result attaches to the requesting span (#6)  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_parallel_tool_result_attributed_to_requesting_span() -> None:
+    # A slow parallel tool whose result arrives AFTER the follow-up LLM span opened
+    # must still land on the span that REQUESTED it (span1), not span2.
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    ff = _ff()
+
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span1 = obs._active_llm_span
+    for name, tcid in (("f", "p1"), ("g", "p2")):
+        await obs._handle_function_call_start(
+            _data(
+                ff.FunctionCallInProgressFrame(
+                    function_name=name, tool_call_id=tcid, arguments="{}"
+                )
+            )
+        )
+    await obs._handle_llm_response_end(types.SimpleNamespace())
+    # fast tool p1 returns -> a follow-up LLM span (span2) opens
+    await obs._handle_function_call_result(
+        _data(
+            ff.FunctionCallResultFrame(
+                function_name="f", tool_call_id="p1", arguments="{}", result="A"
+            )
+        )
+    )
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span2 = obs._active_llm_span
+    # slow tool p2 returns AFTER span2 opened
+    await obs._handle_function_call_result(
+        _data(
+            ff.FunctionCallResultFrame(
+                function_name="g", tool_call_id="p2", arguments="{}", result="B"
+            )
+        )
+    )
+
+    assert span1 is not span2
+    ids = sorted(
+        r["tool_call_id"]
+        for r in json.loads(span1.attributes["llm.function_call_results"])
+    )
+    assert ids == ["p1", "p2"]  # both on the requesting span
+    assert (
+        "llm.function_call_results" not in span2.attributes
+    )  # nothing leaked to span2
+
+
+# --------------------------------------------------------------------------- #
+# LLM-8e — double-broadcast FunctionCallCancelFrame is deduped (#3)             #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_function_call_cancel_deduped() -> None:
+    # Pipecat broadcasts the cancel frame twice (distinct ids, same tool_call_id).
+    # Exactly ONE cancelled result must be recorded, and it must carry tool_call_id
+    # (not a malformed bare {cancelled: True}).
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    ff = _ff()
+
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span1 = obs._active_llm_span
+    await obs._handle_function_call_start(
+        _data(
+            ff.FunctionCallInProgressFrame(
+                function_name="f", tool_call_id="c1", arguments="{}"
+            )
+        )
+    )
+    await obs._handle_llm_response_end(types.SimpleNamespace())
+    cancel = ff.FunctionCallCancelFrame(function_name="f", tool_call_id="c1")
+    await obs._handle_function_call_cancel(_data(cancel))
+    await obs._handle_function_call_cancel(_data(cancel))  # duplicate broadcast
+
+    results = json.loads(span1.attributes["llm.function_call_results"])
+    cancelled = [r for r in results if r.get("cancelled")]
+    assert len(cancelled) == 1
+    assert cancelled[0]["tool_call_id"] == "c1"
 
 
 # --------------------------------------------------------------------------- #
@@ -339,7 +519,9 @@ async def test_metrics_token_usage_and_cost_pinned() -> None:
     assert span.attributes["llm.cost.currency"] == "USD"
     assert obs._metrics_accumulator["total_input_tokens"] == 1000
     assert obs._metrics_accumulator["total_output_tokens"] == 1000
-    assert obs._metrics_accumulator["total_cost"] == pytest.approx(0.003)
+    assert obs._metrics_accumulator["total_cost"] == pytest.approx(
+        expected["total_cost"]
+    )
 
 
 # --------------------------------------------------------------------------- #
