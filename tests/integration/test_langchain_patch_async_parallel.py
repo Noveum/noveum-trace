@@ -292,13 +292,17 @@ class TestParallelWorkflowTraceGrouping:
         created_traces = []
         errors = []
 
+        def make_trace_for_call(operation_name, *args, **kwargs):
+            # Derive the trace deterministically from the call args instead of
+            # relying on a shared mock return_value, which races across threads.
+            mock_trace = Mock()
+            mock_trace.trace_id = f"trace_{operation_name}"
+            return mock_trace
+
+        handler._client.start_trace.side_effect = make_trace_for_call
+
         def create_root_operation(run_id):
             try:
-                # Mock trace creation
-                mock_trace = Mock()
-                mock_trace.trace_id = f"trace_{run_id}"
-                handler._client.start_trace.return_value = mock_trace
-
                 with (
                     patch(
                         "noveum_trace.core.context.get_current_trace", return_value=None
