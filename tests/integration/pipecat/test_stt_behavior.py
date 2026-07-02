@@ -221,6 +221,68 @@ async def test_stt4_final_transcript_pins_all_real_values(ff, _direction) -> Non
 
 
 # --------------------------------------------------------------------------- #
+# STT-§4/D5 — per-word array + request_id (single JSON) + stt.provider          #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_stt_captures_words_request_id_and_provider(ff, _direction) -> None:
+    from noveum_trace.core.trace import Trace
+
+    trace = Trace(name="pipecat.conversation")
+    turn = trace.create_span(name="pipecat.turn", attributes={"turn.number": 1})
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+    obs._vad_present = True
+
+    await obs._handle_vad_stt_start(
+        _data(
+            ff.VADUserStartedSpeakingFrame(), source=None, direction=_direction.UPSTREAM
+        )
+    )
+
+    # A Deepgram-shaped result: per-word timing + diarization speaker + request id.
+    w1 = types.SimpleNamespace(
+        word="hello",
+        start=0.0,
+        end=0.3,
+        confidence=0.95,
+        punctuated_word="Hello",
+        speaker=0,
+    )
+    w2 = types.SimpleNamespace(
+        word="there",
+        start=0.3,
+        end=0.6,
+        confidence=0.9,
+        punctuated_word="there.",
+        speaker=1,
+    )
+    result = types.SimpleNamespace(
+        channel=types.SimpleNamespace(
+            alternatives=[types.SimpleNamespace(words=[w1, w2])]
+        ),
+        metadata=types.SimpleNamespace(request_id="dg-req-9"),
+    )
+
+    # A source whose class name resolves the provider (D5).
+    class DeepgramSTTService:
+        _settings = types.SimpleNamespace(model="nova-3-general")
+
+    final = ff.TranscriptionFrame(
+        text="hello there", user_id="u", timestamp="ts", result=result
+    )
+    await obs._handle_transcription(_data(final, source=DeepgramSTTService()))
+
+    span = _stt_spans(trace)[0]
+    assert span.attributes["stt.provider"] == "deepgram"
+    assert span.attributes["stt.request_id"] == "dg-req-9"
+    words = json.loads(span.attributes["stt.words"])
+    assert [w["word"] for w in words] == ["hello", "there"]
+    assert words[1]["speaker"] == 1  # diarization label preserved
+    assert "stt.words_truncated" not in span.attributes
+
+
+# --------------------------------------------------------------------------- #
 # STT-5 — interim emits a stt.interim_transcription SpanEvent + once-only       #
 #         first_text_latency_ms                                                #
 # --------------------------------------------------------------------------- #

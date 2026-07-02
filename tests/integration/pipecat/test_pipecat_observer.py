@@ -161,8 +161,10 @@ async def test_handle_start_frame_ensures_trace_and_attrs(pipecat_frames) -> Non
     obs._trace = mock_trace
 
     sf = pipecat_frames.StartFrame()
-    sf.allow_interruptions = True
-    sf.sample_rate = 16000
+    # B2: the integration reads the real 1.x fields. Inject known values on those.
+    sf.audio_in_sample_rate = 16000
+    sf.audio_out_sample_rate = 24000
+    sf.enable_metrics = True
 
     data = MagicMock()
     data.frame = sf
@@ -172,8 +174,11 @@ async def test_handle_start_frame_ensures_trace_and_attrs(pipecat_frames) -> Non
 
     mock_trace.set_attributes.assert_called()
     call_kw = mock_trace.set_attributes.call_args[0][0]
-    assert call_kw.get("pipeline.allow_interruptions") is True
-    assert call_kw.get("pipeline.sample_rate") == 16000
+    assert call_kw.get("pipeline.audio_in_sample_rate") == 16000
+    assert call_kw.get("pipeline.audio_out_sample_rate") == 24000
+    assert call_kw.get("pipeline.enable_metrics") is True
+    # The removed pre-1.x names must not be captured.
+    assert "pipeline.allow_interruptions" not in call_kw
 
 
 @pytest.mark.asyncio

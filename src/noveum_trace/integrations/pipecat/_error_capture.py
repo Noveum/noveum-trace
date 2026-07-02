@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from noveum_trace.core.span import SpanEvent
+from noveum_trace.core.span import SpanEvent, SpanStatus
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,10 @@ class _ErrorCaptureMixin(_PipecatObserverMixinBase):
 
         - Sets ``pipecat_span_status = "error"`` and ``pipecat_span_status_message``
           on every currently-active operation span (LLM, TTS) and the turn span.
+        - **Also sets the native ``SpanStatus.ERROR``** on those spans and the trace,
+          and bumps the trace ``error_count`` (D1). Without this the native
+          ``status``/``error_count`` stay healthy on a Pipecat failure, so any
+          dashboard/ETL query filtering on native status silently misses it.
         - Appends a ``pipecat.error`` ``SpanEvent`` with ``error.message`` and
           ``error.type`` (frame class name) to the turn span.
         - Always annotates the root trace with the error — visible in the dashboard
@@ -60,12 +64,15 @@ class _ErrorCaptureMixin(_PipecatObserverMixinBase):
         for span in filter(None, [self._active_llm_span, self._active_tts_span]):
             span.attributes["pipecat_span_status"] = "error"
             span.attributes["pipecat_span_status_message"] = error_msg
+            # D1: native status so native "status = error" filters see the failure.
+            span.set_status(SpanStatus.ERROR, error_msg)
 
         if self._current_turn_span:
             self._current_turn_span.attributes["pipecat_span_status"] = "error"
             self._current_turn_span.attributes["pipecat_span_status_message"] = (
                 error_msg
             )
+            self._current_turn_span.set_status(SpanStatus.ERROR, error_msg)
             try:
                 self._current_turn_span.events.append(
                     SpanEvent(
@@ -83,6 +90,13 @@ class _ErrorCaptureMixin(_PipecatObserverMixinBase):
         if self._trace:
             self._trace.attributes["pipecat_span_status"] = "error"
             self._trace.attributes["pipecat_span_status_message"] = error_msg
+            # D1: native trace status + error_count so native error filters work.
+            # Pipecat emits several ErrorFrames per provider failure; dedupe by
+            # message so error_count reflects failures, not frames.
+            self._trace.set_status(SpanStatus.ERROR, error_msg)
+            if error_msg not in self._native_error_messages:
+                self._native_error_messages.add(error_msg)
+                self._trace.error_count += 1
             try:
                 self._trace.events.append(
                     SpanEvent(

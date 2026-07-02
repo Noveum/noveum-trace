@@ -144,11 +144,14 @@ async def test_vc2_start_frame_captures_pipeline_allow_interruptions_old() -> No
     _start_frame_has_allow_interruptions(),
     reason="1.x-only: StartFrame still carries allow_interruptions on 0.0.x",
 )
-async def test_vc2_start_frame_captures_no_pipeline_attrs_new() -> None:
-    # Guards: the belief that pipeline.* is populated on 1.x. Real 1.3.0 StartFrame
-    # exposes audio_in_sample_rate/audio_out_sample_rate, NOT the probed
-    # allow_interruptions / sample_rate / audio_sample_rate, so NO pipeline.* key
-    # is written; the trace still exists. (Pairs with OBS-1.)
+async def test_vc2_start_frame_captures_pipeline_attrs_new() -> None:
+    # B2: real 1.3.0 StartFrame exposes audio_in_sample_rate / audio_out_sample_rate
+    # (+ enable_* flags), which the integration now maps to pipeline.*. The removed
+    # pre-1.x names (allow_interruptions / sample_rate / audio_sample_rate) must not
+    # appear. (Pairs with OBS-1.) On the 0.0.x floor this test is skipped — that leg
+    # (allow_interruptions present) is not the fixed 1.x path.
+    if hasattr(ff.StartFrame(), "allow_interruptions"):
+        pytest.skip("0.0.x StartFrame path — 1.x-only assertion.")
     obs = NoveumTraceObserver(record_audio=False)
     trace = Trace(name="pipecat.conversation")
     obs._trace = trace
@@ -156,8 +159,11 @@ async def test_vc2_start_frame_captures_no_pipeline_attrs_new() -> None:
     data = types.SimpleNamespace(frame=ff.StartFrame(), source=None)
     await obs._handle_start_frame(data)
 
-    pipeline_keys = [k for k in trace.attributes if k.startswith("pipeline.")]
-    assert pipeline_keys == []
+    pipeline_keys = {k for k in trace.attributes if k.startswith("pipeline.")}
+    assert "pipeline.audio_in_sample_rate" in pipeline_keys
+    assert "pipeline.audio_out_sample_rate" in pipeline_keys
+    assert "pipeline.allow_interruptions" not in pipeline_keys
+    assert "pipeline.sample_rate" not in pipeline_keys
     assert obs._trace is trace
 
 

@@ -195,6 +195,68 @@ async def test_llm_unclosed_thought_flushed_on_response_end() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# B8/B9 — Gemini thought signatures via LLMMessagesAppendFrame                  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_gemini_thought_signature_captured_and_not_leaked() -> None:
+    """B8: a thought signature delivered out-of-band (LLMMessagesAppendFrame with a
+    ``{"type":"thought_signature",...}`` message, as Gemini emits) lands in
+    llm.thought_signatures even though LLMThoughtEndFrame is bare. B9: it never
+    leaks into the next span's llm.input."""
+    from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
+
+    obs, trace, turn = _new_obs()
+    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
+    obs._active_llm_span = span
+    ff = _ff()
+
+    # A bare thought block (Gemini: LLMThoughtEndFrame carries no signature)...
+    await obs._handle_llm_thought_start(types.SimpleNamespace())
+    await obs._handle_llm_thought_text(_data(ff.LLMThoughtTextFrame(text="reasoning")))
+    await obs._handle_llm_thought_end(_data(ff.LLMThoughtEndFrame(signature=None)))
+    # ...and the real signature arriving via a message-append frame, alongside a
+    # genuine user message that MUST still reach llm.input.
+    sig_msg = LLMSpecificMessage(
+        llm="google",
+        message={"type": "thought_signature", "signature": "SIG-abc", "bookmark": {}},
+    )
+    real_msg = {"role": "user", "content": "hello"}
+    await obs._handle_llm_messages_append(
+        _data(ff.LLMMessagesAppendFrame(messages=[sig_msg, real_msg]))
+    )
+    await obs._handle_llm_response_end(types.SimpleNamespace())
+
+    # B8: the real signature is captured (not the bare "").
+    assert span.attributes["llm.thought_signatures"] == ["SIG-abc"]
+    assert span.attributes["llm.thoughts"] == ["reasoning"]
+
+    # B9: the signature blob is NOT in the stashed context; the real message is.
+    stashed = obs._pending_llm_context.get("messages") or "[]"
+    assert "thought_signature" not in stashed
+    assert "SIG-abc" not in stashed
+    assert "hello" in stashed
+
+
+@pytest.mark.asyncio
+async def test_thought_signature_only_append_is_fully_dropped_from_input() -> None:
+    """B9: an append frame carrying ONLY a thought_signature message adds nothing to
+    the pending context (no empty/garbage stash)."""
+    from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
+
+    obs, trace, turn = _new_obs()
+    ff = _ff()
+    sig_msg = LLMSpecificMessage(
+        llm="google",
+        message={"type": "thought_signature", "signature": "S1", "bookmark": {}},
+    )
+    await obs._handle_llm_messages_append(
+        _data(ff.LLMMessagesAppendFrame(messages=[sig_msg]))
+    )
+    assert "messages" not in obs._pending_llm_context
+    assert obs._pending_thought_signatures == ["S1"]
+
+
+# --------------------------------------------------------------------------- #
 # LLM-6 — function-call result dict carries full content                       #
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio

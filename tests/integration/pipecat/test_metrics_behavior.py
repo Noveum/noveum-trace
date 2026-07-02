@@ -109,7 +109,11 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     item = LLMUsageMetricsData(processor="llm", model="gpt-4o-mini", value=usage)
     await obs._handle_metrics(_metrics_data(item))
 
-    expected = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=20)
+    # D9: reasoning tokens (3) are billed at the output rate and are NOT part of
+    # completion_tokens, so cost is priced on completion+reasoning = 23. Token
+    # attributes stay faithful (output_tokens == completion == 20).
+    expected = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=23)
+    expected_reasoning = estimate_cost("gpt-4o-mini", input_tokens=0, output_tokens=3)
 
     assert llm.attributes["llm.input_tokens"] == 10
     assert llm.attributes["llm.output_tokens"] == 20
@@ -120,6 +124,9 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     assert llm.attributes["llm.cost.input"] == pytest.approx(expected["input_cost"])
     assert llm.attributes["llm.cost.output"] == pytest.approx(expected["output_cost"])
     assert llm.attributes["llm.cost.total"] == pytest.approx(expected["total_cost"])
+    assert llm.attributes["llm.cost.reasoning"] == pytest.approx(
+        expected_reasoning["output_cost"]
+    )
     assert llm.attributes["llm.cost.currency"] == "USD"
 
     # Conversation-level accumulator increments by exactly these values.

@@ -187,6 +187,11 @@ class NoveumTraceObserver(
         self._capture_system_logs = capture_system_logs
         self._capture_session_metadata = capture_session_metadata
 
+        # Distinct error messages already reflected in the native trace
+        # ``error_count`` (D1) — dedupes the multiple ErrorFrames Pipecat emits for
+        # a single provider failure so ``error_count`` counts failures, not frames.
+        self._native_error_messages: set[str] = set()
+
         # ------------------------------------------------------------------ #
         # Conversation-level state                                            #
         # ------------------------------------------------------------------ #
@@ -237,6 +242,7 @@ class NoveumTraceObserver(
         self._llm_thought_buffer: list[str] = []
         self._llm_thoughts_list: list[str] = []
         self._llm_thought_signatures_list: list[str] = []
+        self._pending_thought_signatures: list[str] = []
 
         # Audio buffers (populated only when record_audio=True)
         self._stt_audio_buffer: list[Any] = []
@@ -940,7 +946,18 @@ class NoveumTraceObserver(
         if self._trace:
             frame = data.frame
             attrs: dict[str, Any] = {}
-            for attr in ("allow_interruptions", "sample_rate", "audio_sample_rate"):
+            # B2: pipecat 1.x StartFrame fields. The pre-1.x names
+            # (allow_interruptions / sample_rate / audio_sample_rate) no longer
+            # exist, so every read used to return None and pipeline.* was always
+            # empty. These are the real 1.x fields.
+            for attr in (
+                "audio_in_sample_rate",
+                "audio_out_sample_rate",
+                "enable_metrics",
+                "enable_usage_metrics",
+                "enable_tracing",
+                "report_only_initial_ttfb",
+            ):
                 val = getattr(frame, attr, None)
                 if val is not None:
                     attrs[f"pipeline.{attr}"] = val
@@ -1050,12 +1067,19 @@ class NoveumTraceObserver(
         )
         if model:
             llm_target.attributes["llm.model"] = model
-            cost = calculate_llm_cost(model, prompt, completion)
+            # D9: price reasoning/thinking tokens at the output rate (they are not
+            # part of completion_tokens). Mirrors _MetricsHandlerMixin._handle_metrics.
+            reasoning = int(getattr(tokens_obj, "reasoning_tokens", 0) or 0)
+            cost = calculate_llm_cost(model, prompt, completion + reasoning)
             if cost:
                 llm_target.attributes["llm.cost.input"] = cost["input"]
                 llm_target.attributes["llm.cost.output"] = cost["output"]
                 llm_target.attributes["llm.cost.total"] = cost["total"]
                 llm_target.attributes["llm.cost.currency"] = cost["currency"]
+                if reasoning:
+                    rcost = calculate_llm_cost(model, 0, reasoning)
+                    if rcost:
+                        llm_target.attributes["llm.cost.reasoning"] = rcost["output"]
                 self._metrics_accumulator["total_cost"] = (
                     self._metrics_accumulator["total_cost"] + cost["total"]
                 )
@@ -1226,6 +1250,7 @@ class NoveumTraceObserver(
         self._llm_thought_buffer.clear()
         self._llm_thoughts_list.clear()
         self._llm_thought_signatures_list.clear()
+        self._pending_thought_signatures.clear()
 
         # Close any in-flight STT span
         if self._active_stt_span and not self._active_stt_span.is_finished():
@@ -1243,6 +1268,10 @@ class NoveumTraceObserver(
 
         for span in filter(None, [self._active_llm_span, self._active_tts_span]):
             if not span.is_finished():
+                # D8: on an abnormal close there is no TTSStoppedFrame, so flush any
+                # buffered TTS text here before finishing (otherwise it is lost).
+                if span is self._active_tts_span:
+                    self._flush_tts_text(span)
                 if span.attributes.get("pipecat_span_status") != "error":
                     span.attributes["pipecat_span_status"] = (
                         "cancelled" if cancelled else "ok"
@@ -1342,6 +1371,7 @@ class NoveumTraceObserver(
         }
         self._transcription_buffer = []
         self._llm_text_buffer.clear()
+        self._native_error_messages.clear()
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()

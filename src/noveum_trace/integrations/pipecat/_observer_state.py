@@ -50,6 +50,9 @@ class _PipecatObserverState:
     _llm_thought_buffer: list[str]
     _llm_thoughts_list: list[str]
     _llm_thought_signatures_list: list[str]
+    # Thought signatures delivered out-of-band via LLMMessagesAppendFrame (Gemini),
+    # collected during a response and flushed to llm.thought_signatures at its end (B8).
+    _pending_thought_signatures: list[str]
 
     _stt_audio_buffer: list[Any]
     _stt_raw_audio_buffer: list[Any]
@@ -76,6 +79,9 @@ class _PipecatObserverState:
     _capture_errors: bool
     _capture_system_logs: bool
     _capture_session_metadata: bool
+
+    # Distinct error messages already counted in the native trace error_count (D1)
+    _native_error_messages: set[str]
 
     # Transport metadata buffer
     _transport: Any

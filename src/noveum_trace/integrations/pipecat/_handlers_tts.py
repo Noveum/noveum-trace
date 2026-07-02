@@ -18,6 +18,7 @@ from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMi
 from noveum_trace.integrations.pipecat.pipecat_constants import SPAN_TTS
 from noveum_trace.integrations.pipecat.pipecat_utils import (
     calculate_audio_duration_ms,
+    derive_provider,
     extract_service_settings,
     upload_audio_frames,
 )
@@ -99,6 +100,13 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
                 attributes["tts.voice"] = settings["voice"]
             if settings.get("model"):
                 attributes["tts.model"] = settings["model"]
+            # D6: extract_service_settings already resolves language; the STT
+            # handler copies it but this one used to drop it.
+            if settings.get("language"):
+                attributes["tts.language"] = settings["language"]
+            provider = derive_provider(source, settings.get("model"))
+            if provider:
+                attributes["tts.provider"] = provider
 
         self._active_tts_span = self._create_child_span(
             SPAN_TTS,
@@ -152,6 +160,29 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
 
         self._tts_audio_buffer.append(_data.frame)
 
+    def _flush_tts_text(self, span: Any) -> None:
+        """Write buffered TTS text onto ``span`` and clear the buffers.
+
+        Shared by ``_handle_tts_stopped`` and the finalizer force-close (D8) so
+        partial text survives an abnormal close (error / hung provider) where no
+        ``TTSStoppedFrame`` ever arrives. Each attribute reflects ONLY its own frame
+        type (sentence-aggregated → ``tts.input_text``, word/token → interim), each
+        spacing-reconstructed from ``includes_inter_frame_spaces``.
+        """
+        if span is None:
+            return
+        if self._capture_text:
+            if self._tts_text_buffer:
+                span.attributes["tts.input_text"] = _concatenate_tts_text(
+                    self._tts_text_buffer
+                )
+            if self._tts_text_interim_buffer:
+                span.attributes["tts.input_text_interim"] = _concatenate_tts_text(
+                    self._tts_text_interim_buffer
+                )
+        self._tts_text_buffer.clear()
+        self._tts_text_interim_buffer.clear()
+
     async def _handle_tts_stopped(self, data: Any) -> None:
         """
         ``TTSStoppedFrame``: finish the active ``pipecat.tts`` span.
@@ -183,20 +214,7 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
         audio_ms = calculate_audio_duration_ms(self._tts_audio_buffer)
 
         try:
-            if self._capture_text:
-                # Each attribute reflects ONLY its own frame type (no cross-fallback):
-                # sentence-aggregated -> tts.input_text, word/token -> interim.
-                # Each is spacing-reconstructed from includes_inter_frame_spaces.
-                if self._tts_text_buffer:
-                    span.attributes["tts.input_text"] = _concatenate_tts_text(
-                        self._tts_text_buffer
-                    )
-                if self._tts_text_interim_buffer:
-                    span.attributes["tts.input_text_interim"] = _concatenate_tts_text(
-                        self._tts_text_interim_buffer
-                    )
-            self._tts_text_buffer.clear()
-            self._tts_text_interim_buffer.clear()
+            self._flush_tts_text(span)
 
             if audio_ms and audio_ms > 0:
                 span.attributes["tts.audio_duration_ms"] = audio_ms

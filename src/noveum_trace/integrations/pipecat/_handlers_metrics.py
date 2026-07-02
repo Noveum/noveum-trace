@@ -128,12 +128,22 @@ class _MetricsHandlerMixin(_PipecatObserverMixinBase):
             )
             if model:
                 llm_target.attributes["llm.model"] = model
-                cost = calculate_llm_cost(model, prompt, completion)
+                # D9: reasoning/thinking tokens are billed at the output rate and are
+                # NOT part of completion_tokens (google-genai: total = prompt +
+                # candidates + tool_use + thoughts), so price them as extra output.
+                reasoning = metrics.get("reasoning_tokens", 0) or 0
+                cost = calculate_llm_cost(model, prompt, completion + reasoning)
                 if cost:
                     llm_target.attributes["llm.cost.input"] = cost["input"]
                     llm_target.attributes["llm.cost.output"] = cost["output"]
                     llm_target.attributes["llm.cost.total"] = cost["total"]
                     llm_target.attributes["llm.cost.currency"] = cost["currency"]
+                    if reasoning:
+                        rcost = calculate_llm_cost(model, 0, reasoning)
+                        if rcost:
+                            llm_target.attributes["llm.cost.reasoning"] = rcost[
+                                "output"
+                            ]
                     self._metrics_accumulator["total_cost"] = (
                         self._metrics_accumulator["total_cost"] + cost["total"]
                     )

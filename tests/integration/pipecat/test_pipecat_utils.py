@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,6 +180,140 @@ def test_extract_service_settings_system_prompt_fallback() -> None:
     proc = MagicMock()
     proc._settings = _Settings()
     assert extract_service_settings(proc)["system_instruction"] == "From prompt"
+
+
+def test_thinking_settings_provider_default_disabled_flash_25() -> None:
+    """D3: gemini-2.5-flash with no app ThinkingConfig → Pipecat disables thinking
+    (thinking_budget=0). We mirror that so reasoning_tokens=0 is interpretable."""
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class _Settings:
+        model = "gemini-2.5-flash"
+        thinking = None
+
+    proc = MagicMock()
+    proc._settings = _Settings()
+    out = extract_service_settings(proc)
+    assert out["thinking_budget"] == 0
+    assert out["thinking_enabled"] is False
+    assert out["thinking_config_source"] == "provider_default"
+
+
+def test_thinking_settings_provider_default_minimal_flash_3() -> None:
+    """D3: gemini-3*flash with no app config → Pipecat default thinking_level=minimal."""
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class _Settings:
+        model = "gemini-3-flash"
+        thinking = None
+
+    proc = MagicMock()
+    proc._settings = _Settings()
+    out = extract_service_settings(proc)
+    assert out["thinking_level"] == "minimal"
+    assert out["thinking_enabled"] is True
+    assert out["thinking_config_source"] == "provider_default"
+
+
+def test_thinking_settings_app_configured() -> None:
+    """D3: an explicit app ThinkingConfig is captured verbatim, source='app'."""
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class _Thinking:
+        thinking_budget = 2048
+        thinking_level = None
+        include_thoughts = True
+
+    class _Settings:
+        model = "gemini-2.5-pro"
+        thinking = _Thinking()
+
+    proc = MagicMock()
+    proc._settings = _Settings()
+    out = extract_service_settings(proc)
+    assert out["thinking_budget"] == 2048
+    assert out["include_thoughts"] is True
+    assert out["thinking_enabled"] is True
+    assert out["thinking_config_source"] == "app"
+
+
+def test_thinking_settings_absent_for_non_google() -> None:
+    """D3: services without a ``thinking`` attribute emit no thinking keys."""
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_service_settings
+
+    class _Settings:
+        model = "gpt-4o"
+
+    proc = MagicMock()
+    proc._settings = _Settings()
+    out = extract_service_settings(proc)
+    assert not any(k.startswith("thinking") for k in out)
+
+
+def test_extract_stt_result_data_words_and_request_id() -> None:
+    # §4: per-word timing/diarization array + request id from a Deepgram-shaped result.
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_stt_result_data
+
+    word = types.SimpleNamespace(
+        word="hi", start=0.0, end=0.2, confidence=0.9, punctuated_word="Hi", speaker=0
+    )
+    result = types.SimpleNamespace(
+        channel=types.SimpleNamespace(
+            alternatives=[types.SimpleNamespace(words=[word])]
+        ),
+        metadata=types.SimpleNamespace(request_id="req-1"),
+    )
+    out = extract_stt_result_data(result)
+    assert out["words"] == [
+        {
+            "word": "hi",
+            "start": 0.0,
+            "end": 0.2,
+            "confidence": 0.9,
+            "punctuated_word": "Hi",
+            "speaker": 0,
+        }
+    ]
+    assert out["request_id"] == "req-1"
+
+
+def test_extract_stt_result_data_dict_shaped_and_truncation() -> None:
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_stt_result_data
+
+    words = [{"word": f"w{i}", "start": float(i)} for i in range(5)]
+    result = {"channel": {"alternatives": [{"words": words}]}, "metadata": {}}
+    out = extract_stt_result_data(result, max_words=3)
+    assert len(out["words"]) == 3
+    assert out["words_truncated"] is True
+    assert "request_id" not in out
+
+
+def test_extract_stt_result_data_empty() -> None:
+    from noveum_trace.integrations.pipecat.pipecat_utils import extract_stt_result_data
+
+    assert extract_stt_result_data(None) == {}
+    assert extract_stt_result_data(object()) == {}
+
+
+def test_derive_provider_from_registry_and_class() -> None:
+    from noveum_trace.integrations.pipecat.pipecat_utils import derive_provider
+
+    class GoogleLLMService:
+        pass
+
+    class DeepgramSTTService:
+        pass
+
+    class ElevenLabsTTSService:
+        pass
+
+    # Model registry is authoritative when a known model is given.
+    assert derive_provider(GoogleLLMService(), "gemini-2.5-flash") == "google"
+    # Class-name fallback (role + Service suffix stripped, lowercased).
+    assert derive_provider(DeepgramSTTService()) == "deepgram"
+    assert derive_provider(ElevenLabsTTSService()) == "elevenlabs"
+    assert derive_provider(GoogleLLMService()) == "google"
+    assert derive_provider(None) is None
 
 
 def test_extract_llm_context_data_none() -> None:

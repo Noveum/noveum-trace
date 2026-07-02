@@ -54,8 +54,11 @@ async def test_end_current_turn_sets_duration_and_user_input() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_error_marks_spans() -> None:
+    from noveum_trace.core.span import SpanStatus
+
     obs = _obs()
     obs._trace.attributes = {}
+    obs._trace.error_count = 0
     llm = MagicMock()
     llm.attributes = {}
     tts = MagicMock()
@@ -72,9 +75,37 @@ async def test_handle_error_marks_spans() -> None:
     data = MagicMock(frame=err)
     await obs._handle_error(data)
 
+    # Custom attribute (unchanged behaviour)
     assert llm.attributes.get("pipecat_span_status") == "error"
     assert tts.attributes.get("pipecat_span_status") == "error"
     assert obs._trace.attributes.get("pipecat_span_status") == "error"
+
+    # D1: native SpanStatus.ERROR on the op/turn spans + the trace, and a
+    # non-zero native error_count so native error filters see the failure.
+    llm.set_status.assert_called_once_with(SpanStatus.ERROR, "boom")
+    tts.set_status.assert_called_once_with(SpanStatus.ERROR, "boom")
+    turn.set_status.assert_called_once_with(SpanStatus.ERROR, "boom")
+    obs._trace.set_status.assert_called_once_with(SpanStatus.ERROR, "boom")
+    assert obs._trace.error_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_error_dedupes_error_count_by_message() -> None:
+    """D1: repeated ErrorFrames for one failure (Pipecat emits several) must not
+    inflate error_count; distinct messages each count once."""
+    obs = _obs()
+    obs._trace.attributes = {}
+    obs._trace.error_count = 0
+    obs._current_turn_span = None
+
+    same = MagicMock(frame=MagicMock(error="boom"))
+    await obs._handle_error(same)
+    await obs._handle_error(same)
+    assert obs._trace.error_count == 1
+
+    other = MagicMock(frame=MagicMock(error="different"))
+    await obs._handle_error(other)
+    assert obs._trace.error_count == 2
 
 
 @pytest.mark.asyncio

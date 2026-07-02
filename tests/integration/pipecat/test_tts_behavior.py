@@ -36,12 +36,13 @@ def _make_obs(*, capture_text: bool = True, record_audio: bool = True):
     return NoveumTraceObserver(capture_text=capture_text, record_audio=record_audio)
 
 
-def _source(*, voice=None, model=None, has_settings=True):
-    """Fake TTS source processor exposing ``._settings.voice`` / ``.model``."""
+def _source(*, voice=None, model=None, language=None, has_settings=True):
+    """Fake TTS source processor exposing ``._settings.voice`` / ``.model`` /
+    ``.language``."""
     if not has_settings:
         return types.SimpleNamespace(_settings=None)
     return types.SimpleNamespace(
-        _settings=types.SimpleNamespace(voice=voice, model=model)
+        _settings=types.SimpleNamespace(voice=voice, model=model, language=language)
     )
 
 
@@ -74,6 +75,71 @@ async def test_tts_started_span_is_turn_child_with_voice_model(
     assert span.attributes["tts.model"] == "tts-1"
     assert obs._tts_source_processor is src
     assert obs._last_tts_span is None  # cleared on every new TTS start
+
+
+# --------------------------------------------------------------------------- #
+# D6 — tts.language is captured from source settings (was dropped)             #
+# --------------------------------------------------------------------------- #
+async def test_tts_started_captures_language(ff, real_trace_with_turn):
+    # Guards D6: extract_service_settings resolves language; _handle_tts_started
+    # now copies it (it previously copied only voice/model).
+    trace, turn = real_trace_with_turn
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+    src = _source(voice="nova", model="tts-1", language="en-US")
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=src)
+    )
+
+    assert obs._active_tts_span.attributes["tts.language"] == "en-US"
+
+
+# --------------------------------------------------------------------------- #
+# D5 — tts.provider derived from the source service class name                 #
+# --------------------------------------------------------------------------- #
+async def test_tts_started_captures_provider(ff, real_trace_with_turn):
+    trace, turn = real_trace_with_turn
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    class ElevenLabsTTSService:
+        _settings = types.SimpleNamespace(voice="rachel", model="eleven_turbo_v2")
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=ElevenLabsTTSService())
+    )
+
+    assert obs._active_tts_span.attributes["tts.provider"] == "elevenlabs"
+
+
+# --------------------------------------------------------------------------- #
+# D8 — buffered TTS text is flushed on the finalizer force-close path          #
+# --------------------------------------------------------------------------- #
+async def test_tts_text_flushed_on_finalizer_force_close(ff, real_trace_with_turn):
+    # Guards D8: an abnormal close (no TTSStoppedFrame) must still write the
+    # buffered TTS text — the finalizer force-close loop flushes it.
+    from unittest.mock import patch
+
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=_source(voice="v"))
+    )
+    tts_span = obs._active_tts_span
+    # Sentence-aggregated text buffered, but NO TTSStoppedFrame arrives.
+    obs._tts_text_buffer.extend([("Hello,", False), ("world.", False)])
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation(cancelled=True)
+
+    assert tts_span.attributes["tts.input_text"] == "Hello, world."
+    assert tts_span.is_finished()
 
 
 # --------------------------------------------------------------------------- #

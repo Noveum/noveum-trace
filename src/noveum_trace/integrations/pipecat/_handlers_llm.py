@@ -40,6 +40,7 @@ from noveum_trace.integrations.pipecat.pipecat_constants import (
     SPAN_LLM,
 )
 from noveum_trace.integrations.pipecat.pipecat_utils import (
+    derive_provider,
     extract_function_call_data,
     extract_llm_context_data,
     extract_service_settings,
@@ -78,6 +79,23 @@ def _append_json_list_attr(span: Any, key: str, item: Any) -> None:
     span.attributes[key] = json.dumps(current, default=str)
 
 
+def _thought_signature_of(message: Any) -> Any:
+    """Return the signature string if ``message`` is a Gemini thought-signature
+    append message, else ``None`` (B8/B9).
+
+    Gemini routes thought signatures through ``LLMMessagesAppendFrame`` as a
+    provider-specific message ``{"type": "thought_signature", "signature": ...}``
+    (wrapped in an ``LLMSpecificMessage`` whose ``.message`` holds that dict).
+    Returns ``""`` for a thought-signature message with an empty/missing signature
+    so the caller can still drop it from ``llm.input`` even when there is nothing
+    to capture; returns ``None`` for any other message.
+    """
+    msg = getattr(message, "message", message)
+    if isinstance(msg, dict) and msg.get("type") == "thought_signature":
+        return str(msg.get("signature") or "")
+    return None
+
+
 # Settings keys to copy from _settings → llm.* span attributes
 _LLM_SETTINGS_MAP: tuple[tuple[str, str], ...] = (
     ("model", "llm.model"),
@@ -90,6 +108,12 @@ _LLM_SETTINGS_MAP: tuple[tuple[str, str], ...] = (
     ("frequency_penalty", "llm.frequency_penalty"),
     ("presence_penalty", "llm.presence_penalty"),
     ("seed", "llm.seed"),
+    # Gemini thinking / reasoning config (D3)
+    ("thinking_budget", "llm.thinking_budget"),
+    ("thinking_level", "llm.thinking_level"),
+    ("include_thoughts", "llm.include_thoughts"),
+    ("thinking_enabled", "llm.thinking_enabled"),
+    ("thinking_config_source", "llm.thinking_config_source"),
 )
 
 
@@ -141,13 +165,33 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             self._merge_pending_llm({"messages": dumped})
 
     async def _handle_llm_messages_append(self, data: Any) -> None:
-        """``LLMMessagesAppendFrame``: append to stashed messages JSON."""
+        """``LLMMessagesAppendFrame``: append to stashed messages JSON.
+
+        B8/B9: Gemini delivers thought signatures through this frame as
+        ``{"type": "thought_signature", "signature": ...}`` messages. Those are
+        captured into ``_pending_thought_signatures`` (flushed to
+        ``llm.thought_signatures`` at response end) and kept OUT of the stashed
+        context — otherwise the opaque signature blob leaks into the next LLM
+        span's ``llm.input``.
+        """
         frame = data.frame
         new_msgs = getattr(frame, "messages", None)
         if not new_msgs:
             return
+
+        kept = []
+        for m in new_msgs:
+            sig = _thought_signature_of(m)
+            if sig is not None:
+                if sig:
+                    self._pending_thought_signatures.append(sig)
+                continue
+            kept.append(m)
+        if not kept:
+            return
+
         prev = self._pending_llm_context.get("messages")
-        merged = merge_appended_messages_json(prev, new_msgs)
+        merged = merge_appended_messages_json(prev, kept)
         if merged:
 
             self._pending_llm_context["messages"] = merged
@@ -253,6 +297,9 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 val = settings.get(settings_key)
                 if val is not None:
                     attributes[attr_key] = val
+            provider = derive_provider(source, settings.get("model"))
+            if provider:
+                attributes["llm.provider"] = provider
 
         # Flush stashed context data (Path A + Path B frames)
         pending = self._pending_llm_context
@@ -318,6 +365,7 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         if not span:
             self._llm_thoughts_list.clear()
             self._llm_thought_signatures_list.clear()
+            self._pending_thought_signatures.clear()
             self._llm_text_buffer.clear()
             return
         self._active_llm_span = None
@@ -331,14 +379,28 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             span.attributes["llm.output"] = "".join(self._llm_text_buffer)
         self._llm_text_buffer.clear()
 
-        # Write thought attribute lists
+        # Write thought attribute lists.
+        # B8: Gemini delivers thought signatures out-of-band via
+        # LLMMessagesAppendFrame (collected in _pending_thought_signatures), NOT on
+        # LLMThoughtEndFrame (which is bare, so _llm_thought_signatures_list holds
+        # ""). When such signatures exist, emit a flat arrival-order list of the real
+        # ones — no thought-block<->signature alignment is asserted (Gemini bookmarks
+        # reference response parts, not thought blocks, and a signature can appear
+        # with no thought block at all). Otherwise keep the per-block list aligned
+        # with llm.thoughts (Anthropic sets frame.signature per block).
+        if self._pending_thought_signatures:
+            signatures = [s for s in self._llm_thought_signatures_list if s]
+            signatures.extend(self._pending_thought_signatures)
+        else:
+            signatures = list(self._llm_thought_signatures_list)
         if self._llm_thoughts_list:
             span.attributes["llm.thoughts"] = list(self._llm_thoughts_list)
-            span.attributes["llm.thought_signatures"] = list(
-                self._llm_thought_signatures_list
-            )
+            span.attributes["llm.thought_signatures"] = signatures
+        elif any(signatures):
+            span.attributes["llm.thought_signatures"] = signatures
         self._llm_thoughts_list.clear()
         self._llm_thought_signatures_list.clear()
+        self._pending_thought_signatures.clear()
 
         # Function calls/results are recorded on their owning span in the
         # function-call handlers; the per-tool-call state (pending / owner /
