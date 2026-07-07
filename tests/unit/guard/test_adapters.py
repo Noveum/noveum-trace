@@ -201,6 +201,82 @@ class TestOpenAIAdapterParseResponse:
 
 
 # ---------------------------------------------------------------------------
+# OpenAIAdapter — embeddings (P2.1)
+# ---------------------------------------------------------------------------
+
+
+def _openai_embeddings_request(body: dict | None = None) -> httpx.Request:
+    payload = body or {
+        "model": "text-embedding-3-small",
+        "input": "hello world, this is a fairly long embeddings input",
+    }
+    return httpx.Request(
+        "POST",
+        "https://api.openai.com/v1/embeddings",
+        content=json.dumps(payload).encode(),
+        headers={"content-type": "application/json"},
+    )
+
+
+class TestOpenAIAdapterEmbeddings:
+    def test_parse_request_marks_kind_embeddings(self):
+        adapter = OpenAIAdapter()
+        parsed = adapter.parse_request(_openai_embeddings_request())
+        assert parsed.kind == "embeddings"
+
+    def test_parse_request_messages_empty(self):
+        adapter = OpenAIAdapter()
+        parsed = adapter.parse_request(_openai_embeddings_request())
+        assert parsed.messages == []
+
+    def test_parse_request_estimates_tokens_from_input_not_zero(self):
+        adapter = OpenAIAdapter()
+        parsed = adapter.parse_request(_openai_embeddings_request())
+        # A non-trivial "input" string must not collapse to a near-zero
+        # estimate the way chat-shaped parsing (empty messages) would.
+        assert parsed.estimated_input_tokens > 1
+
+    def test_parse_request_handles_list_input(self):
+        adapter = OpenAIAdapter()
+        req = _openai_embeddings_request(
+            {
+                "model": "text-embedding-3-small",
+                "input": ["first string", "second string here"],
+            }
+        )
+        parsed = adapter.parse_request(req)
+        assert parsed.kind == "embeddings"
+        assert parsed.estimated_input_tokens > 1
+
+    def test_parse_request_chat_body_unaffected(self):
+        """A normal chat body must still parse as kind="chat"."""
+        adapter = OpenAIAdapter()
+        parsed = adapter.parse_request(_openai_request())
+        assert parsed.kind == "chat"
+
+    def test_parse_response_output_tokens_zero(self):
+        adapter = OpenAIAdapter()
+        body = {
+            "object": "list",
+            "model": "text-embedding-3-small",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "usage": {"prompt_tokens": 12, "total_tokens": 12},
+        }
+        resp = httpx.Response(200, content=json.dumps(body).encode())
+        parsed = adapter.parse_response(_openai_embeddings_request(), resp)
+        assert parsed.output_tokens == 0
+        assert parsed.input_tokens == 12
+        assert parsed.text is None
+
+    def test_parse_response_chat_body_unaffected(self):
+        """A normal chat response must still extract completion_tokens."""
+        adapter = OpenAIAdapter()
+        resp = httpx.Response(200, content=_openai_response_body())
+        parsed = adapter.parse_response(_openai_request(), resp)
+        assert parsed.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
 # OpenAIAdapter — synthetic_block_response
 # ---------------------------------------------------------------------------
 
@@ -434,3 +510,35 @@ class TestAdapterRegistry:
         registry.register(adapter)
         req = httpx.Request("POST", "https://custom.example.com/v1/chat", content=b"{}")
         assert registry.for_request(req) is adapter
+
+    def test_provider_names_lists_registered_adapters(self):
+        registry = AdapterRegistry([OpenAIAdapter(), AnthropicAdapter()])
+        assert set(registry.provider_names()) == {"openai", "anthropic"}
+
+
+# ---------------------------------------------------------------------------
+# supported_providers() — coverage introspection (P2.2)
+# ---------------------------------------------------------------------------
+
+
+class TestSupportedProviders:
+    def test_returns_openai_and_anthropic(self):
+        import noveum_trace.guard as guard
+
+        providers = guard.supported_providers()
+        assert "openai" in providers
+        assert "anthropic" in providers
+
+    def test_includes_bedrock_via_interceptor(self):
+        """Bedrock is covered via instrument_bedrock(), not the httpx registry —
+        see supported_providers()'s docstring for the distinction."""
+        import noveum_trace.guard as guard
+
+        providers = guard.supported_providers()
+        assert "bedrock" in providers
+
+    def test_does_not_include_vertex(self):
+        import noveum_trace.guard as guard
+
+        providers = guard.supported_providers()
+        assert "vertex" not in providers

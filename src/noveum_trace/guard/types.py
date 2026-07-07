@@ -37,6 +37,10 @@ class ParsedRequest:
     max_tokens: Optional[int]
     estimated_input_tokens: int
     raw_body: bytes  # original serialized body for rewrite
+    # "chat" (default) | "embeddings" — embeddings requests have no output
+    # tokens and no chat "messages" shape; policies use this to avoid
+    # mis-costing them as chat completions.
+    kind: str = "chat"
 
 
 @dataclass

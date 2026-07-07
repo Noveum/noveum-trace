@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from noveum_trace.utils.exceptions import NoveumTraceError
 
-__all__ = ["NoveumGuardBlocked"]
+__all__ = ["NoveumGuardBlocked", "GuardBackendUnavailable"]
 
 
 class NoveumGuardBlocked(NoveumTraceError):
@@ -19,3 +19,12 @@ class NoveumGuardBlocked(NoveumTraceError):
         self.reason = reason
         self.decision = decision
         super().__init__(f"Blocked by {policy_name}: {reason}")
+
+
+class GuardBackendUnavailable(NoveumTraceError):
+    """Raised when the Guard control plane cannot be reached.
+
+    Distinct from "not configured" (no API key — legitimate stub/test mode):
+    this means an API key IS configured but the backend request failed
+    (network error, non-2xx status, or an unparsable response).
+    """

@@ -661,6 +661,146 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         supports_function_calling=True,
         training_cutoff="2024",
     ),
+    # -----------------------------------------------------------------------
+    # OpenAI Embeddings — no output tokens; verify pricing before relying on
+    # it for billing-critical enforcement, per this file's own pricing caveat.
+    # -----------------------------------------------------------------------
+    "text-embedding-3-small": ModelInfo(
+        provider="openai",
+        name="text-embedding-3-small",
+        context_window=8191,
+        max_output_tokens=0,
+        input_cost_per_1m=0.02,
+        output_cost_per_1m=0.0,
+    ),
+    "text-embedding-3-large": ModelInfo(
+        provider="openai",
+        name="text-embedding-3-large",
+        context_window=8191,
+        max_output_tokens=0,
+        input_cost_per_1m=0.13,
+        output_cost_per_1m=0.0,
+    ),
+    "text-embedding-ada-002": ModelInfo(
+        provider="openai",
+        name="text-embedding-ada-002",
+        context_window=8191,
+        max_output_tokens=0,
+        input_cost_per_1m=0.10,
+        output_cost_per_1m=0.0,
+    ),
+    # -----------------------------------------------------------------------
+    # AWS Bedrock — keyed by the Bedrock model ID as returned by
+    # normalize_model_name() (provider prefix like "anthropic."/"amazon."
+    # is kept since it isn't a slash-separated prefix the normaliser strips).
+    # Bedrock pricing can diverge from the vendor's direct API pricing for
+    # the same underlying model, hence separate provider="bedrock" entries
+    # rather than reusing the direct-API keys above. Verify latest pricing
+    # from AWS Bedrock docs before relying on this for billing-critical
+    # enforcement, per this file's own pricing caveat.
+    # -----------------------------------------------------------------------
+    "anthropic.claude-3-5-sonnet": ModelInfo(
+        provider="bedrock",
+        name="anthropic.claude-3-5-sonnet",
+        context_window=200000,
+        max_output_tokens=8192,
+        input_cost_per_1m=3.00,
+        output_cost_per_1m=15.00,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    "anthropic.claude-3-haiku": ModelInfo(
+        provider="bedrock",
+        name="anthropic.claude-3-haiku",
+        context_window=200000,
+        max_output_tokens=4096,
+        input_cost_per_1m=0.25,
+        output_cost_per_1m=1.25,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    "anthropic.claude-3-opus": ModelInfo(
+        provider="bedrock",
+        name="anthropic.claude-3-opus",
+        context_window=200000,
+        max_output_tokens=4096,
+        input_cost_per_1m=15.00,
+        output_cost_per_1m=75.00,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    "amazon.titan-text-express": ModelInfo(
+        provider="bedrock",
+        name="amazon.titan-text-express",
+        context_window=8192,
+        max_output_tokens=8192,
+        input_cost_per_1m=0.20,
+        output_cost_per_1m=0.60,
+    ),
+    "amazon.titan-text-lite": ModelInfo(
+        provider="bedrock",
+        name="amazon.titan-text-lite",
+        context_window=4096,
+        max_output_tokens=4096,
+        input_cost_per_1m=0.15,
+        output_cost_per_1m=0.20,
+    ),
+    "amazon.titan-embed-text": ModelInfo(
+        provider="bedrock",
+        name="amazon.titan-embed-text",
+        context_window=8192,
+        max_output_tokens=0,
+        input_cost_per_1m=0.02,
+        output_cost_per_1m=0.0,
+    ),
+    "meta.llama3-70b-instruct": ModelInfo(
+        provider="bedrock",
+        name="meta.llama3-70b-instruct",
+        context_window=8192,
+        max_output_tokens=2048,
+        input_cost_per_1m=2.65,
+        output_cost_per_1m=3.50,
+        supports_function_calling=True,
+    ),
+    "meta.llama3-8b-instruct": ModelInfo(
+        provider="bedrock",
+        name="meta.llama3-8b-instruct",
+        context_window=8192,
+        max_output_tokens=2048,
+        input_cost_per_1m=0.30,
+        output_cost_per_1m=0.60,
+        supports_function_calling=True,
+    ),
+    # Both the 2402 and 2407 Mistral Large snapshots ship on Bedrock and share
+    # the same pricing, so key both — normalize_model_name() keeps the 4-digit
+    # "-2402"/"-2407" (it only strips 8-digit dates), so one entry can't cover both.
+    "mistral.mistral-large-2402": ModelInfo(
+        provider="bedrock",
+        name="mistral.mistral-large-2402",
+        context_window=128000,
+        max_output_tokens=8192,
+        input_cost_per_1m=4.00,
+        output_cost_per_1m=12.00,
+        supports_function_calling=True,
+    ),
+    "mistral.mistral-large-2407": ModelInfo(
+        provider="bedrock",
+        name="mistral.mistral-large-2407",
+        context_window=128000,
+        max_output_tokens=8192,
+        input_cost_per_1m=4.00,
+        output_cost_per_1m=12.00,
+        supports_function_calling=True,
+    ),
+    "cohere.command-r-plus": ModelInfo(
+        provider="bedrock",
+        name="cohere.command-r-plus",
+        context_window=128000,
+        max_output_tokens=4096,
+        input_cost_per_1m=3.00,
+        output_cost_per_1m=15.00,
+        supports_function_calling=True,
+    ),
 }
 
 # ---------------------------------------------------------------------------

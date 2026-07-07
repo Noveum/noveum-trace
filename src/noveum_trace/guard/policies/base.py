@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from abc import ABC
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from noveum_trace.guard.decision import PolicyDecision
 from noveum_trace.guard.types import (
@@ -32,6 +32,8 @@ class AbstractPolicy(ABC):
     poll_interval: Optional[float] = (
         None  # seconds; None means poller skips this policy
     )
+    # True only if post() can block; transport must buffer streams to enforce it.
+    can_block_post: ClassVar[bool] = False
 
     def __init__(self) -> None:
         self.data_map: dict[str, Any] = {}  # private mutable state; guard with _lock

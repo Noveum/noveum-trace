@@ -94,6 +94,13 @@ class CostCapPolicy(AbstractPolicy):
             return self._organization_id or self._project_id or ""
 
     def _estimate_reserved_usd(self, parsed: ParsedRequest) -> float:
+        if parsed.kind == "embeddings":
+            # Embeddings never produce output tokens; guessing a chat-style
+            # max_output_tokens fallback here would over- or under-reserve
+            # depending on registry presence, for no reason.
+            return estimate_cost(parsed.model, parsed.estimated_input_tokens, 0)[
+                "total_cost"
+            ]
         info = get_model_info(parsed.model)
         max_out = parsed.max_tokens or (info.max_output_tokens if info else 4096)
         return estimate_cost(parsed.model, parsed.estimated_input_tokens, max_out)[

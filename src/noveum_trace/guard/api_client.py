@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import logging
 import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
-_log = logging.getLogger(__name__)
+from noveum_trace.guard.exceptions import GuardBackendUnavailable
 
 
 @dataclass
@@ -137,13 +136,15 @@ class GuardAPIClient:
         dict with at least a ``"type"`` key (e.g. ``"cost_cap"``) plus the policy's
         own parameters (e.g. ``max_usd``, ``window``).
 
-        Returns an empty list when:
-        - No API key is configured (stub / test mode).
-        - The backend is unreachable or returns a non-2xx status.
-        - The response cannot be parsed as JSON.
+        Returns an empty list only when no API key is configured (stub / test
+        mode — a legitimate, silent case).
 
-        The caller (``PolicyPoller``) is responsible for catching all exceptions;
-        this method only swallows expected "not configured" cases.
+        Raises:
+            GuardBackendUnavailable: an API key IS configured but the backend
+                request failed (network error, non-2xx status, or the response
+                could not be parsed as JSON). The caller (``PolicyPoller``) is
+                responsible for deciding how to react — this method does not
+                silently degrade to "no policies" for a real failure.
         """
         if not self.api_key:
             # Running in stub / in-memory mode — return locally stored configs
@@ -168,19 +169,17 @@ class GuardAPIClient:
                 data = resp.json()
                 policies: list[dict[str, Any]] = data.get("policies", [])
                 return policies
-            _log.debug(
-                "fetch_remote_policies: backend returned %s for project %r",
-                resp.status_code,
-                project_id,
+            raise GuardBackendUnavailable(
+                f"fetch_remote_policies: backend returned "
+                f"{resp.status_code} for project {project_id!r}"
             )
-            return []
+        except GuardBackendUnavailable:
+            raise
         except Exception as exc:  # network error, JSON decode error, etc.
-            _log.debug(
-                "fetch_remote_policies: skipped for project %r — %s",
-                project_id,
-                exc,
-            )
-            return []
+            raise GuardBackendUnavailable(
+                f"fetch_remote_policies: request failed for project "
+                f"{project_id!r} — {exc}"
+            ) from exc
 
     # Inspection (tests + debug)
 

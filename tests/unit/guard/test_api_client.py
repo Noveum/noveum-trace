@@ -3,9 +3,11 @@
 import threading
 import uuid
 
+import httpx
 import pytest
 
 from noveum_trace.guard.api_client import GuardAPIClient
+from noveum_trace.guard.exceptions import GuardBackendUnavailable
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -178,6 +180,82 @@ class TestReset:
 # ---------------------------------------------------------------------------
 # Thread safety — 100 concurrent reservations
 # ---------------------------------------------------------------------------
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status_code: int, json_data=None):
+        self.status_code = status_code
+        self._json_data = json_data or {}
+
+    def json(self):
+        return self._json_data
+
+
+class _FakeHTTPClient:
+    """Stand-in for httpx.Client, injected via monkeypatch."""
+
+    def __init__(self, *, response=None, raise_exc=None):
+        self._response = response
+        self._raise_exc = raise_exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def get(self, url, headers=None):
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._response
+
+
+# ---------------------------------------------------------------------------
+# fetch_remote_policies() — stub mode vs. real-backend failure handling
+# ---------------------------------------------------------------------------
+
+
+class TestFetchRemotePolicies:
+    def test_no_api_key_returns_empty_list(self):
+        """Stub mode (no api_key) with nothing stored — legitimate silent case."""
+        api = GuardAPIClient()
+        assert api.fetch_remote_policies("proj") == []
+
+    def test_no_api_key_returns_stored_config(self):
+        api = GuardAPIClient()
+        api.set_policy_config("proj", {"type": "cost_cap", "max_usd": 10.0})
+        result = api.fetch_remote_policies("proj")
+        assert result == [{"type": "cost_cap", "max_usd": 10.0}]
+
+    def test_real_backend_success_returns_policies(self, monkeypatch):
+        api = GuardAPIClient(api_key="secret", base_url="https://api.noveum.ai")
+        fake_response = _FakeHTTPResponse(
+            200, {"policies": [{"type": "cost_cap", "max_usd": 5.0}]}
+        )
+        monkeypatch.setattr(
+            httpx, "Client", lambda **kw: _FakeHTTPClient(response=fake_response)
+        )
+        result = api.fetch_remote_policies("proj")
+        assert result == [{"type": "cost_cap", "max_usd": 5.0}]
+
+    def test_real_backend_non_200_raises_backend_unavailable(self, monkeypatch):
+        api = GuardAPIClient(api_key="secret", base_url="https://api.noveum.ai")
+        fake_response = _FakeHTTPResponse(500)
+        monkeypatch.setattr(
+            httpx, "Client", lambda **kw: _FakeHTTPClient(response=fake_response)
+        )
+        with pytest.raises(GuardBackendUnavailable):
+            api.fetch_remote_policies("proj")
+
+    def test_real_backend_network_error_raises_backend_unavailable(self, monkeypatch):
+        api = GuardAPIClient(api_key="secret", base_url="https://api.noveum.ai")
+        monkeypatch.setattr(
+            httpx,
+            "Client",
+            lambda **kw: _FakeHTTPClient(raise_exc=httpx.ConnectError("boom")),
+        )
+        with pytest.raises(GuardBackendUnavailable):
+            api.fetch_remote_policies("proj")
 
 
 class TestConcurrency:

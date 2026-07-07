@@ -132,6 +132,7 @@ def init(
     service_version: Optional[str] = None,
     policies: Optional[list[Any]] = None,
     guard_enabled: bool = False,
+    guard_fail_open_on_backend_unavailable: bool = False,
     **kwargs: Any,
 ) -> None:
     """
@@ -147,6 +148,11 @@ def init(
         service_version: Service/application version string (e.g. "v1.0.0").
             Exported as ``service_version`` on each trace. Defaults to the
             NOVEUM_SERVICE_VERSION env var.
+        guard_fail_open_on_backend_unavailable: When the Guard control plane is
+            unreachable, block every guarded call (fail closed, default) or keep
+            enforcing the last-known policies (fail open, ``True``). Fail open
+            trades strict enforcement for availability so a transient
+            control-plane blip does not become a full LLM outage.
         **kwargs: Additional configuration options including:
                  - transport_config: Transport layer configuration
                  - tracing_config: Tracing behavior configuration
@@ -242,7 +248,12 @@ def init(
                     api_key=api_key or "",
                     base_url=endpoint or DEFAULT_ENDPOINT,
                 )
-                _engine = PolicyEngine(_api_client)
+                _engine = PolicyEngine(
+                    _api_client,
+                    fail_open_on_backend_unavailable=(
+                        guard_fail_open_on_backend_unavailable
+                    ),
+                )
                 # Use a unique sentinel when project is not provided so that
                 # different uninamed callers do not share the same spend scope.
                 _project_id = (

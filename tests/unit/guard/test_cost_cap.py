@@ -35,6 +35,7 @@ def _req(
     model: str = "gpt-4o-mini",
     max_tokens: int = 100,
     estimated_input_tokens: int = 50,
+    kind: str = "chat",
 ) -> ParsedRequest:
     return ParsedRequest(
         provider="openai",
@@ -44,6 +45,7 @@ def _req(
         max_tokens=max_tokens,
         estimated_input_tokens=estimated_input_tokens,
         raw_body=b"{}",
+        kind=kind,
     )
 
 
@@ -450,3 +452,60 @@ class TestMaxTokensFallback:
         decision = policy.pre(req, _ctx(), deps)
 
         assert not decision.is_blocking  # should not crash; just estimate with default
+
+
+# ---------------------------------------------------------------------------
+# Embeddings requests (P2.1) — reserved cost must reflect real input size
+# ---------------------------------------------------------------------------
+
+
+class TestEmbeddingsCostAccounting:
+    def test_large_embeddings_input_is_blocked_under_tight_cap(self):
+        """Before the fix, kind="chat" parsing of an embeddings-shaped request
+        (empty messages) would estimate near-zero cost regardless of actual
+        input size, silently admitting it under any cap. With kind="embeddings"
+        the reservation reflects the real (possibly large) input token count."""
+        api = GuardAPIClient()
+        policy = CostCapPolicy(
+            max_usd=0.000001,  # tiny cap
+            mode=EnforcementMode.strict,
+            project_id="proj",
+        )
+        deps = PolicyDeps(api=api)
+
+        req = _req(
+            model="text-embedding-3-small",
+            estimated_input_tokens=1_000_000,  # large embeddings input
+            kind="embeddings",
+        )
+        decision = policy.pre(req, _ctx(), deps)
+
+        assert decision.is_blocking
+
+    def test_embeddings_reservation_ignores_max_output_tokens_fallback(self):
+        """kind="embeddings" must not apply the chat max_output_tokens (or the
+        4096 fallback) — embeddings never produce output tokens."""
+        policy = CostCapPolicy(
+            max_usd=100.0, mode=EnforcementMode.strict, project_id="proj"
+        )
+        reserved = policy._estimate_reserved_usd(
+            _req(
+                model="text-embedding-3-small",
+                estimated_input_tokens=1000,
+                kind="embeddings",
+            )
+        )
+        # Input-only cost at $0.02/1M tokens for 1000 tokens.
+        assert reserved == pytest.approx(0.02 * 1000 / 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# can_block_post invariant (P1a) — CostCapPolicy never blocks post()
+# ---------------------------------------------------------------------------
+
+
+class TestCanBlockPostInvariant:
+    def test_cost_cap_cannot_block_post(self):
+        """CostCapPolicy.post() only reconciles/reports spend — it must never
+        be treated as capable of blocking a streaming response."""
+        assert CostCapPolicy.can_block_post is False

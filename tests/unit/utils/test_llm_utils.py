@@ -8,6 +8,8 @@ cost estimation, and model validation functionality.
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from noveum_trace.utils.llm_utils import (
     MODEL_ALIASES,
     MODEL_REGISTRY,
@@ -77,6 +79,70 @@ class TestModelRegistry:
         normalized = normalize_model_name("claude-3.5-sonnet-20241022")
         # Should normalize to the canonical form
         assert normalized in ["claude-3.5-sonnet", "claude-3.5-sonnet-20241022"]
+
+    def test_normalize_bedrock_model_ids(self):
+        """Bedrock IDs put the date in the middle (``...-YYYYMMDD-vN:M``).
+
+        Regression: the ``:N`` and ``-vN`` suffixes must be stripped before the
+        trailing-date regex, otherwise the date is left in and the name never
+        matches its registry key (silently falling back to default pricing).
+        """
+        assert (
+            normalize_model_name("anthropic.claude-3-5-sonnet-20240620-v1:0")
+            == "anthropic.claude-3-5-sonnet"
+        )
+        assert (
+            normalize_model_name("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            == "anthropic.claude-3-5-sonnet"
+        )
+        assert (
+            normalize_model_name("anthropic.claude-3-haiku-20240307-v1:0")
+            == "anthropic.claude-3-haiku"
+        )
+        assert (
+            normalize_model_name("anthropic.claude-3-opus-20240229-v1:0")
+            == "anthropic.claude-3-opus"
+        )
+        assert (
+            normalize_model_name("meta.llama3-70b-instruct-v1:0")
+            == "meta.llama3-70b-instruct"
+        )
+        assert (
+            normalize_model_name("amazon.titan-embed-text-v2:0")
+            == "amazon.titan-embed-text"
+        )
+
+    def test_estimate_cost_bedrock_claude_uses_registry_pricing(self):
+        """Regression (Finding 1): Bedrock Claude IDs must resolve to their
+        registry entry, not the generic default fallback.
+
+        With 1k input + 1k output tokens, claude-3-5-sonnet on Bedrock
+        ($3/$15 per 1M) costs $0.018; the default fallback would return a much
+        lower figure and let ~6x the intended spend through a cost cap.
+        """
+        info = get_model_info("anthropic.claude-3-5-sonnet-20240620-v1:0")
+        assert info is not None
+        assert info.provider == "bedrock"
+
+        cost = estimate_cost(
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            input_tokens=1000,
+            output_tokens=1000,
+        )
+        # 1000/1e6 * 3.00 + 1000/1e6 * 15.00 = 0.018
+        assert cost["total_cost"] == pytest.approx(0.018)
+
+    def test_estimate_cost_bedrock_mistral_large_both_snapshots(self):
+        """Both the 2402 and 2407 Mistral Large snapshots ship on Bedrock and
+        must resolve (the 4-digit snapshot is not stripped by normalization)."""
+        for model_id in (
+            "mistral.mistral-large-2402-v1:0",
+            "mistral.mistral-large-2407-v1:0",
+        ):
+            assert get_model_info(model_id) is not None, model_id
+            cost = estimate_cost(model_id, input_tokens=1000, output_tokens=1000)
+            # 1000/1e6 * 4.00 + 1000/1e6 * 12.00 = 0.016
+            assert cost["total_cost"] == pytest.approx(0.016), model_id
 
 
 class TestModelValidation:

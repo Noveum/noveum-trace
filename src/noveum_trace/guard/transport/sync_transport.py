@@ -78,10 +78,15 @@ class NoveumTransport(httpx.BaseTransport):
       4. engine.pre_call() → block decision or ran list.
          Block → return synthetic 403 (engine already rolled back).
       5. Forward to inner transport.
-      6. Streaming responses are wrapped in _SyncStreamReconciler, which buffers
-         every chunk and reconciles the reservation when the stream is exhausted
-         or closed. Actual token usage is parsed from SSE events; falls back to
-         release_all() if usage data is absent.
+      6. Streaming, no post-blocking policy attached: wrapped in
+         _SyncStreamReconciler, which buffers every chunk and reconciles the
+         reservation when the stream is exhausted or closed. Actual token
+         usage is parsed from SSE events; falls back to release_all() if
+         usage data is absent.
+      6b. Streaming, a post-blocking policy IS attached: the full response is
+         buffered before any bytes reach the caller (see
+         build_buffered_stream_response) so a post-phase block can actually
+         be enforced instead of only logged.
       7. Non-streaming: read + parse response → ParsedResponse.
       8. engine.post_call() → optional block.
          Block → return synthetic 403.
@@ -94,15 +99,31 @@ class NoveumTransport(httpx.BaseTransport):
         context: PolicyContext,
         inner: Optional[httpx.BaseTransport] = None,
         registry: Optional[AdapterRegistry] = None,
+        on_unmatched_request: str = "passthrough",
     ) -> None:
         self._engine = engine
         self._context = context
         self._inner = inner or httpx.HTTPTransport()
         self._registry = registry or default_registry()
+        self._on_unmatched_request = on_unmatched_request
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         adapter = self._registry.for_request(request)
         if adapter is None:
+            if self._on_unmatched_request == "block":
+                from noveum_trace.guard.transport.helper import (
+                    build_generic_block_response,
+                )
+
+                _log.error(
+                    "NovaGuard: no adapter found for request %s %s — blocking "
+                    "(on_unmatched_request='block')",
+                    request.method,
+                    request.url,
+                )
+                return build_generic_block_response(
+                    f"No NovaGuard adapter for {request.method} {request.url}"
+                )
             _log.error(
                 "NovaGuard: no adapter found for request %s %s — passing through unguarded",
                 request.method,
@@ -125,9 +146,27 @@ class NoveumTransport(httpx.BaseTransport):
             self._engine.release_all(ctx, ran)
             raise
 
-        # Wrap streaming responses so the reservation is reconciled when the
-        # caller finishes consuming the stream (instead of staying inflight forever).
         if parsed_req.stream:
+            if self._engine.has_post_blocking_policies():
+                # A policy that can block post() is attached: a block can't be
+                # enforced on bytes already flushed, so buffer the full
+                # response before releasing anything to the caller.
+                from noveum_trace.guard.transport.helper import (
+                    build_buffered_stream_response,
+                )
+
+                try:
+                    response.read()
+                    return build_buffered_stream_response(
+                        response, request, adapter, self._engine, ctx, ran, parsed_req
+                    )
+                except Exception:
+                    self._engine.release_all(ctx, ran)
+                    raise
+
+            # No post-blocking policy: true streaming, lazy reconcile on consume.
+            # Narrow response.stream's broad type; always SyncByteStream here.
+            assert isinstance(response.stream, httpx.SyncByteStream)
             reconciler = _SyncStreamReconciler(
                 response.stream, self._engine, ctx, ran, parsed_req
             )

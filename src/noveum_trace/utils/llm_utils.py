@@ -113,12 +113,18 @@ def normalize_model_name(model: str) -> str:
         if model.startswith(prefix):
             model = model[len(prefix) :]
 
+    # Remove Bedrock-style version suffix (e.g. ":0", ":1") first, then the
+    # "-vN" suffix, *before* the date regexes below. Bedrock IDs put the date
+    # in the middle (e.g. "anthropic.claude-3-5-sonnet-20240620-v1:0"), so the
+    # ":0" and "-v1" must be peeled off before the trailing-date regex can see
+    # and strip the "-20240620" — otherwise the date is left in and the name
+    # never matches the registry key.
+    model = re.sub(r":\d+$", "", model)
+    model = re.sub(r"-v\d+(\.\d+)*$", "", model)  # Remove version numbers
+
     # Handle date-based versions
     model = re.sub(r"-\d{8}$", "", model)  # Remove YYYYMMDD
     model = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)  # Remove YYYY-MM-DD
-
-    # Handle version numbers at the end
-    model = re.sub(r"-v\d+(\.\d+)*$", "", model)  # Remove version numbers
 
     return model
 
