@@ -77,6 +77,10 @@ class PolicyEngine:
                     )
             self._backend_unavailable.set()
         else:
+            if self._backend_unavailable.is_set():
+                _log.info(
+                    "NovaGuard control plane reachable again; policy sync recovered."
+                )
             self._backend_unavailable.clear()
 
     def is_backend_unavailable(self) -> bool:

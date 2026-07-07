@@ -136,8 +136,9 @@ class GuardAPIClient:
         dict with at least a ``"type"`` key (e.g. ``"cost_cap"``) plus the policy's
         own parameters (e.g. ``max_usd``, ``window``).
 
-        Returns an empty list only when no API key is configured (stub / test
-        mode — a legitimate, silent case).
+        Returns an empty list when no API key is configured (stub / test mode)
+        or when the backend responds successfully but the project has zero
+        configured policies — both legitimate, silent cases.
 
         Raises:
             GuardBackendUnavailable: an API key IS configured but the backend

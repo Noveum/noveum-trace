@@ -275,6 +275,24 @@ def _resolve(
     return resolved
 
 
+_ON_UNMATCHED_REQUEST_VALUES = ("passthrough", "block")
+
+
+def _validate_on_unmatched_request(value: str) -> None:
+    """Reject anything but "passthrough"/"block" before NoveumTransport sees it.
+
+    NoveumTransport/NoveumAsyncTransport only special-case "block" internally
+    and silently fall through to passthrough for any other string — so a typo
+    (e.g. "Block") would otherwise degrade to the opposite of what the caller
+    asked for without warning.
+    """
+    if value not in _ON_UNMATCHED_REQUEST_VALUES:
+        raise ValueError(
+            f"on_unmatched_request must be one of {_ON_UNMATCHED_REQUEST_VALUES}, "
+            f"got {value!r}"
+        )
+
+
 def http_client(
     engine: Optional[PolicyEngine] = None,
     context: Optional[PolicyContext] = None,
@@ -296,6 +314,7 @@ def http_client(
     synthetic 403 instead, for defense-in-depth deployments that want to
     guarantee nothing bypasses Guard coverage).
     """
+    _validate_on_unmatched_request(on_unmatched_request)
     resolved_engine, resolved_context = _resolve(engine, context)
     transport = NoveumTransport(
         engine=resolved_engine,
@@ -324,6 +343,7 @@ def async_http_client(
 
     See http_client() for on_unmatched_request.
     """
+    _validate_on_unmatched_request(on_unmatched_request)
     resolved_engine, resolved_context = _resolve(engine, context)
     transport = NoveumAsyncTransport(
         engine=resolved_engine,
