@@ -378,12 +378,10 @@ def run_a2a_remote_delegation_crew(agent_card_url: str) -> str:
     a2a_coordinator = Agent(
         role="E2E A2A Coordinator",
         goal="Delegate specialist work through the configured remote A2A connection.",
-        backstory=textwrap.dedent(
-            """\
+        backstory=textwrap.dedent("""\
             When the task requires A2A delegation, use your remote A2A agent
             (agent card). Return the remote agent's substantive reply.
-        """
-        ),
+        """),
         tools=[],
         llm=coordinator_llm,
         a2a=A2AClientConfig(
