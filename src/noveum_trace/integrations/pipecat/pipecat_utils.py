@@ -19,6 +19,7 @@ from noveum_trace.integrations.pipecat.pipecat_constants import (
     AUDIO_NUM_CHANNELS_DEFAULT,
     AUDIO_SAMPLE_RATE_DEFAULT,
     MAX_TEXT_BUFFER_LENGTH,
+    REASONING_DISJOINT_PROVIDERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -358,6 +359,54 @@ def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
     return out
 
 
+def reasoning_is_extra_output(
+    *,
+    processor: str = "",
+    model: str = "",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: Optional[int] = None,
+    reasoning_tokens: int = 0,
+) -> bool:
+    """
+    Whether ``reasoning_tokens`` must be *added* to ``completion_tokens`` to get
+    the billable output token count.
+
+    Providers disagree on this, and both conventions arrive through the same
+    ``LLMTokenUsage`` object:
+
+    - **OpenAI-compatible** (openai, xai, nvidia, perplexity, sambanova, …):
+      ``completion_tokens`` already includes ``reasoning_tokens`` — it is a
+      breakdown, not an addend (``completion_tokens_details.reasoning_tokens``).
+      Pricing ``completion + reasoning`` here bills reasoning twice.
+    - **Gemini** (``GoogleLLMService``, ``GeminiLiveLLMService``):
+      ``candidates_token_count`` / ``response_token_count`` *exclude*
+      ``thoughts_token_count``, so the two must be summed.
+
+    The processor class name is the primary signal (unambiguous, e.g.
+    ``GoogleLLMService#0``), with the model name as fallback.  For providers
+    matching neither, a ``prompt + completion + reasoning == total`` match
+    confirms the disjoint convention.  The mirrored ``prompt + completion ==
+    total`` check is deliberately *not* used to confirm the inclusive
+    convention: Pipecat's Gemini services fall back to ``total_tokens =
+    total_token_count or (prompt + completion)``, so a missing upstream total
+    makes a disjoint payload look inclusive.
+
+    Anthropic / AWS never populate ``reasoning_tokens``, so they short-circuit
+    to ``False`` on the first check.
+    """
+    if reasoning_tokens <= 0:
+        return False
+
+    hint = f"{processor} {model}".lower()
+    if any(p in hint for p in REASONING_DISJOINT_PROVIDERS):
+        return True
+
+    if total_tokens is None:
+        return False
+    return bool(total_tokens == prompt_tokens + completion_tokens + reasoning_tokens)
+
+
 def extract_metrics_data(frame: Any) -> dict[str, Any]:
     """
     Iterate frame.data, route by isinstance, and return a flat metrics dict.
@@ -418,6 +467,10 @@ def extract_metrics_data(frame: Any) -> dict[str, Any]:
                     model = getattr(item, "model", None)
                     if model:
                         result["llm_model"] = str(model)
+                    # Primary signal for reasoning_is_extra_output().
+                    processor = getattr(item, "processor", None)
+                    if processor:
+                        result["llm_processor"] = str(processor)
 
                 elif isinstance(item, ProcessingMetricsData):
                     val = getattr(item, "value", None)

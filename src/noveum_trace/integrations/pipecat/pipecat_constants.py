@@ -26,6 +26,23 @@ MAX_FRAME_DEDUP_HISTORY = 20_000
 MAX_STT_AUDIO_FRAMES = 3_000
 
 # ---------------------------------------------------------------------------
+# Token accounting
+# ---------------------------------------------------------------------------
+# Providers that report reasoning/thinking tokens *disjoint* from
+# ``completion_tokens``, so billable output = completion_tokens + reasoning_tokens.
+#
+# Gemini (both the batch ``GoogleLLMService`` and ``GeminiLiveLLMService``) reports
+# ``candidates_token_count`` / ``response_token_count`` exclusive of
+# ``thoughts_token_count``.  OpenAI-compatible providers instead report
+# ``reasoning_tokens`` as a breakdown *inside* ``completion_tokens``
+# (``completion_tokens_details.reasoning_tokens``), so pricing
+# ``completion + reasoning`` there would bill the reasoning tokens twice.
+#
+# Matched case-insensitively against the metrics processor name first, then the
+# model name.
+REASONING_DISJOINT_PROVIDERS = ("google", "gemini")
+
+# ---------------------------------------------------------------------------
 # Turn management defaults
 # ---------------------------------------------------------------------------
 DEFAULT_TURN_END_TIMEOUT_SECS = 2.5

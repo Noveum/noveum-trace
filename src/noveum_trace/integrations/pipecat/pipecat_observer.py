@@ -1024,7 +1024,10 @@ class NoveumTraceObserver(
         Idempotent: if both ``MetricsFrame`` and ``LLMUsageMetricsFrame`` are
         emitted for the same LLM call, the last write wins (same span target).
         """
-        from noveum_trace.integrations.pipecat.pipecat_utils import calculate_llm_cost
+        from noveum_trace.integrations.pipecat.pipecat_utils import (
+            calculate_llm_cost,
+            reasoning_is_extra_output,
+        )
 
         llm_target = self._active_llm_span or self._last_llm_span
         if llm_target is None:
@@ -1074,10 +1077,22 @@ class NoveumTraceObserver(
         )
         if model:
             llm_target.attributes["llm.model"] = model
-            # D9: price reasoning/thinking tokens at the output rate (they are not
-            # part of completion_tokens). Mirrors _MetricsHandlerMixin._handle_metrics.
+            # D9: price reasoning/thinking tokens at the output rate, adding them to
+            # completion only for providers that report the two disjoint (Gemini) —
+            # OpenAI-compatible providers already count reasoning inside
+            # completion_tokens. Mirrors _MetricsHandlerMixin._handle_metrics.
             reasoning = int(getattr(tokens_obj, "reasoning_tokens", 0) or 0)
-            cost = calculate_llm_cost(model, prompt, completion + reasoning)
+            billable_output = completion
+            if reasoning_is_extra_output(
+                processor=str(getattr(frame, "processor", "") or ""),
+                model=str(model),
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=total,
+                reasoning_tokens=reasoning,
+            ):
+                billable_output += reasoning
+            cost = calculate_llm_cost(model, prompt, billable_output)
             if cost:
                 llm_target.attributes["llm.cost.input"] = cost["input"]
                 llm_target.attributes["llm.cost.output"] = cost["output"]

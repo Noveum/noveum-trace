@@ -109,10 +109,12 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     item = LLMUsageMetricsData(processor="llm", model="gpt-4o-mini", value=usage)
     await obs._handle_metrics(_metrics_data(item))
 
-    # D9: reasoning tokens (3) are billed at the output rate and are NOT part of
-    # completion_tokens, so cost is priced on completion+reasoning = 23. Token
-    # attributes stay faithful (output_tokens == completion == 20).
-    expected = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=23)
+    # D9: reasoning tokens (3) are billed at the output rate, but for this
+    # OpenAI-compatible model they are ALREADY inside completion_tokens
+    # (completion_tokens_details.reasoning_tokens), so cost is priced on
+    # completion = 20, NOT 23. llm.cost.reasoning stays as an informational
+    # breakdown of that output cost. See MET-2b for the Gemini (disjoint) case.
+    expected = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=20)
     expected_reasoning = estimate_cost("gpt-4o-mini", input_tokens=0, output_tokens=3)
 
     assert llm.attributes["llm.input_tokens"] == 10
@@ -135,6 +137,102 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     assert obs._metrics_accumulator["total_cost"] == pytest.approx(
         expected["total_cost"]
     )
+
+
+# --------------------------------------------------------------------------- #
+# MET-2b — D9 reasoning pricing is provider-dependent: disjoint (Gemini) vs    #
+#          already-inside-completion (OpenAI-compatible)                       #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_gemini_reasoning_tokens_are_priced_as_extra_output() -> None:
+    # Guards: Gemini reports candidates_token_count EXCLUSIVE of thoughts_token_count
+    # (google/llm.py), so billable output = completion + reasoning = 23. Dropping the
+    # addend here would undercharge llm.cost.output for every thinking model.
+    obs = _new_obs()
+    llm = obs._trace.create_span(name="pipecat.llm")
+    obs._active_llm_span = llm
+
+    # total_token_count (33) already includes thoughts, per the Gemini API contract.
+    usage = LLMTokenUsage(
+        prompt_tokens=10, completion_tokens=20, total_tokens=33, reasoning_tokens=3
+    )
+    item = LLMUsageMetricsData(
+        processor="GoogleLLMService#0", model="gemini-2.5-flash", value=usage
+    )
+    await obs._handle_metrics(_metrics_data(item))
+
+    expected = estimate_cost("gemini-2.5-flash", input_tokens=10, output_tokens=23)
+
+    assert llm.attributes["llm.output_tokens"] == 20  # token attrs stay faithful
+    assert llm.attributes["llm.reasoning_tokens"] == 3
+    assert llm.attributes["llm.cost.output"] == pytest.approx(expected["output_cost"])
+    assert llm.attributes["llm.cost.total"] == pytest.approx(expected["total_cost"])
+
+
+@pytest.mark.asyncio
+async def test_openai_reasoning_tokens_are_not_double_charged() -> None:
+    # Guards the inverse: OpenAI's completion_tokens_details.reasoning_tokens is a
+    # breakdown INSIDE completion_tokens (openai/base_llm.py), so pricing
+    # completion + reasoning would bill the same 3 tokens twice.
+    obs = _new_obs()
+    llm = obs._trace.create_span(name="pipecat.llm")
+    obs._active_llm_span = llm
+
+    usage = LLMTokenUsage(
+        prompt_tokens=10, completion_tokens=20, total_tokens=30, reasoning_tokens=3
+    )
+    item = LLMUsageMetricsData(
+        processor="OpenAILLMService#0", model="gpt-4o-mini", value=usage
+    )
+    await obs._handle_metrics(_metrics_data(item))
+
+    priced_on_20 = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=20)
+    priced_on_23 = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=23)
+
+    assert llm.attributes["llm.cost.output"] == pytest.approx(
+        priced_on_20["output_cost"]
+    )
+    assert llm.attributes["llm.cost.output"] != pytest.approx(
+        priced_on_23["output_cost"]
+    )
+
+
+@pytest.mark.parametrize(
+    "processor,model,total,expected_output_tokens",
+    [
+        ("GoogleLLMService#0", "gemini-2.5-flash", 33, 23),
+        ("GeminiLiveLLMService#0", "gemini-live-2.5-flash", 33, 23),
+        ("OpenAILLMService#0", "gpt-4o-mini", 30, 20),
+        ("XAILLMService#0", "grok-4", 30, 20),
+        # Unknown provider: arithmetic (p + c + r == total) confirms disjoint.
+        ("MysteryLLMService#0", "mystery-1", 33, 23),
+        # Unknown provider, arithmetic inconclusive → default to inclusive.
+        ("MysteryLLMService#0", "mystery-1", 30, 20),
+    ],
+)
+@pytest.mark.asyncio
+async def test_llm_usage_metrics_frame_reasoning_pricing_matches_metrics_frame(
+    processor: str, model: str, total: int, expected_output_tokens: int
+) -> None:
+    # Guards: _handle_llm_usage_metrics (newer-Pipecat LLMUsageMetricsFrame) reads
+    # LLMTokenUsage directly rather than via extract_metrics_data, so it needs its own
+    # provider branch — otherwise the two paths disagree about the same LLM call.
+    obs = _new_obs()
+    llm = obs._trace.create_span(name="pipecat.llm")
+    obs._active_llm_span = llm
+
+    tokens = LLMTokenUsage(
+        prompt_tokens=10, completion_tokens=20, total_tokens=total, reasoning_tokens=3
+    )
+    # LLMUsageMetricsFrame does not exist in pipecat 1.3.0; stub its duck type.
+    frame = types.SimpleNamespace(tokens=tokens, model=model, processor=processor)
+    await obs._handle_llm_usage_metrics(types.SimpleNamespace(frame=frame))
+
+    expected = estimate_cost(
+        model, input_tokens=10, output_tokens=expected_output_tokens
+    )
+    assert llm.attributes["llm.cost.output"] == pytest.approx(expected["output_cost"])
+    assert llm.attributes["llm.output_tokens"] == 20  # token attrs stay faithful
 
 
 # --------------------------------------------------------------------------- #
