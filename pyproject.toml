@@ -61,6 +61,7 @@ livekit = ["livekit>=1.0.19,<2", "livekit-agents>=1.0.0"]
 pipecat = ["pipecat-ai>=0.0.108"]
 pipecat-otel = ["pipecat-ai>=0.0.108", "opentelemetry-api>=1.0.0", "opentelemetry-sdk>=1.0.0"]
 crewai = ["crewai>=0.177.0; python_version>='3.10'"]
+bedrock = ["boto3>=1.34.0"]
 
 # Optional: spaCy for ``PiiPseudonymizer`` NER (heavier than the core SDK; regex-only
 # pseudonymization works without this extra). After install, run:
@@ -100,6 +101,7 @@ dev = [
     "openai>=1.0.0",
     "anthropic>=0.3.0",
     "langchain-core>=0.1.0",
+    "boto3>=1.34.0",
 
     # Development utilities
     "pre-commit>=3.0.0",
@@ -113,6 +115,7 @@ test = [
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
     "pytest-asyncio>=0.21.0",
+    "boto3>=1.34.0",
 ]
 
 # Linting dependencies
@@ -272,6 +275,10 @@ module = [
     "pipecat.*",
     "crewai",
     "crewai.*",
+    "boto3",
+    "boto3.*",
+    "botocore",
+    "botocore.*",
     "google",
     "google.*",
     "google.generativeai",

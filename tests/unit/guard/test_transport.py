@@ -17,7 +17,10 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from noveum_trace.guard.api_client import GuardAPIClient
 from noveum_trace.guard.decision import PolicyDecision
+from noveum_trace.guard.engine import PolicyEngine
+from noveum_trace.guard.policies.base import AbstractPolicy
 from noveum_trace.guard.transport.async_transport import NoveumAsyncTransport
 from noveum_trace.guard.transport.sync_transport import NoveumTransport
 from noveum_trace.guard.types import ParsedRequest, ParsedResponse, Phase, PolicyContext
@@ -118,6 +121,28 @@ def _streaming_parsed_req() -> ParsedRequest:
     )
 
 
+def _openai_sse_body() -> bytes:
+    events = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+    lines = [f"data: {json.dumps(e)}\n\n" for e in events]
+    lines.append("data: [DONE]\n\n")
+    return "".join(lines).encode()
+
+
+def _unread_sse_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        stream=httpx.ByteStream(_openai_sse_body()),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
 def _content_reading_adapter():
     """Stub adapter whose parse_response actually touches resp.content.
 
@@ -168,19 +193,27 @@ class _MockAsyncInner(httpx.AsyncBaseTransport):
         return self._response
 
 
-def _make_transport(engine, inner, adapter=None):
+def _make_transport(engine, inner, adapter=None, on_unmatched_request="passthrough"):
     registry = MagicMock()
     if adapter is None:
         registry.for_request.return_value = None
     else:
         registry.for_request.return_value = adapter
     return (
-        NoveumTransport(engine=engine, context=_ctx(), inner=inner, registry=registry),
+        NoveumTransport(
+            engine=engine,
+            context=_ctx(),
+            inner=inner,
+            registry=registry,
+            on_unmatched_request=on_unmatched_request,
+        ),
         registry,
     )
 
 
-def _make_async_transport(engine, inner, adapter=None):
+def _make_async_transport(
+    engine, inner, adapter=None, on_unmatched_request="passthrough"
+):
     registry = MagicMock()
     if adapter is None:
         registry.for_request.return_value = None
@@ -188,7 +221,11 @@ def _make_async_transport(engine, inner, adapter=None):
         registry.for_request.return_value = adapter
     return (
         NoveumAsyncTransport(
-            engine=engine, context=_ctx(), inner=inner, registry=registry
+            engine=engine,
+            context=_ctx(),
+            inner=inner,
+            registry=registry,
+            on_unmatched_request=on_unmatched_request,
         ),
         registry,
     )
@@ -385,6 +422,40 @@ class TestErrorDuringForward:
 
 
 # ---------------------------------------------------------------------------
+# Sync/async transport — backend unavailable (real PolicyEngine, P1b)
+# ---------------------------------------------------------------------------
+
+
+class TestBackendUnavailableEndToEnd:
+    def test_sync_transport_returns_403_without_calling_inner(self):
+        engine = PolicyEngine(api_client=GuardAPIClient())
+        engine.set_backend_unavailable(True)
+
+        adapter = _stub_adapter()
+        inner = _MockInner(_real_response())
+        transport, _ = _make_transport(engine, inner, adapter)
+
+        result = transport.handle_request(_real_request())
+
+        assert result.status_code == 403
+        assert inner.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_async_transport_returns_403_without_calling_inner(self):
+        engine = PolicyEngine(api_client=GuardAPIClient())
+        engine.set_backend_unavailable(True)
+
+        adapter = _stub_adapter()
+        inner = _MockAsyncInner(_real_response())
+        transport, _ = _make_async_transport(engine, inner, adapter)
+
+        result = await transport.handle_async_request(_real_request())
+
+        assert result.status_code == 403
+        assert inner.call_count == 0
+
+
+# ---------------------------------------------------------------------------
 # Sync transport — no adapter (unknown provider)
 # ---------------------------------------------------------------------------
 
@@ -411,6 +482,30 @@ class TestNoAdapter:
 
         engine.pre_call.assert_not_called()
         engine.post_call.assert_not_called()
+
+    def test_on_unmatched_request_block_returns_403_without_calling_inner(self):
+        engine = MagicMock()
+        inner = _MockInner(_real_response())
+        transport, _ = _make_transport(
+            engine, inner, adapter=None, on_unmatched_request="block"
+        )
+
+        result = transport.handle_request(_real_request())
+
+        assert result.status_code == 403
+        assert inner.call_count == 0
+        engine.pre_call.assert_not_called()
+
+    def test_on_unmatched_request_default_is_passthrough(self):
+        """Default behavior must remain exactly today's: forward unguarded."""
+        engine = MagicMock()
+        inner = _MockInner(_real_response())
+        transport, _ = _make_transport(engine, inner, adapter=None)
+
+        result = transport.handle_request(_real_request())
+
+        assert result.status_code == 200
+        assert inner.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +538,7 @@ class TestResponseReading:
         engine = MagicMock()
         engine.pre_call.return_value = (None, [])
         engine.post_call.return_value = None
+        engine.has_post_blocking_policies.return_value = False
 
         adapter = _content_reading_adapter()
         adapter.parse_request.return_value = _streaming_parsed_req()
@@ -456,6 +552,114 @@ class TestResponseReading:
         engine.post_call.assert_not_called()
         # The unread stream is intact for the caller to consume.
         assert json.loads(result.read())["model"] == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# Streaming + a post-blocking-capable policy (P1a) — buffered enforcement
+# ---------------------------------------------------------------------------
+
+
+class _PostBlockingPolicy(AbstractPolicy):
+    """Stub policy that can block post(); records the resp it saw."""
+
+    name = "post_blocking_stub"
+    can_block_post = True
+
+    def __init__(self, *, block: bool) -> None:
+        super().__init__()
+        self._block = block
+        self.seen_resp: ParsedResponse | None = None
+
+    def post(self, resp, ctx, decision, deps) -> PolicyDecision:
+        self.seen_resp = resp
+        if self._block:
+            return PolicyDecision.block(self.name, Phase.post, reason="blocked content")
+        return PolicyDecision.allow(self.name, Phase.post)
+
+
+def _engine_with_post_blocking(
+    *, block: bool
+) -> tuple[PolicyEngine, _PostBlockingPolicy]:
+    engine = PolicyEngine(api_client=GuardAPIClient())
+    policy = _PostBlockingPolicy(block=block)
+    engine.attach(policy)
+    return engine, policy
+
+
+class TestStreamingWithPostBlockingPolicy:
+    def test_blocked_response_never_reaches_caller(self):
+        engine, policy = _engine_with_post_blocking(block=True)
+        adapter = _stub_adapter(_block_response())
+        adapter.parse_request.return_value = _streaming_parsed_req()
+        inner = _MockInner(_unread_sse_response())
+        transport, _ = _make_transport(engine, inner, adapter)
+
+        result = transport.handle_request(_real_request())
+
+        assert result.status_code == 403
+        assert policy.seen_resp is not None  # post() did run, with real content
+        assert policy.seen_resp.text == "Hello world"
+
+    def test_allowed_response_replays_original_sse_content(self):
+        engine, policy = _engine_with_post_blocking(block=False)
+        adapter = _stub_adapter()
+        adapter.parse_request.return_value = _streaming_parsed_req()
+        inner = _MockInner(_unread_sse_response())
+        transport, _ = _make_transport(engine, inner, adapter)
+
+        result = transport.handle_request(_real_request())
+
+        assert result.status_code == 200
+        assert result.content == _openai_sse_body()
+        assert policy.seen_resp.text == "Hello world"
+        assert policy.seen_resp.input_tokens == 10
+        assert policy.seen_resp.output_tokens == 5
+
+    def test_no_post_blocking_policy_uses_lazy_streaming_path(self):
+        """Regression: without a post-blocking policy, the response must NOT
+        be buffered — it stays a lazy stream (content unread until consumed)."""
+        engine = PolicyEngine(api_client=GuardAPIClient())  # no policies attached
+        adapter = _stub_adapter()
+        adapter.parse_request.return_value = _streaming_parsed_req()
+        inner = _MockInner(_unread_sse_response())
+        transport, _ = _make_transport(engine, inner, adapter)
+
+        result = transport.handle_request(_real_request())
+
+        # Real (unbuffered) streaming responses are lazy — content is not yet
+        # readable without consuming/closing the stream.
+        with pytest.raises(httpx.ResponseNotRead):
+            _ = result.content
+
+
+class TestAsyncStreamingWithPostBlockingPolicy:
+    @pytest.mark.asyncio
+    async def test_blocked_response_never_reaches_caller(self):
+        engine, policy = _engine_with_post_blocking(block=True)
+        adapter = _stub_adapter(_block_response())
+        adapter.parse_request.return_value = _streaming_parsed_req()
+        inner = _MockAsyncInner(_unread_sse_response())
+        transport, _ = _make_async_transport(engine, inner, adapter)
+
+        result = await transport.handle_async_request(_real_request())
+
+        assert result.status_code == 403
+        assert policy.seen_resp is not None
+        assert policy.seen_resp.text == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_allowed_response_replays_original_sse_content(self):
+        engine, policy = _engine_with_post_blocking(block=False)
+        adapter = _stub_adapter()
+        adapter.parse_request.return_value = _streaming_parsed_req()
+        inner = _MockAsyncInner(_unread_sse_response())
+        transport, _ = _make_async_transport(engine, inner, adapter)
+
+        result = await transport.handle_async_request(_real_request())
+
+        assert result.status_code == 200
+        assert await result.aread() == _openai_sse_body()
+        assert policy.seen_resp.text == "Hello world"
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +725,20 @@ class TestAsyncTransport:
         engine.pre_call.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_on_unmatched_request_block_returns_403_without_calling_inner(self):
+        engine = MagicMock()
+        inner = _MockAsyncInner(_real_response())
+        transport, _ = _make_async_transport(
+            engine, inner, adapter=None, on_unmatched_request="block"
+        )
+
+        result = await transport.handle_async_request(_real_request())
+
+        assert result.status_code == 403
+        assert inner.call_count == 0
+        engine.pre_call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_unread_stream_body_is_materialized_before_parse(self):
         engine = MagicMock()
         engine.pre_call.return_value = (None, [])
@@ -541,6 +759,7 @@ class TestAsyncTransport:
         engine = MagicMock()
         engine.pre_call.return_value = (None, [])
         engine.post_call.return_value = None
+        engine.has_post_blocking_policies.return_value = False
 
         adapter = _content_reading_adapter()
         adapter.parse_request.return_value = _streaming_parsed_req()

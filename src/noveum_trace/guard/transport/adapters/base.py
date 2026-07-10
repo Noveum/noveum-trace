@@ -61,6 +61,10 @@ class AdapterRegistry:
     def register(self, adapter: ProviderAdapter) -> None:
         self._adapters.append(adapter)
 
+    def provider_names(self) -> list[str]:
+        """Provider names covered by the registered adapters (see module docstring)."""
+        return [a.provider_name for a in self._adapters]
+
     @staticmethod
     def _host_matches(host: str, pattern: str) -> bool:
         """Return True only when pattern is an exact match or a proper ancestor domain.
@@ -103,8 +107,8 @@ class AdapterRegistry:
         return None
 
 
-# Module-level default registry populated by the two concrete adapters below.
-# Transport code imports this singleton; tests can replace it.
+# Only sees httpx-routed traffic, so Bedrock/Vertex can't match here; Bedrock
+# is covered separately via guard.instrument_bedrock(). See supported_providers().
 _default_registry: Optional[AdapterRegistry] = None
 
 

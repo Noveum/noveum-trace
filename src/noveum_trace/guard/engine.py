@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Callable, Optional
 
@@ -14,6 +15,8 @@ from noveum_trace.guard.types import (
     PolicyDeps,
 )
 
+_log = logging.getLogger(__name__)
+
 
 class PolicyEngine:
     """Thin orchestrator. All enforcement logic lives in policies.
@@ -23,10 +26,20 @@ class PolicyEngine:
     - Post → all post() hooks run before any block is surfaced.
     """
 
-    def __init__(self, api_client: GuardAPIClient) -> None:
+    def __init__(
+        self,
+        api_client: GuardAPIClient,
+        *,
+        fail_open_on_backend_unavailable: bool = False,
+    ) -> None:
         self._api_client = api_client
         self._policies: list[AbstractPolicy] = []
         self._lock = threading.Lock()
+        # Set by PolicyPoller on a backend fetch failure (vs. legitimately zero policies).
+        self._backend_unavailable = threading.Event()
+        # Fail closed by default when backend is unreachable; set True to keep
+        # enforcing last-known policies instead (availability over strict enforcement).
+        self._fail_open_on_backend_unavailable = fail_open_on_backend_unavailable
 
     # Policy registration
 
@@ -43,6 +56,44 @@ class PolicyEngine:
         with self._lock:
             return list(self._policies)
 
+    # Backend availability
+
+    def set_backend_unavailable(self, unavailable: bool) -> None:
+        """Toggle the control-plane-unreachable flag (set by PolicyPoller)."""
+        if unavailable:
+            # Log once per transition (not per call) so the operational impact
+            # is loud without spamming the hot path.
+            if not self._backend_unavailable.is_set():
+                if self._fail_open_on_backend_unavailable:
+                    _log.warning(
+                        "NovaGuard control plane unreachable; failing OPEN — "
+                        "continuing to enforce last-known policies "
+                        "(guard_fail_open_on_backend_unavailable=True)."
+                    )
+                else:
+                    _log.warning(
+                        "NovaGuard control plane unreachable; failing CLOSED — "
+                        "blocking all guarded calls until policy sync recovers."
+                    )
+            self._backend_unavailable.set()
+        else:
+            if self._backend_unavailable.is_set():
+                _log.info(
+                    "NovaGuard control plane reachable again; policy sync recovered."
+                )
+            self._backend_unavailable.clear()
+
+    def is_backend_unavailable(self) -> bool:
+        return self._backend_unavailable.is_set()
+
+    def has_post_blocking_policies(self) -> bool:
+        """True when any attached policy can return a blocking post() decision.
+
+        Used by the transport to decide whether a streaming response must be
+        buffered in full before any bytes reach the caller.
+        """
+        return any(p.can_block_post for p in self.policies)
+
     # Call lifecycle
 
     def pre_call(
@@ -55,6 +106,27 @@ class PolicyEngine:
         Returns (block_decision | None, ran_pairs).
         On block: rollback all previously ran policies; caller must NOT forward the request.
         """
+        if (
+            self._backend_unavailable.is_set()
+            and not self._fail_open_on_backend_unavailable
+        ):
+            # Control plane unreachable and configured to fail closed: block
+            # rather than silently keep enforcing stale (or absent) policy
+            # state. No policies ran, so there is nothing to release. When
+            # fail_open_on_backend_unavailable is set we skip this and fall
+            # through to enforce the last-known attached policies instead.
+            return (
+                PolicyDecision.block(
+                    "_guard_control_plane",
+                    Phase.pre,
+                    reason=(
+                        "NovaGuard control plane unreachable; failing closed "
+                        "until policy sync recovers"
+                    ),
+                ),
+                [],
+            )
+
         deps = PolicyDeps(api=self._api_client)
         ran: list[tuple[AbstractPolicy, PolicyDecision]] = []
 

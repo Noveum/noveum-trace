@@ -15,6 +15,7 @@ from typing import Optional
 
 from noveum_trace.guard.api_client import GuardAPIClient
 from noveum_trace.guard.engine import PolicyEngine
+from noveum_trace.guard.exceptions import GuardBackendUnavailable
 from noveum_trace.guard.policies.base import AbstractPolicy
 from noveum_trace.guard.poller import PolicyPoller
 from noveum_trace.guard.types import PolicyDeps
@@ -192,6 +193,69 @@ class TestAttachMidRun:
         poller.force_refresh()
 
         assert len(spy.poll_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Backend-unavailable handling — fail closed, loudly (P1b)
+# ---------------------------------------------------------------------------
+
+
+class _FakeAPIClient:
+    """Stand-in for GuardAPIClient exposing only fetch_remote_policies()."""
+
+    def __init__(self, *, raise_exc=None, policies=None):
+        self._raise_exc = raise_exc
+        self._policies = policies or []
+        self.calls = 0
+
+    def fetch_remote_policies(self, project_id):
+        self.calls += 1
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._policies
+
+
+class TestBackendUnavailableHandling:
+    def test_backend_unavailable_sets_engine_degraded(self):
+        api = _FakeAPIClient(raise_exc=GuardBackendUnavailable("down"))
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine, project_id="proj")
+
+        poller._fetch_backend_policies()
+
+        assert engine.is_backend_unavailable() is True
+
+    def test_successful_fetch_clears_degraded_state(self):
+        api = _FakeAPIClient(policies=[])
+        engine = PolicyEngine(api_client=api)
+        engine.set_backend_unavailable(True)
+        poller = PolicyPoller(engine, project_id="proj")
+
+        poller._fetch_backend_policies()
+
+        assert engine.is_backend_unavailable() is False
+
+    def test_no_project_id_does_not_change_degraded_state(self):
+        """No project configured — matches today's silent early-return, unchanged."""
+        api = _FakeAPIClient(raise_exc=GuardBackendUnavailable("down"))
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine)  # no project_id, no ambient context
+
+        poller._fetch_backend_policies()
+
+        assert engine.is_backend_unavailable() is False
+        assert api.calls == 0
+
+    def test_unexpected_exception_does_not_set_degraded_state(self):
+        """A bug in fetch_remote_policies itself must not crash the poller
+        thread or falsely flip the engine into fail-closed mode."""
+        api = _FakeAPIClient(raise_exc=RuntimeError("unexpected bug"))
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine, project_id="proj")
+
+        poller._fetch_backend_policies()  # must not raise
+
+        assert engine.is_backend_unavailable() is False
 
 
 # ---------------------------------------------------------------------------

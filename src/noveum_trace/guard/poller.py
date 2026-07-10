@@ -6,6 +6,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from noveum_trace.guard.exceptions import GuardBackendUnavailable
+
 if TYPE_CHECKING:
     from noveum_trace.guard.engine import PolicyEngine
     from noveum_trace.guard.policies.base import AbstractPolicy
@@ -197,9 +199,19 @@ class PolicyPoller:
             remote_policies: list[dict[str, Any]] = api.fetch_remote_policies(
                 project_id
             )
+        except GuardBackendUnavailable as exc:
+            # A real backend failure (not "no policies configured") — fail
+            # closed rather than silently keep running on stale policy state.
+            _log.error("PolicyPoller: backend unreachable — %s", exc)
+            self._engine.set_backend_unavailable(True)
+            return
         except Exception as exc:
+            # Unexpected bug in fetch_remote_policies itself — never let it
+            # kill the daemon thread, but don't change availability state.
             _log.debug("PolicyPoller: fetch_remote_policies failed — %s", exc)
             return
+
+        self._engine.set_backend_unavailable(False)
 
         if not remote_policies:
             return

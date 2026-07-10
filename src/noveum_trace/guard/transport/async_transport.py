@@ -70,7 +70,8 @@ class _AsyncStreamReconciler(httpx.AsyncByteStream):
 class NoveumAsyncTransport(httpx.AsyncBaseTransport):
     """Async httpx transport that enforces Guard policies around every LLM call.
 
-    Same data flow as NoveumTransport; all I/O awaited.
+    Same data flow as NoveumTransport (including the buffered-streaming path
+    when a post-blocking policy is attached); all I/O awaited.
     """
 
     def __init__(
@@ -79,15 +80,31 @@ class NoveumAsyncTransport(httpx.AsyncBaseTransport):
         context: PolicyContext,
         inner: Optional[httpx.AsyncBaseTransport] = None,
         registry: Optional[AdapterRegistry] = None,
+        on_unmatched_request: str = "passthrough",
     ) -> None:
         self._engine = engine
         self._context = context
         self._inner = inner or httpx.AsyncHTTPTransport()
         self._registry = registry or default_registry()
+        self._on_unmatched_request = on_unmatched_request
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         adapter = self._registry.for_request(request)
         if adapter is None:
+            if self._on_unmatched_request == "block":
+                from noveum_trace.guard.transport.helper import (
+                    build_generic_block_response,
+                )
+
+                _log.error(
+                    "NovaGuard: no adapter found for request %s %s — blocking "
+                    "(on_unmatched_request='block')",
+                    request.method,
+                    request.url,
+                )
+                return build_generic_block_response(
+                    f"No NovaGuard adapter for {request.method} {request.url}"
+                )
             _log.error(
                 "NovaGuard: no adapter found for request %s %s — passing through unguarded",
                 request.method,
@@ -110,9 +127,27 @@ class NoveumAsyncTransport(httpx.AsyncBaseTransport):
             self._engine.release_all(ctx, ran)
             raise
 
-        # Wrap streaming responses so the reservation is reconciled when the
-        # caller finishes consuming the stream (instead of staying inflight forever).
         if parsed_req.stream:
+            if self._engine.has_post_blocking_policies():
+                # A policy that can block post() is attached: a block can't be
+                # enforced on bytes already flushed, so buffer the full
+                # response before releasing anything to the caller.
+                from noveum_trace.guard.transport.helper import (
+                    build_buffered_stream_response,
+                )
+
+                try:
+                    await response.aread()
+                    return build_buffered_stream_response(
+                        response, request, adapter, self._engine, ctx, ran, parsed_req
+                    )
+                except Exception:
+                    self._engine.release_all(ctx, ran)
+                    raise
+
+            # No post-blocking policy: true streaming, lazy reconcile on consume.
+            # Narrow response.stream's broad type; always AsyncByteStream here.
+            assert isinstance(response.stream, httpx.AsyncByteStream)
             reconciler = _AsyncStreamReconciler(
                 response.stream, self._engine, ctx, ran, parsed_req
             )

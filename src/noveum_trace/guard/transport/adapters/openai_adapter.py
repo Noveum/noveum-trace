@@ -26,8 +26,27 @@ class OpenAIAdapter(ProviderAdapter):
 
     def parse_request(self, req: httpx.Request) -> ParsedRequest:
         body = json.loads(req.content)
-        messages = body.get("messages", [])
         model = body.get("model", "")
+
+        # An embeddings body ({model, input}) has no "messages" — chat-shaped
+        # parsing would silently estimate near-zero cost for it (empty
+        # messages list) and bypass the cost cap entirely.
+        if "messages" not in body and "input" in body:
+            estimated = estimate_token_count(
+                body["input"], model=model, provider="openai"
+            )
+            return ParsedRequest(
+                provider="openai",
+                model=model,
+                messages=[],
+                stream=False,
+                max_tokens=None,
+                estimated_input_tokens=estimated,
+                raw_body=req.content,
+                kind="embeddings",
+            )
+
+        messages = body.get("messages", [])
         estimated = estimate_token_count(messages, model=model, provider="openai")
         return ParsedRequest(
             provider="openai",
@@ -46,9 +65,15 @@ class OpenAIAdapter(ProviderAdapter):
         usage = body.get("usage", {})
         model = body.get("model", "")
         input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-        choices = body.get("choices", [])
-        text = choices[0].get("message", {}).get("content") if choices else None
+        if "data" in body and "choices" not in body:
+            # Embeddings responses have "data", not "choices", and never
+            # produce completion tokens.
+            output_tokens = 0
+            text = None
+        else:
+            choices = body.get("choices", [])
+            output_tokens = usage.get("completion_tokens", 0)
+            text = choices[0].get("message", {}).get("content") if choices else None
         return ParsedResponse(
             model=model,
             text=text,

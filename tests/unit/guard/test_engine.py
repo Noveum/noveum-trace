@@ -396,6 +396,117 @@ class TestReleaseAll:
 # ---------------------------------------------------------------------------
 
 
+class TestBackendUnavailableFailClosed:
+    def test_pre_call_blocks_when_backend_unavailable(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(AlwaysAllowPolicy())
+
+        engine.set_backend_unavailable(True)
+        block, ran = engine.pre_call(_req(), _ctx())
+
+        assert block is not None
+        assert block.is_blocking
+        assert ran == []
+
+    def test_no_policies_run_when_backend_unavailable(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        spy = AlwaysAllowPolicy()
+        engine.attach(spy)
+
+        engine.set_backend_unavailable(True)
+        engine.pre_call(_req(), _ctx())
+
+        assert spy.pre_calls == []
+
+    def test_pre_call_resumes_normally_after_recovery(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        spy = AlwaysAllowPolicy()
+        engine.attach(spy)
+
+        engine.set_backend_unavailable(True)
+        engine.set_backend_unavailable(False)
+        block, ran = engine.pre_call(_req(), _ctx())
+
+        assert block is None
+        assert len(spy.pre_calls) == 1
+
+    def test_is_backend_unavailable_reflects_state(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+
+        assert engine.is_backend_unavailable() is False
+        engine.set_backend_unavailable(True)
+        assert engine.is_backend_unavailable() is True
+        engine.set_backend_unavailable(False)
+        assert engine.is_backend_unavailable() is False
+
+
+class TestBackendUnavailableFailOpen:
+    def test_pre_call_still_enforces_when_configured_fail_open(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api, fail_open_on_backend_unavailable=True)
+        spy = AlwaysAllowPolicy()
+        engine.attach(spy)
+
+        engine.set_backend_unavailable(True)
+        block, ran = engine.pre_call(_req(), _ctx())
+
+        # Fail open: no synthetic control-plane block; last-known policies run.
+        assert block is None
+        assert len(spy.pre_calls) == 1
+
+    def test_fail_open_still_honors_a_real_policy_block(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api, fail_open_on_backend_unavailable=True)
+        engine.attach(AlwaysBlockPolicy())
+
+        engine.set_backend_unavailable(True)
+        block, _ = engine.pre_call(_req(), _ctx())
+
+        assert block is not None
+        assert block.is_blocking
+
+    def test_default_is_fail_closed(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(AlwaysAllowPolicy())
+
+        engine.set_backend_unavailable(True)
+        block, ran = engine.pre_call(_req(), _ctx())
+
+        assert block is not None
+        assert ran == []
+
+
+class TestHasPostBlockingPolicies:
+    def test_false_when_no_policies_attached(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        assert engine.has_post_blocking_policies() is False
+
+    def test_false_when_only_cost_cap_attached(self):
+        """CostCapPolicy never blocks post — can_block_post stays False."""
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(
+            CostCapPolicy(max_usd=100.0, mode=EnforcementMode.strict, project_id="p")
+        )
+        assert engine.has_post_blocking_policies() is False
+
+    def test_true_when_a_post_blocking_policy_is_attached(self):
+        class PostBlocker(AbstractPolicy):
+            name = "post_blocker"
+            can_block_post = True
+
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(PostBlocker())
+        assert engine.has_post_blocking_policies() is True
+
+
 class TestMultipleCostCapPolicies:
     def test_two_cost_caps_on_different_projects_are_independent(self):
         """Blocking proj-a must not affect proj-b's budget."""
