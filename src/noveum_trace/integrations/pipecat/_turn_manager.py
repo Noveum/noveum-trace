@@ -447,7 +447,12 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 "STT span crosses turn boundary — preserved (always-buffer mode)"
             )
 
-        span.attributes["turn.was_interrupted"] = was_interrupted
+        # B7: OR-merge, never clobber. An interruption during the turn already set
+        # this True (_handle_interruption_internal); an incoming was_interrupted=False
+        # at turn end (the common external-turn-tracking value) must not overwrite it.
+        span.attributes["turn.was_interrupted"] = bool(was_interrupted) or bool(
+            span.attributes.get("turn.was_interrupted")
+        )
 
         if duration is not None:
             span.attributes["turn.duration_seconds"] = duration
@@ -477,6 +482,7 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         self._llm_thought_buffer.clear()
         self._llm_thoughts_list.clear()
         self._llm_thought_signatures_list.clear()
+        self._pending_thought_signatures.clear()
 
         if self._active_llm_span:
             llm_span = self._active_llm_span
@@ -508,9 +514,11 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
 
         self._llm_text_buffer.clear()
         self._tts_text_buffer.clear()
+        self._tts_text_interim_buffer.clear()
         self._tts_audio_buffer.clear()
         self._pending_function_calls.clear()
-        self._function_call_results.clear()
+        self._function_call_owner.clear()
+        self._resolved_function_call_ids.clear()
 
     # ---------------------------------------------------------------------- #
     # Standalone turn-end timer                                              #

@@ -36,12 +36,13 @@ def _make_obs(*, capture_text: bool = True, record_audio: bool = True):
     return NoveumTraceObserver(capture_text=capture_text, record_audio=record_audio)
 
 
-def _source(*, voice=None, model=None, has_settings=True):
-    """Fake TTS source processor exposing ``._settings.voice`` / ``.model``."""
+def _source(*, voice=None, model=None, language=None, has_settings=True):
+    """Fake TTS source processor exposing ``._settings.voice`` / ``.model`` /
+    ``.language``."""
     if not has_settings:
         return types.SimpleNamespace(_settings=None)
     return types.SimpleNamespace(
-        _settings=types.SimpleNamespace(voice=voice, model=model)
+        _settings=types.SimpleNamespace(voice=voice, model=model, language=language)
     )
 
 
@@ -74,6 +75,71 @@ async def test_tts_started_span_is_turn_child_with_voice_model(
     assert span.attributes["tts.model"] == "tts-1"
     assert obs._tts_source_processor is src
     assert obs._last_tts_span is None  # cleared on every new TTS start
+
+
+# --------------------------------------------------------------------------- #
+# D6 — tts.language is captured from source settings (was dropped)             #
+# --------------------------------------------------------------------------- #
+async def test_tts_started_captures_language(ff, real_trace_with_turn):
+    # Guards D6: extract_service_settings resolves language; _handle_tts_started
+    # now copies it (it previously copied only voice/model).
+    trace, turn = real_trace_with_turn
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+    src = _source(voice="nova", model="tts-1", language="en-US")
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=src)
+    )
+
+    assert obs._active_tts_span.attributes["tts.language"] == "en-US"
+
+
+# --------------------------------------------------------------------------- #
+# D5 — tts.provider derived from the source service class name                 #
+# --------------------------------------------------------------------------- #
+async def test_tts_started_captures_provider(ff, real_trace_with_turn):
+    trace, turn = real_trace_with_turn
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    class ElevenLabsTTSService:
+        _settings = types.SimpleNamespace(voice="rachel", model="eleven_turbo_v2")
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=ElevenLabsTTSService())
+    )
+
+    assert obs._active_tts_span.attributes["tts.provider"] == "elevenlabs"
+
+
+# --------------------------------------------------------------------------- #
+# D8 — buffered TTS text is flushed on the finalizer force-close path          #
+# --------------------------------------------------------------------------- #
+async def test_tts_text_flushed_on_finalizer_force_close(ff, real_trace_with_turn):
+    # Guards D8: an abnormal close (no TTSStoppedFrame) must still write the
+    # buffered TTS text — the finalizer force-close loop flushes it.
+    from unittest.mock import patch
+
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=_source(voice="v"))
+    )
+    tts_span = obs._active_tts_span
+    # Sentence-aggregated text buffered, but NO TTSStoppedFrame arrives.
+    obs._tts_text_buffer.extend([("Hello,", False), ("world.", False)])
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation(cancelled=True)
+
+    assert tts_span.attributes["tts.input_text"] == "Hello, world."
+    assert tts_span.is_finished()
 
 
 # --------------------------------------------------------------------------- #
@@ -126,10 +192,13 @@ async def test_tts_started_no_turn_should_be_parented(ff, real_trace_with_turn):
 
 
 # --------------------------------------------------------------------------- #
-# TTS-3 — multiple TTSTextFrame chunks join (empty separator) into tts.input_text
+# TTS-3 — word/token chunks (no inter-frame spaces) are RESPACED into the        #
+#         interim attribute; tts.input_text stays absent (sentence-only)         #
 # --------------------------------------------------------------------------- #
-async def test_tts_text_chunks_join_into_input_text(ff, real_trace_with_turn):
-    # Guards: ''.join order of TTSTextFrame chunks + finish + buffer reset + backref.
+async def test_tts_word_chunks_respace_into_interim(ff, real_trace_with_turn):
+    # Guards: de-spacing fix — word frames carry includes_inter_frame_spaces=False,
+    # so they must be rejoined WITH spaces (not mashed together) and land in the
+    # interim attribute; tts.input_text is sentence-only and stays absent here.
     trace, turn = real_trace_with_turn
     obs = _make_obs()
     obs._trace = trace
@@ -141,7 +210,7 @@ async def test_tts_text_chunks_join_into_input_text(ff, real_trace_with_turn):
         )
     )
     span = obs._active_tts_span
-    for chunk in ("Hello, ", "world", "!"):
+    for chunk in ("Hello", "world"):  # default includes_inter_frame_spaces=False
         await obs._handle_tts_text(
             types.SimpleNamespace(
                 frame=ff.TTSTextFrame(text=chunk, aggregated_by="word")
@@ -150,11 +219,131 @@ async def test_tts_text_chunks_join_into_input_text(ff, real_trace_with_turn):
 
     await obs._handle_tts_stopped(types.SimpleNamespace())
 
-    assert span.attributes["tts.input_text"] == "Hello, world!"
+    assert span.attributes["tts.input_text_interim"] == "Hello world"  # respaced
+    assert "tts.input_text" not in span.attributes  # sentence-only; none emitted
     assert span.is_finished()
     assert obs._tts_text_buffer == []
+    assert obs._tts_text_interim_buffer == []
     assert obs._last_tts_span is span
     assert span.attributes["pipecat_span_status"] == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# TTS-3a — frames that already include inter-frame spaces are NOT double-spaced  #
+# --------------------------------------------------------------------------- #
+async def test_tts_chunks_with_spaces_not_double_spaced(ff, real_trace_with_turn):
+    # Guards: includes_inter_frame_spaces=True path — append as-is, no injected space.
+    trace, turn = real_trace_with_turn
+    obs = _make_obs()
+    obs._trace = trace
+    obs._current_turn_span = turn
+    await obs._handle_tts_started(
+        types.SimpleNamespace(
+            frame=ff.TTSStartedFrame(), source=_source(has_settings=False)
+        )
+    )
+    span = obs._active_tts_span
+    for chunk in ("Hello", " world"):  # second carries its own leading space
+        frame = ff.TTSTextFrame(text=chunk, aggregated_by="word")
+        frame.includes_inter_frame_spaces = True
+        await obs._handle_tts_text(types.SimpleNamespace(frame=frame))
+    await obs._handle_tts_stopped(types.SimpleNamespace())
+    assert span.attributes["tts.input_text_interim"] == "Hello world"
+
+
+# --------------------------------------------------------------------------- #
+# TTS-3b — interim (word/token) vs final (sentence) kept in SEPARATE attrs       #
+# --------------------------------------------------------------------------- #
+async def test_tts_text_interim_and_final_split(ff, real_trace_with_turn):
+    # Guards: sentence-aggregated -> tts.input_text; word/token -> interim; the
+    # same utterance is not double-counted, and each is independently respaced.
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(
+            frame=ff.TTSStartedFrame(), source=_source(has_settings=False)
+        )
+    )
+    span = obs._active_tts_span
+    for w in ("Hello", "world"):  # interim word stream (no inter-frame spaces)
+        await obs._handle_tts_text(
+            types.SimpleNamespace(frame=ff.TTSTextFrame(text=w, aggregated_by="word"))
+        )
+    await obs._handle_tts_text(  # final sentence aggregation
+        types.SimpleNamespace(
+            frame=ff.TTSTextFrame(text="Hello world!", aggregated_by="sentence")
+        )
+    )
+    await obs._handle_tts_stopped(types.SimpleNamespace())
+
+    assert span.attributes["tts.input_text"] == "Hello world!"  # final (sentence)
+    assert span.attributes["tts.input_text_interim"] == "Hello world"  # words respaced
+    assert obs._tts_text_buffer == []
+    assert obs._tts_text_interim_buffer == []
+
+
+# --------------------------------------------------------------------------- #
+# TTS-3c — word-only: interim populated, tts.input_text absent (no fallback)     #
+# --------------------------------------------------------------------------- #
+async def test_tts_word_only_leaves_input_text_absent(ff, real_trace_with_turn):
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+    await obs._handle_tts_started(
+        types.SimpleNamespace(
+            frame=ff.TTSStartedFrame(), source=_source(has_settings=False)
+        )
+    )
+    span = obs._active_tts_span
+    for w in ("Got", "it"):
+        await obs._handle_tts_text(
+            types.SimpleNamespace(frame=ff.TTSTextFrame(text=w, aggregated_by="word"))
+        )
+    await obs._handle_tts_stopped(types.SimpleNamespace())
+    assert span.attributes["tts.input_text_interim"] == "Got it"
+    assert "tts.input_text" not in span.attributes
+
+
+# --------------------------------------------------------------------------- #
+# TTS-3e — start/stop timestamps + audio_duration_ms are standalone attributes  #
+#          and do NOT overwrite the span's wall-clock start_time / duration_ms   #
+# --------------------------------------------------------------------------- #
+async def test_tts_timing_attributes(ff, real_trace_with_turn):
+    # Guards: tts.started_at (from TTSStarted), tts.stopped_at (from TTSStopped),
+    # tts.audio_duration_ms (summed from buffered PCM), all separate from span
+    # wall-clock (which stays true elapsed, not the audio length).
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=True)
+    obs._trace = trace
+    obs._current_turn_span = turn
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(
+            frame=ff.TTSStartedFrame(), source=_source(has_settings=False)
+        )
+    )
+    span = obs._active_tts_span
+    # started_at is set on TTSStarted and equals the span's own start.
+    assert span.attributes["tts.started_at"] == span.start_time.isoformat()
+
+    # 100 frames x 10ms (320 bytes @ 16k mono 16-bit) = 1000ms of audio.
+    with patch(_UPLOAD, return_value=True):
+        for _ in range(100):
+            await obs._handle_tts_audio(
+                types.SimpleNamespace(
+                    frame=_audio_frame(ff), source=obs._tts_source_processor
+                )
+            )
+        await obs._handle_tts_stopped(types.SimpleNamespace())
+
+    assert span.attributes["tts.audio_duration_ms"] == pytest.approx(1000.0, rel=1e-6)
+    assert span.attributes["tts.stopped_at"] == span.end_time.isoformat()
+    # span wall-clock is the real elapsed (near-zero in a test), NOT the audio length.
+    assert span.duration_ms < 500.0
 
 
 # --------------------------------------------------------------------------- #
@@ -370,5 +559,5 @@ async def test_tts_dispatch_through_on_push_frame(ff, real_trace_with_turn):
     assert len(tts_spans) == 1
     span = tts_spans[0]
     assert span.parent_span_id == turn.span_id
-    assert span.attributes["tts.input_text"] == "Hi"
+    assert span.attributes["tts.input_text_interim"] == "Hi"  # word frame -> interim
     assert span.attributes["pipecat_span_status"] == "ok"

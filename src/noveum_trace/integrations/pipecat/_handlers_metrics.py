@@ -17,6 +17,7 @@ from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMi
 from noveum_trace.integrations.pipecat.pipecat_utils import (
     calculate_llm_cost,
     extract_metrics_data,
+    reasoning_is_extra_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,12 +129,35 @@ class _MetricsHandlerMixin(_PipecatObserverMixinBase):
             )
             if model:
                 llm_target.attributes["llm.model"] = model
-                cost = calculate_llm_cost(model, prompt, completion)
+                # D9: reasoning/thinking tokens are billed at the output rate. Whether
+                # they are *extra* output is provider-dependent: Gemini reports them
+                # disjoint from completion_tokens (google-genai: total = prompt +
+                # candidates + tool_use + thoughts), while OpenAI-compatible providers
+                # already include them inside completion_tokens — pricing
+                # completion + reasoning there would bill the same tokens twice.
+                reasoning = metrics.get("reasoning_tokens", 0) or 0
+                billable_output = completion
+                if reasoning_is_extra_output(
+                    processor=metrics.get("llm_processor", ""),
+                    model=str(model),
+                    prompt_tokens=prompt,
+                    completion_tokens=completion,
+                    total_tokens=total,
+                    reasoning_tokens=reasoning,
+                ):
+                    billable_output += reasoning
+                cost = calculate_llm_cost(model, prompt, billable_output)
                 if cost:
                     llm_target.attributes["llm.cost.input"] = cost["input"]
                     llm_target.attributes["llm.cost.output"] = cost["output"]
                     llm_target.attributes["llm.cost.total"] = cost["total"]
                     llm_target.attributes["llm.cost.currency"] = cost["currency"]
+                    if reasoning:
+                        rcost = calculate_llm_cost(model, 0, reasoning)
+                        if rcost:
+                            llm_target.attributes["llm.cost.reasoning"] = rcost[
+                                "output"
+                            ]
                     self._metrics_accumulator["total_cost"] = (
                         self._metrics_accumulator["total_cost"] + cost["total"]
                     )

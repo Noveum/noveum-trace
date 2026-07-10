@@ -117,7 +117,7 @@ class NoveumCustomSpanProcessor(SpanProcessor):
             if scope_name in _PIPECAT_SCOPES:
                 return
 
-            if self._obs._trace is None:
+            if self._obs is None or self._obs._trace is None:
                 return
 
             parent_nov = self._resolve_parent(span)
@@ -149,6 +149,8 @@ class NoveumCustomSpanProcessor(SpanProcessor):
             if scope_name in _PIPECAT_SCOPES:
                 return
 
+            if self._obs is None:
+                return
             span_id = span.context.span_id
             nov = self._map.pop(span_id, None)
             if nov is None or self._obs._trace is None:
@@ -189,6 +191,12 @@ class NoveumCustomSpanProcessor(SpanProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
+
+    def detach(self) -> None:
+        """Release references so a processor we cannot remove from the customer's
+        provider holds no observer object graph and no-ops cheaply thereafter."""
+        self._obs = None
+        self._map.clear()
 
     # ---------------------------------------------------------------------- #
     # Internal helpers                                                        #
@@ -265,3 +273,29 @@ def register_custom_span_processor(observer: Any) -> NoveumCustomSpanProcessor:
         owns_provider,
     )
     return proc
+
+
+def unregister_custom_span_processor(proc: NoveumCustomSpanProcessor) -> None:
+    """Tear down a registered processor at session end so it does not leak.
+
+    If we created the provider, shut it down. Otherwise the customer owns the
+    global provider — OTEL exposes no public API to remove a span processor, so
+    best-effort remove it from the internal multi-processor list, then always
+    ``detach()`` it: a processor we cannot remove then holds no observer object
+    graph and no-ops on every subsequent span (bounding both the memory and the
+    per-span dispatch cost in long-running multi-session servers).
+    """
+    provider = getattr(proc, "_provider", None)
+    try:
+        if getattr(proc, "_owns_provider", False) and provider is not None:
+            provider.shutdown()
+            return
+        if provider is not None:
+            active = getattr(provider, "_active_span_processor", None)
+            procs = getattr(active, "_span_processors", None)
+            if active is not None and isinstance(procs, tuple) and proc in procs:
+                active._span_processors = tuple(p for p in procs if p is not proc)
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("unregister_custom_span_processor: removal failed", exc_info=True)
+    finally:
+        proc.detach()

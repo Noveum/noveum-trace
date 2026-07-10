@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -145,7 +146,8 @@ async def test_function_call_start_result_cancel(ff) -> None:
     llm2 = obs2._active_llm_span
     await obs2._handle_llm_response_end(MagicMock())
     assert llm2 is not None
-    results = llm2.attributes.get("llm.function_call_results", [])
+    # function_call_results is stored as a JSON string (TRACE_DESIGN §5.4).
+    results = json.loads(llm2.attributes.get("llm.function_call_results", "[]"))
     assert any(r.get("cancelled") for r in results)
 
 
@@ -179,6 +181,8 @@ async def test_llm_summary_request_and_result(ff) -> None:
 
 @pytest.mark.asyncio
 async def test_pre_span_function_call_written_to_last_llm_span(ff) -> None:
+    # A function-call frame arriving after the requesting span has closed (active
+    # span is None) is written immediately to the requesting span via the backref.
     obs = _obs()
     last = MagicMock()
     last.attributes = {}
@@ -190,5 +194,5 @@ async def test_pre_span_function_call_written_to_last_llm_span(ff) -> None:
     )
     await obs._handle_function_call_start(MagicMock(frame=prog))
 
-    assert last.attributes.get("llm.function_calls")
-    assert "late1" in obs._pre_span_function_call_ids
+    calls = json.loads(last.attributes.get("llm.function_calls", "[]"))
+    assert any(c.get("tool_call_id") == "late1" for c in calls)

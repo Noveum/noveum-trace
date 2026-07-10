@@ -41,29 +41,33 @@ from noveum_trace.integrations.pipecat.pipecat_observer import (  # noqa: E402
 # OBS-1 — real 1.3.0 StartFrame carries no pipeline.* attrs                     #
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_handle_start_frame_no_pipeline_attrs_on_1x() -> None:
-    # Guards: the belief that pipeline.* is populated on 1.x (real StartFrame
-    # has no allow_interruptions/sample_rate/audio_sample_rate).
-    # Version gate: on 0.0.x the real StartFrame DOES carry allow_interruptions,
-    # so the integration captures pipeline.allow_interruptions there (the VC-2
-    # old-only leg). This is the 1.x leg — skip cleanly on 0.0.x.
+async def test_handle_start_frame_captures_pipeline_attrs_on_1x() -> None:
+    # B2: pipeline.* is populated from the real 1.x StartFrame fields
+    # (audio_in_sample_rate / audio_out_sample_rate / enable_* / report_only_*),
+    # NOT the removed pre-1.x names. Skip cleanly on 0.0.x (VC-2 covers that leg).
     if hasattr(ff.StartFrame(), "allow_interruptions"):
         pytest.skip(
-            "0.0.x StartFrame carries allow_interruptions (captured as "
-            "pipeline.allow_interruptions); 1.x-only assertion — see VC-2."
+            "0.0.x StartFrame carries allow_interruptions; 1.x-only assertion — see VC-2."
         )
     obs = NoveumTraceObserver(record_audio=False)
     trace = Trace(name="pipecat.conversation")
     obs._trace = trace
 
-    sf = ff.StartFrame()  # NO attribute injection — real 1.3.0 frame
+    sf = ff.StartFrame()  # NO attribute injection — real 1.3.0 frame + its defaults
     data = types.SimpleNamespace(frame=sf, source=None)
 
     with patch.object(obs, "_ensure_audio_buffer_recording", new_callable=AsyncMock):
         await obs._handle_start_frame(data)
 
     assert obs._trace is trace
-    assert not [k for k in trace.attributes if k.startswith("pipeline.")]
+    pipeline_keys = {k for k in trace.attributes if k.startswith("pipeline.")}
+    # The real 1.3.0 frame carries these with concrete defaults.
+    assert "pipeline.audio_in_sample_rate" in pipeline_keys
+    assert "pipeline.audio_out_sample_rate" in pipeline_keys
+    assert trace.attributes["pipeline.audio_in_sample_rate"] == sf.audio_in_sample_rate
+    # The removed pre-1.x names must never appear.
+    assert "pipeline.allow_interruptions" not in pipeline_keys
+    assert "pipeline.sample_rate" not in pipeline_keys
 
 
 # --------------------------------------------------------------------------- #

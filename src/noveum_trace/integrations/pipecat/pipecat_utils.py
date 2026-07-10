@@ -19,6 +19,7 @@ from noveum_trace.integrations.pipecat.pipecat_constants import (
     AUDIO_NUM_CHANNELS_DEFAULT,
     AUDIO_SAMPLE_RATE_DEFAULT,
     MAX_TEXT_BUFFER_LENGTH,
+    REASONING_DISJOINT_PROVIDERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,73 @@ def extract_service_settings(processor: Any) -> dict[str, Any]:
             if val is not None and val != {} and "NOT_GIVEN" not in repr(val):
                 settings[attr] = val
 
+        # Gemini thinking / reasoning config (D3). Recorded so a downstream reader
+        # can interpret llm.reasoning_tokens=0 — "thinking disabled by config" vs
+        # "thinking on but produced nothing". Only Google LLM settings expose a
+        # ``thinking`` attribute, so this is a no-op for other providers.
+        if hasattr(raw, "thinking"):
+            settings.update(
+                _extract_thinking_settings(
+                    getattr(raw, "thinking", None), settings.get("model")
+                )
+            )
+
     except Exception as e:
         logger.debug("Failed to extract service settings: %s", e)
 
     return settings
+
+
+def _extract_thinking_settings(thinking: Any, model: Optional[str]) -> dict[str, Any]:
+    """Resolve Gemini thinking config into span-ready settings (D3).
+
+    ``thinking`` is a ``GoogleThinkingConfig`` when the app configured it, else
+    ``None``. When it is ``None``, Pipecat still applies a model-aware default at
+    request time (never written back to ``_settings``): ``gemini-2.5-flash``
+    disables thinking (``thinking_budget=0``); ``gemini-3*flash`` uses
+    ``thinking_level="minimal"``. We mirror that rule so the effective config —
+    and its source — is always recorded, keeping ``reasoning_tokens=0``
+    interpretable in exactly the case the audit hit (app configured nothing).
+
+    Keys returned (any subset): ``thinking_budget``, ``thinking_level``,
+    ``include_thoughts``, ``thinking_enabled``, ``thinking_config_source``.
+    """
+    out: dict[str, Any] = {}
+    try:
+        if thinking is not None and "NOT_GIVEN" not in repr(thinking):
+            budget = getattr(thinking, "thinking_budget", None)
+            level = getattr(thinking, "thinking_level", None)
+            include = getattr(thinking, "include_thoughts", None)
+            if budget is not None:
+                out["thinking_budget"] = int(budget)
+            if level is not None:
+                out["thinking_level"] = str(level)
+            if include is not None:
+                out["include_thoughts"] = bool(include)
+            if budget is not None:
+                out["thinking_enabled"] = int(budget) != 0
+            elif level is not None:
+                out["thinking_enabled"] = True
+            else:
+                # Config object with no budget/level → dynamic thinking (on).
+                out["thinking_enabled"] = True
+            out["thinking_config_source"] = "app"
+            return out
+
+        # thinking is None → mirror Pipecat's request-time model default.
+        if not model or "image" in model:
+            return out
+        if model.startswith("gemini-2.5-flash"):
+            out["thinking_budget"] = 0
+            out["thinking_enabled"] = False
+            out["thinking_config_source"] = "provider_default"
+        elif model.startswith("gemini-3") and "flash" in model:
+            out["thinking_level"] = "minimal"
+            out["thinking_enabled"] = True
+            out["thinking_config_source"] = "provider_default"
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("Failed to extract thinking settings: %s", e)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +359,54 @@ def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
     return out
 
 
+def reasoning_is_extra_output(
+    *,
+    processor: str = "",
+    model: str = "",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: Optional[int] = None,
+    reasoning_tokens: int = 0,
+) -> bool:
+    """
+    Whether ``reasoning_tokens`` must be *added* to ``completion_tokens`` to get
+    the billable output token count.
+
+    Providers disagree on this, and both conventions arrive through the same
+    ``LLMTokenUsage`` object:
+
+    - **OpenAI-compatible** (openai, xai, nvidia, perplexity, sambanova, …):
+      ``completion_tokens`` already includes ``reasoning_tokens`` — it is a
+      breakdown, not an addend (``completion_tokens_details.reasoning_tokens``).
+      Pricing ``completion + reasoning`` here bills reasoning twice.
+    - **Gemini** (``GoogleLLMService``, ``GeminiLiveLLMService``):
+      ``candidates_token_count`` / ``response_token_count`` *exclude*
+      ``thoughts_token_count``, so the two must be summed.
+
+    The processor class name is the primary signal (unambiguous, e.g.
+    ``GoogleLLMService#0``), with the model name as fallback.  For providers
+    matching neither, a ``prompt + completion + reasoning == total`` match
+    confirms the disjoint convention.  The mirrored ``prompt + completion ==
+    total`` check is deliberately *not* used to confirm the inclusive
+    convention: Pipecat's Gemini services fall back to ``total_tokens =
+    total_token_count or (prompt + completion)``, so a missing upstream total
+    makes a disjoint payload look inclusive.
+
+    Anthropic / AWS never populate ``reasoning_tokens``, so they short-circuit
+    to ``False`` on the first check.
+    """
+    if reasoning_tokens <= 0:
+        return False
+
+    hint = f"{processor} {model}".lower()
+    if any(p in hint for p in REASONING_DISJOINT_PROVIDERS):
+        return True
+
+    if total_tokens is None:
+        return False
+    return bool(total_tokens == prompt_tokens + completion_tokens + reasoning_tokens)
+
+
 def extract_metrics_data(frame: Any) -> dict[str, Any]:
     """
     Iterate frame.data, route by isinstance, and return a flat metrics dict.
@@ -355,6 +467,10 @@ def extract_metrics_data(frame: Any) -> dict[str, Any]:
                     model = getattr(item, "model", None)
                     if model:
                         result["llm_model"] = str(model)
+                    # Primary signal for reasoning_is_extra_output().
+                    processor = getattr(item, "processor", None)
+                    if processor:
+                        result["llm_processor"] = str(processor)
 
                 elif isinstance(item, ProcessingMetricsData):
                     val = getattr(item, "value", None)
@@ -463,6 +579,111 @@ def extract_stt_confidence(result: Any) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
+def _obj_get(obj: Any, key: str) -> Any:
+    """Read ``key`` from an object attribute or a dict key (STT results are one or
+    the other depending on SDK version). Returns ``None`` when absent."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _first_alternative(result: Any) -> Any:
+    """``result.channel.alternatives[0]`` for a Deepgram-style result, or ``None``."""
+    alts = _obj_get(_obj_get(result, "channel"), "alternatives")
+    if alts:
+        try:
+            return alts[0]
+        except (IndexError, TypeError, KeyError):
+            return None
+    return None
+
+
+# Fields captured per word from a Deepgram result (timing + diarization speaker).
+_STT_WORD_FIELDS: tuple[str, ...] = (
+    "word",
+    "start",
+    "end",
+    "confidence",
+    "punctuated_word",
+    "speaker",
+    "language",
+)
+
+
+def extract_stt_result_data(result: Any, max_words: int = 500) -> dict[str, Any]:
+    """Extract the rich provider fields the STT handler otherwise drops (§4).
+
+    Reads the *same* ``result`` object ``extract_stt_confidence`` already uses. For
+    Deepgram this exposes the per-word timing/diarization array
+    (``result.channel.alternatives[0].words`` — each word carries ``start``/``end``/
+    ``confidence``/``punctuated_word``/``speaker``) and the request id
+    (``result.metadata.request_id``). Robust to both SDK objects and plain dicts;
+    returns ``{}`` on anything unexpected.
+
+    Returns a dict with any subset of:
+      ``words``           — list of per-word dicts (capped at ``max_words``)
+      ``words_truncated`` — ``True`` if the array was capped
+      ``request_id``      — provider request id (str)
+    """
+    out: dict[str, Any] = {}
+    if result is None:
+        return out
+    try:
+        alt = _first_alternative(result)
+        words = _obj_get(alt, "words")
+        if words:
+            word_dicts: list[dict[str, Any]] = []
+            for w in list(words)[:max_words]:
+                wd = {f: _obj_get(w, f) for f in _STT_WORD_FIELDS}
+                wd = {k: v for k, v in wd.items() if v is not None}
+                if wd:
+                    word_dicts.append(wd)
+            if word_dicts:
+                out["words"] = word_dicts
+                if len(words) > max_words:
+                    out["words_truncated"] = True
+
+        request_id = _obj_get(_obj_get(result, "metadata"), "request_id")
+        if request_id:
+            out["request_id"] = str(request_id)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("Failed to extract STT result data: %s", e)
+    return out
+
+
+def derive_provider(processor: Any, model: Optional[str] = None) -> Optional[str]:
+    """Best-effort provider identity for an operation span (D5).
+
+    Prefers the model registry (authoritative for LLMs), falling back to the pipecat
+    service class name (the reliable source for STT/TTS, which aren't priced):
+    ``GoogleLLMService`` → ``google``, ``DeepgramSTTService`` → ``deepgram``,
+    ``ElevenLabsTTSService`` → ``elevenlabs``. Returns ``None`` when nothing resolves.
+    """
+    if model:
+        try:
+            from noveum_trace.utils.llm_utils import get_model_info
+
+            info = get_model_info(model)
+            if info and getattr(info, "provider", None):
+                return str(info.provider)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    if processor is not None:
+        name = type(processor).__name__
+        if name.endswith("Service"):
+            name = name[: -len("Service")]
+        for role in ("STT", "TTS", "LLM"):
+            if name.endswith(role):
+                name = name[: -len(role)]
+                break
+        if name:
+            return name.lower()
+    return None
+
+
 def extract_frame_text(frame: Any) -> Optional[str]:
     """Return text content from any text-carrying frame type."""
     try:
@@ -508,8 +729,16 @@ def extract_function_call_data(frame: Any) -> dict[str, Any]:
                     data["result"] = json.dumps(res, default=str)
                 except Exception:
                     data["result"] = str(res)
-        if hasattr(frame, "run_llm"):
-            data["run_llm"] = bool(frame.run_llm)
+        # run_llm: pipecat's FunctionCallResultFrame.run_llm defaults to None
+        # ("let the aggregator decide", the common case). Do NOT coerce None->False
+        # (that misrecords turns that did re-run the LLM); also consult
+        # frame.properties.run_llm where an explicit value lives. Omit when unknown.
+        run_llm = getattr(frame, "run_llm", None)
+        if run_llm is None:
+            props = getattr(frame, "properties", None)
+            run_llm = getattr(props, "run_llm", None) if props is not None else None
+        if run_llm is not None:
+            data["run_llm"] = bool(run_llm)
     except Exception as e:
         logger.debug("Failed to extract function call data: %s", e)
 

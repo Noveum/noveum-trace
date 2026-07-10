@@ -161,8 +161,10 @@ async def test_handle_start_frame_ensures_trace_and_attrs(pipecat_frames) -> Non
     obs._trace = mock_trace
 
     sf = pipecat_frames.StartFrame()
-    sf.allow_interruptions = True
-    sf.sample_rate = 16000
+    # B2: the integration reads the real 1.x fields. Inject known values on those.
+    sf.audio_in_sample_rate = 16000
+    sf.audio_out_sample_rate = 24000
+    sf.enable_metrics = True
 
     data = MagicMock()
     data.frame = sf
@@ -172,8 +174,14 @@ async def test_handle_start_frame_ensures_trace_and_attrs(pipecat_frames) -> Non
 
     mock_trace.set_attributes.assert_called()
     call_kw = mock_trace.set_attributes.call_args[0][0]
-    assert call_kw.get("pipeline.allow_interruptions") is True
-    assert call_kw.get("pipeline.sample_rate") == 16000
+    assert call_kw.get("pipeline.audio_in_sample_rate") == 16000
+    assert call_kw.get("pipeline.audio_out_sample_rate") == 24000
+    assert call_kw.get("pipeline.enable_metrics") is True
+    # NOTE: no "allow_interruptions not captured" assertion here — this test runs on
+    # BOTH pipecat lines, and on 0.0.x the bare StartFrame carries
+    # allow_interruptions (correctly captured by the union read). The 1.x-only
+    # "removed names not captured" invariant lives in the version-gated tests
+    # test_handle_start_frame_captures_pipeline_attrs_on_1x / vc2 ...attrs_new.
 
 
 @pytest.mark.asyncio

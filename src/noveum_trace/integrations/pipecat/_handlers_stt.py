@@ -55,8 +55,10 @@ from noveum_trace.core.span import SpanEvent
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
 from noveum_trace.integrations.pipecat.pipecat_constants import SPAN_STT
 from noveum_trace.integrations.pipecat.pipecat_utils import (
+    derive_provider,
     extract_service_settings,
     extract_stt_confidence,
+    extract_stt_result_data,
     upload_audio_frames,
 )
 
@@ -282,6 +284,9 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
             settings = extract_service_settings(source)
             if settings.get("model"):
                 attributes["stt.model"] = settings["model"]
+            provider = derive_provider(source, settings.get("model"))
+            if provider:
+                attributes["stt.provider"] = provider
 
         # Reuse the long-lived span if one is open, otherwise create a point span
         span = self._active_stt_span
@@ -310,6 +315,19 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
                 conf = extract_stt_confidence(raw_result)
                 if conf is not None:
                     span.attributes["stt.confidence"] = conf
+
+                # §4: capture the rich provider result the frame already carries —
+                # the per-word timing/diarization array and the request id — as a
+                # single JSON attribute rather than many scalar keys.
+                result_data = extract_stt_result_data(raw_result)
+                if result_data.get("words"):
+                    span.attributes["stt.words"] = json.dumps(
+                        result_data["words"], default=str
+                    )
+                    if result_data.get("words_truncated"):
+                        span.attributes["stt.words_truncated"] = True
+                if result_data.get("request_id"):
+                    span.attributes["stt.request_id"] = result_data["request_id"]
 
                 vad_start = self._vad_speech_start_time
                 if vad_start is not None:

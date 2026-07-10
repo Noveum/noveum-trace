@@ -190,3 +190,5 @@ SCRATCH.md
 .cursor/
 dev-mode/
 CLAUDE.md
+
+pipecat_audit/

@@ -320,3 +320,51 @@ def test_late_attributes_from_zero_are_all_flushed(
     assert nov.attributes.get("a") == 1
     assert nov.attributes.get("b") == "two"
     assert nov.attributes.get("c") is True
+
+
+# --------------------------------------------------------------------------- #
+# CS-9 — teardown removes + detaches the processor from a customer-owned        #
+#        provider (no per-session processor/observer leak)                      #
+# --------------------------------------------------------------------------- #
+def test_unregister_removes_and_detaches_on_customer_provider() -> None:
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from noveum_trace.integrations.pipecat.custom_spans import (
+        register_custom_span_processor,
+        unregister_custom_span_processor,
+    )
+
+    # Customer owns the global provider (owns_provider=False path).
+    provider = TracerProvider()
+    otel_trace.set_tracer_provider(provider)
+
+    obs = _observer()
+    proc = register_custom_span_processor(obs)
+    assert proc._owns_provider is False
+    active = provider._active_span_processor
+    assert proc in active._span_processors  # registered on the customer provider
+
+    unregister_custom_span_processor(proc)
+
+    assert proc not in active._span_processors  # removed — no accumulation/leak
+    assert proc._obs is None  # detached — no observer object graph pinned
+    # A span arriving after detach must no-op (never touches the dead observer).
+    proc.on_start(SimpleNamespace(instrumentation_scope=SimpleNamespace(name="x")))
+
+
+# --------------------------------------------------------------------------- #
+# CS-10 — teardown shuts down a provider we created ourselves                   #
+# --------------------------------------------------------------------------- #
+def test_unregister_shuts_down_owned_provider() -> None:
+    from noveum_trace.integrations.pipecat.custom_spans import (
+        unregister_custom_span_processor,
+    )
+
+    obs = _observer()
+    proc = _register(obs)  # no provider set -> register creates & owns one
+    assert proc._owns_provider is True
+    with patch.object(proc._provider, "shutdown") as shutdown:
+        unregister_custom_span_processor(proc)
+    shutdown.assert_called_once()
+    assert proc._obs is None  # detached

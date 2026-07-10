@@ -187,6 +187,11 @@ class NoveumTraceObserver(
         self._capture_system_logs = capture_system_logs
         self._capture_session_metadata = capture_session_metadata
 
+        # Distinct error messages already reflected in the native trace
+        # ``error_count`` (D1) — dedupes the multiple ErrorFrames Pipecat emits for
+        # a single provider failure so ``error_count`` counts failures, not frames.
+        self._native_error_messages: set[str] = set()
+
         # ------------------------------------------------------------------ #
         # Conversation-level state                                            #
         # ------------------------------------------------------------------ #
@@ -203,13 +208,13 @@ class NoveumTraceObserver(
         # Active operation spans
         self._active_llm_span: Any = None
         self._active_tts_span: Any = None
-        # tool_call_id → call dict
+        # tool_call_id → call dict (kept for InProgress dedup + result enrichment)
         self._pending_function_calls: dict[str, dict[str, Any]] = {}
-        # completed/cancelled results
-        self._function_call_results: list[dict[str, Any]] = []
-        # tool_call_ids written directly to _last_llm_span (between span 1 close and
-        # span 2 open); filtered out of span 2's llm.function_calls to avoid double-counting.
-        self._pre_span_function_call_ids: set[str] = set()
+        # tool_call_id → the LLM span that REQUESTED the call, so a result/cancel
+        # lands on the requesting span even after a follow-up span has opened.
+        self._function_call_owner: dict[str, Any] = {}
+        # tool_call_ids whose result/cancel has been written (dedup double-broadcast).
+        self._resolved_function_call_ids: set[str] = set()
 
         # Backrefs to the most-recently-closed LLM/TTS span.
         #
@@ -224,7 +229,10 @@ class NoveumTraceObserver(
 
         # Text buffers
         self._llm_text_buffer: list[str] = []
-        self._tts_text_buffer: list[str] = []
+        # TTS text buffers hold (text, includes_inter_frame_spaces) tuples so spacing
+        # can be reconstructed; final = sentence-aggregated, interim = word/token.
+        self._tts_text_buffer: list[tuple[str, bool]] = []
+        self._tts_text_interim_buffer: list[tuple[str, bool]] = []
         self._transcription_buffer: list[str] = []
 
         # LLM context stash (filled by LLMContextFrame, flushed on LLMFullResponseStartFrame)
@@ -234,6 +242,7 @@ class NoveumTraceObserver(
         self._llm_thought_buffer: list[str] = []
         self._llm_thoughts_list: list[str] = []
         self._llm_thought_signatures_list: list[str] = []
+        self._pending_thought_signatures: list[str] = []
 
         # Audio buffers (populated only when record_audio=True)
         self._stt_audio_buffer: list[Any] = []
@@ -937,7 +946,25 @@ class NoveumTraceObserver(
         if self._trace:
             frame = data.frame
             attrs: dict[str, Any] = {}
-            for attr in ("allow_interruptions", "sample_rate", "audio_sample_rate"):
+            # B2: read the UNION of both pipecat lines' StartFrame fields. The
+            # original bug was reading ONLY the pre-1.x names (which don't exist on
+            # 1.x → pipeline.* always empty); the fix must ADD the 1.x fields, not
+            # drop the legacy ones — ``getattr(..., None)`` is safe for names absent
+            # on whichever version is running, so 0.0.x still captures
+            # ``allow_interruptions`` and 1.x captures the new audio/enable fields.
+            for attr in (
+                # 0.0.x fields (absent on 1.x → skipped)
+                "allow_interruptions",
+                "sample_rate",
+                "audio_sample_rate",
+                # 1.x fields (absent on 0.0.x → skipped)
+                "audio_in_sample_rate",
+                "audio_out_sample_rate",
+                "enable_metrics",
+                "enable_usage_metrics",
+                "enable_tracing",
+                "report_only_initial_ttfb",
+            ):
                 val = getattr(frame, attr, None)
                 if val is not None:
                     attrs[f"pipeline.{attr}"] = val
@@ -997,7 +1024,10 @@ class NoveumTraceObserver(
         Idempotent: if both ``MetricsFrame`` and ``LLMUsageMetricsFrame`` are
         emitted for the same LLM call, the last write wins (same span target).
         """
-        from noveum_trace.integrations.pipecat.pipecat_utils import calculate_llm_cost
+        from noveum_trace.integrations.pipecat.pipecat_utils import (
+            calculate_llm_cost,
+            reasoning_is_extra_output,
+        )
 
         llm_target = self._active_llm_span or self._last_llm_span
         if llm_target is None:
@@ -1047,12 +1077,31 @@ class NoveumTraceObserver(
         )
         if model:
             llm_target.attributes["llm.model"] = model
-            cost = calculate_llm_cost(model, prompt, completion)
+            # D9: price reasoning/thinking tokens at the output rate, adding them to
+            # completion only for providers that report the two disjoint (Gemini) —
+            # OpenAI-compatible providers already count reasoning inside
+            # completion_tokens. Mirrors _MetricsHandlerMixin._handle_metrics.
+            reasoning = int(getattr(tokens_obj, "reasoning_tokens", 0) or 0)
+            billable_output = completion
+            if reasoning_is_extra_output(
+                processor=str(getattr(frame, "processor", "") or ""),
+                model=str(model),
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=total,
+                reasoning_tokens=reasoning,
+            ):
+                billable_output += reasoning
+            cost = calculate_llm_cost(model, prompt, billable_output)
             if cost:
                 llm_target.attributes["llm.cost.input"] = cost["input"]
                 llm_target.attributes["llm.cost.output"] = cost["output"]
                 llm_target.attributes["llm.cost.total"] = cost["total"]
                 llm_target.attributes["llm.cost.currency"] = cost["currency"]
+                if reasoning:
+                    rcost = calculate_llm_cost(model, 0, reasoning)
+                    if rcost:
+                        llm_target.attributes["llm.cost.reasoning"] = rcost["output"]
                 self._metrics_accumulator["total_cost"] = (
                     self._metrics_accumulator["total_cost"] + cost["total"]
                 )
@@ -1223,6 +1272,7 @@ class NoveumTraceObserver(
         self._llm_thought_buffer.clear()
         self._llm_thoughts_list.clear()
         self._llm_thought_signatures_list.clear()
+        self._pending_thought_signatures.clear()
 
         # Close any in-flight STT span
         if self._active_stt_span and not self._active_stt_span.is_finished():
@@ -1240,6 +1290,10 @@ class NoveumTraceObserver(
 
         for span in filter(None, [self._active_llm_span, self._active_tts_span]):
             if not span.is_finished():
+                # D8: on an abnormal close there is no TTSStoppedFrame, so flush any
+                # buffered TTS text here before finishing (otherwise it is lost).
+                if span is self._active_tts_span:
+                    self._flush_tts_text(span)
                 if span.attributes.get("pipecat_span_status") != "error":
                     span.attributes["pipecat_span_status"] = (
                         "cancelled" if cancelled else "ok"
@@ -1251,7 +1305,8 @@ class NoveumTraceObserver(
         self._last_tts_span = None
 
         self._pending_function_calls.clear()
-        self._function_call_results.clear()
+        self._function_call_owner.clear()
+        self._resolved_function_call_ids.clear()
 
         if self._pending_turn_eou_metrics:
             logger.debug(
@@ -1309,13 +1364,21 @@ class NoveumTraceObserver(
         except Exception as e:
             logger.warning("Failed to finish pipecat trace: %s", e, exc_info=True)
 
-        # Tear down the OTEL provider if we created it.
+        # Tear down / detach the custom-span processor so it does not leak on the
+        # customer's global TracerProvider (OTEL has no public remove API): if we
+        # own the provider, shut it down; otherwise best-effort unregister and
+        # detach so a lingering processor holds no observer graph and no-ops.
         proc = self._custom_span_processor
-        if proc is not None and getattr(proc, "_owns_provider", False):
+        if proc is not None:
             try:
-                proc._provider.shutdown()
+                from noveum_trace.integrations.pipecat.custom_spans import (
+                    unregister_custom_span_processor,
+                )
+
+                unregister_custom_span_processor(proc)
             except Exception:
-                pass
+                logger.debug("custom-span processor teardown failed", exc_info=True)
+            self._custom_span_processor = None
 
         logger.debug(
             "_finish_conversation completed — trace flushed (cancelled=%s)", cancelled
@@ -1330,6 +1393,7 @@ class NoveumTraceObserver(
         }
         self._transcription_buffer = []
         self._llm_text_buffer.clear()
+        self._native_error_messages.clear()
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()
