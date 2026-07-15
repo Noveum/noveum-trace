@@ -34,7 +34,7 @@ Example (LLM tracing with context managers):
 
 """
 
-__version__ = "1.5.17"
+__version__ = "1.5.18"
 __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
