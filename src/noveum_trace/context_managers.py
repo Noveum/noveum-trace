@@ -173,13 +173,13 @@ class LLMContextManager(TraceContextManager):
         return self
 
     def set_input_attributes(self, **attributes: Any) -> None:
-        """Set input-related attributes."""
+        """Set input-related attributes under the ``llm.input.*`` namespace."""
         if self.span and self.capture_inputs:
             input_attrs = {f"llm.input.{k}": v for k, v in attributes.items()}
             self.span.set_attributes(input_attrs)
 
     def set_output_attributes(self, **attributes: Any) -> None:
-        """Set output-related attributes."""
+        """Set output-related attributes under the ``llm.output.*`` namespace."""
         if self.span and self.capture_outputs:
             output_attrs = {f"llm.output.{k}": v for k, v in attributes.items()}
             self.span.set_attributes(output_attrs)
@@ -300,20 +300,15 @@ class LLMContextManager(TraceContextManager):
                 )
 
             # Add other metadata attributes
-            if "llm.context_window" in metadata:
-                attributes_to_set["llm.context_window"] = metadata["llm.context_window"]
-            if "llm.max_output_tokens" in metadata:
-                attributes_to_set["llm.max_output_tokens"] = metadata[
-                    "llm.max_output_tokens"
-                ]
-            if "llm.finish_reason" in metadata:
-                attributes_to_set["llm.finish_reason"] = metadata["llm.finish_reason"]
-            if "llm.system_fingerprint" in metadata:
-                attributes_to_set["llm.system_fingerprint"] = metadata[
-                    "llm.system_fingerprint"
-                ]
-            if "llm.created" in metadata:
-                attributes_to_set["llm.created"] = metadata["llm.created"]
+            for key in (
+                "llm.context_window",
+                "llm.max_output_tokens",
+                "llm.finish_reason",
+                "llm.system_fingerprint",
+                "llm.created",
+            ):
+                if key in metadata:
+                    attributes_to_set[key] = metadata[key]
 
             # Set all attributes at once
             if attributes_to_set:
@@ -429,6 +424,21 @@ class NoOpSpan:
         pass
 
     def set_status(self, status: Any, message: Optional[str] = None) -> None:
+        pass
+
+    def set_input_attributes(self, **attributes: Any) -> None:
+        pass
+
+    def set_output_attributes(self, **attributes: Any) -> None:
+        pass
+
+    def set_usage_attributes(
+        self,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        cost: Optional[float] = None,
+    ) -> None:
         pass
 
     def capture_response(self, response: Any) -> None:

@@ -131,6 +131,73 @@ class Span:
         self.attributes.update(attributes)
         return self
 
+    def set_input_attributes(self, **attributes: Any) -> "Span":
+        """
+        Set input-related attributes under the ``span.input.*`` namespace.
+
+        Subclasses/wrappers for specific span kinds (e.g. LLM spans) may override
+        this to use a domain-specific namespace.
+
+        Args:
+            **attributes: Input attributes (e.g. ``messages``, ``tools_available``)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.set_attributes(
+            {f"span.input.{key}": value for key, value in attributes.items()}
+        )
+
+    def set_output_attributes(self, **attributes: Any) -> "Span":
+        """
+        Set output-related attributes under the ``span.output.*`` namespace.
+
+        Args:
+            **attributes: Output attributes (e.g. ``response``)
+
+        Returns:
+            Self for method chaining
+        """
+        return self.set_attributes(
+            {f"span.output.{key}": value for key, value in attributes.items()}
+        )
+
+    def set_usage_attributes(
+        self,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        cost: Optional[float] = None,
+    ) -> "Span":
+        """
+        Set token-usage attributes under the ``span.usage.*`` namespace.
+
+        Cost estimation is intentionally not performed here; it is specific to
+        LLM spans, which override this method.
+
+        Args:
+            input_tokens: Prompt tokens consumed
+            output_tokens: Completion tokens produced
+            total_tokens: Total tokens (derived from the above when omitted)
+            cost: Optional explicit cost value
+
+        Returns:
+            Self for method chaining
+        """
+        usage_attrs: dict[str, Any] = {}
+        if input_tokens is not None:
+            usage_attrs["span.usage.input_tokens"] = input_tokens
+        if output_tokens is not None:
+            usage_attrs["span.usage.output_tokens"] = output_tokens
+        if total_tokens is not None:
+            usage_attrs["span.usage.total_tokens"] = total_tokens
+        elif input_tokens is not None and output_tokens is not None:
+            usage_attrs["span.usage.total_tokens"] = input_tokens + output_tokens
+        if cost is not None:
+            usage_attrs["span.usage.cost"] = cost
+
+        return self.set_attributes(usage_attrs)
+
     def add_event(
         self,
         name: str,
