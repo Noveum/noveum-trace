@@ -10,6 +10,7 @@ Handles:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -221,16 +222,20 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
 
             tts_status = "ok"
             if self._record_audio and self._tts_audio_buffer:
+                client = self._get_client()
                 audio_uuid = str(uuid.uuid4())
                 upload_ok = False
                 try:
-                    upload_ok = upload_audio_frames(
+                    # WAV encoding is CPU-bound and blocks the event loop; run it off
+                    # the loop thread, matching _handlers_stt._handle_transcription.
+                    upload_ok = await asyncio.to_thread(
+                        upload_audio_frames,
                         self._tts_audio_buffer,
                         audio_uuid,
                         "tts",
                         span.trace_id,
                         span.span_id,
-                        client=self._get_client(),
+                        client,
                     )
                 except Exception as e:  # pylint: disable=broad-except
                     logger.warning(
