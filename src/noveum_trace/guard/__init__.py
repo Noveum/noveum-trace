@@ -1,5 +1,6 @@
 from noveum_trace.guard._state import attach_policy, detach_policy, refresh
 from noveum_trace.guard.api_client import GuardAPIClient
+from noveum_trace.guard.api_client_http import HttpGuardAPIClient
 from noveum_trace.guard.decision import PolicyDecision
 from noveum_trace.guard.engine import PolicyEngine
 from noveum_trace.guard.exceptions import GuardBackendUnavailable, NoveumGuardBlocked
@@ -54,6 +55,7 @@ def supported_providers() -> list[str]:
 __all__ = [
     # Core
     "GuardAPIClient",
+    "HttpGuardAPIClient",
     "PolicyDecision",
     "PolicyEngine",
     "NoveumGuardBlocked",

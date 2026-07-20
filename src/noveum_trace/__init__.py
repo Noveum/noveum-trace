@@ -130,6 +130,7 @@ def init(
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
     service_version: Optional[str] = None,
+    organization: Optional[str] = None,
     policies: Optional[list[Any]] = None,
     guard_enabled: bool = False,
     guard_fail_open_on_backend_unavailable: bool = False,
@@ -239,15 +240,29 @@ def init(
 
             try:
                 from noveum_trace.guard._state import set_guard
-                from noveum_trace.guard.api_client import GuardAPIClient
                 from noveum_trace.guard.engine import PolicyEngine
                 from noveum_trace.guard.poller import PolicyPoller
                 from noveum_trace.guard.types import PolicyContext
 
-                _api_client = GuardAPIClient(
-                    api_key=api_key or "",
-                    base_url=endpoint or DEFAULT_ENDPOINT,
-                )
+                # A real API key selects the HTTP backend (spend is shared across
+                # processes via /policies/state + /policies/usage). No key keeps
+                # the in-memory stub for local dev / tests.
+                _resolved_key = api_key or ""
+                if _resolved_key:
+                    from noveum_trace.guard.api_client_http import HttpGuardAPIClient
+
+                    _api_client: Any = HttpGuardAPIClient(
+                        api_key=_resolved_key,
+                        base_url=endpoint or DEFAULT_ENDPOINT,
+                        organization_slug=organization,
+                    )
+                else:
+                    from noveum_trace.guard.api_client import GuardAPIClient
+
+                    _api_client = GuardAPIClient(
+                        api_key="",
+                        base_url=endpoint or DEFAULT_ENDPOINT,
+                    )
                 _engine = PolicyEngine(
                     _api_client,
                     fail_open_on_backend_unavailable=(
@@ -308,6 +323,12 @@ def shutdown() -> None:
         _guard_poller = _guard_state.get_poller()
         if _guard_poller is not None:
             _guard_poller.stop()
+        # Drain any queued usage pushes before dropping the engine.
+        _guard_engine = _guard_state.get_engine()
+        if _guard_engine is not None:
+            _close = getattr(_guard_engine._api_client, "close", None)
+            if callable(_close):
+                _close()
         _guard_state.clear()
 
         if _client:
