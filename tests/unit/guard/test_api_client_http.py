@@ -7,6 +7,7 @@ bodies, response mapping) without a network.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import httpx
@@ -165,8 +166,17 @@ class TestReportUsage:
         )
         api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
         assert [c for c in _FakeClient.calls if c["method"] == "POST"] == []
-        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")  # hits batch_max → flush
-        posts = [c for c in _FakeClient.calls if c["method"] == "POST"]
+        # Filling the batch wakes the worker; the flush runs on its thread (never
+        # inline on the caller). With flush_interval=3600 only the wake can fire
+        # it, so a POST appearing means the batch-full signal worked.
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        deadline = time.time() + 5.0
+        posts: list = []
+        while time.time() < deadline:
+            posts = [c for c in _FakeClient.calls if c["method"] == "POST"]
+            if posts:
+                break
+            time.sleep(0.01)
         assert len(posts) == 1
         assert len(posts[0]["json"]) == 2
         api.close()

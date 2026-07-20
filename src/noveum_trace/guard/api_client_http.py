@@ -54,6 +54,9 @@ class HttpGuardAPIClient(GuardAPIClient):
         self._queue: list[tuple[str, dict[str, Any]]] = []
         self._queue_lock = threading.Lock()
         self._stop = threading.Event()
+        # Set to wake the worker for an early flush (batch full / shutdown) so the
+        # caller never blocks on the HTTP request itself.
+        self._wake = threading.Event()
         self._flush_thread: Optional[threading.Thread] = None
 
     # HTTP helpers
@@ -123,7 +126,9 @@ class HttpGuardAPIClient(GuardAPIClient):
             full = len(self._queue) >= self._batch_max
         self._ensure_thread()
         if full:
-            self._flush_once()
+            # Wake the worker for a prompt flush; the POST runs on its thread so
+            # the caller returns without waiting on the network.
+            self._wake.set()
 
     # reserve/reconcile have no backend equivalent; CostCapPolicy must not call
     # them (it checks supports_reservation first). Guard against wiring bugs.
@@ -189,7 +194,12 @@ class HttpGuardAPIClient(GuardAPIClient):
             self._flush_thread.start()
 
     def _run(self) -> None:
-        while not self._stop.wait(timeout=self._flush_interval):
+        # Flush on the interval, or earlier when woken by a full batch / shutdown.
+        while not self._stop.is_set():
+            self._wake.wait(timeout=self._flush_interval)
+            self._wake.clear()
+            if self._stop.is_set():
+                break
             try:
                 self._flush_once()
             except Exception:  # never let the flush thread die
@@ -235,6 +245,7 @@ class HttpGuardAPIClient(GuardAPIClient):
     def close(self) -> None:
         """Stop the flush thread and drain any queued usage events."""
         self._stop.set()
+        self._wake.set()  # wake the worker so it exits without waiting the interval
         if self._flush_thread:
             self._flush_thread.join(timeout=self._flush_interval * 2)
         self._flush_once()

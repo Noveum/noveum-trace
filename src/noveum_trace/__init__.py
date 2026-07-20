@@ -246,8 +246,10 @@ def init(
 
                 # A real API key selects the HTTP backend (spend is shared across
                 # processes via /policies/state + /policies/usage). No key keeps
-                # the in-memory stub for local dev / tests.
-                _resolved_key = api_key or ""
+                # the in-memory stub for local dev / tests. Read from the
+                # resolved SDK config so NOVEUM_API_KEY (not just the explicit
+                # api_key argument) is honored.
+                _resolved_key = get_config().api_key or ""
                 if _resolved_key:
                     from noveum_trace.guard.api_client_http import HttpGuardAPIClient
 
