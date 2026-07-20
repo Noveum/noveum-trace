@@ -85,6 +85,7 @@ class NoveumClient:
         api_key: Optional[str] = None,
         project: Optional[str] = None,
         config: Optional["Config"] = None,
+        transport_instance: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Noveum client.
@@ -93,6 +94,14 @@ class NoveumClient:
             api_key: API key for authentication
             project: Project name
             config: Optional configuration instance
+            transport_instance: Optional transport instance (e.g.
+                ``DeferredTransport``). When provided it is used as-is: no
+                ``HttpTransport`` is built (so no background batch thread
+                starts) and no ``atexit`` shutdown hook is registered — the
+                caller owns the lifecycle. Intended for per-call clients in
+                multi-call host processes. (Named distinctly from the
+                ``transport`` CONFIG key, which still flows through
+                ``**kwargs`` to ``configure()`` as before.)
             **kwargs: Additional configuration options
         """
 
@@ -114,15 +123,21 @@ class NoveumClient:
         else:
             self.config = get_config()
 
-        self.transport = HttpTransport(self.config)
+        if transport_instance is not None:
+            self.transport = transport_instance
+        else:
+            self.transport = HttpTransport(self.config)
 
         # State management
         self._active_traces: dict[str, Trace] = {}
         self._lock = threading.RLock()
         self._shutdown = False
 
-        # Register shutdown handler
-        atexit.register(self.shutdown)
+        # Register shutdown handler (skipped for injected transports: those
+        # clients are short-lived and explicitly managed, and per-instance
+        # atexit entries would accumulate in long-running host processes).
+        if transport_instance is None:
+            atexit.register(self.shutdown)
 
         logger.info("Noveum Trace client initialized")
 
@@ -430,6 +445,15 @@ class NoveumClient:
         if self._shutdown:
             return
 
+        # Drop the atexit reference so shut-down clients can be garbage
+        # collected — otherwise a long-lived process that constructs many
+        # clients accumulates one atexit entry (holding the client alive)
+        # per instance. Safe when never registered (transport-injected).
+        try:
+            atexit.unregister(self.shutdown)
+        except Exception:
+            pass
+
         try:
             logger.info("Shutting down Noveum Trace client")
         except (ValueError, OSError, RuntimeError, Exception):
@@ -466,6 +490,87 @@ class NoveumClient:
             self.transport.export_trace(trace)
         except Exception as e:
             logger.error(f"Failed to export trace {trace.trace_id}: {e}")
+
+    def send_trace_dict(self, trace_data: dict[str, Any]) -> None:
+        """
+        Export a pre-serialized trace snapshot (``Trace.to_dict()`` shape),
+        synchronously — returns only after the API accepted the trace.
+
+        Intended for deferred pipelines: one process builds a trace (e.g. a
+        deferred ``NoveumTraceObserver``), persists ``trace.to_dict()``, and a
+        later process reconstructs and exports it here. Wire enrichment
+        (project, environment, sdk, otel blocks) is applied at export time
+        from THIS client's config, so the snapshot itself stays raw. The send
+        is direct (no batch queue): success means delivered, and failures
+        raise instead of vanishing into a background thread's logs.
+
+        Blocking: performs network I/O inline — call via a worker thread
+        (e.g. ``asyncio.to_thread``) from async code.
+
+        Args:
+            trace_data: Dict produced by ``Trace.to_dict()``.
+
+        Raises:
+            NoveumTraceError: If the client has been shutdown, the dict cannot
+                be reconstructed into a Trace, or the send fails.
+        """
+        if self._shutdown:
+            raise NoveumTraceError("Client has been shutdown")
+
+        try:
+            trace = Trace.from_dict(trace_data)
+        except Exception as e:
+            raise NoveumTraceError(f"Invalid trace snapshot: {e}") from e
+
+        # Direct send, not finish_trace()/export_trace(): from_dict restores
+        # end_time-bearing traces as already finished (finish_trace would
+        # no-op), and the batch queue would hide the delivery outcome.
+        try:
+            self.transport.send_trace_now(trace)
+        except NoveumTraceError:
+            raise
+        except Exception as e:
+            raise NoveumTraceError(f"Failed to send trace {trace.trace_id}: {e}") from e
+        logger.debug(f"Sent pre-serialized trace: {trace.trace_id}")
+
+    def send_audio_sync(
+        self,
+        audio_data: bytes,
+        trace_id: str,
+        span_id: str,
+        audio_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Send one audio file synchronously — returns only after the API
+        accepted it, raises on failure.
+
+        The delivery-observed counterpart of :meth:`export_audio` (which
+        enqueues fire-and-forget and swallows failures). Use this from
+        batch/completion jobs that must report true per-item outcomes.
+
+        Blocking: performs network I/O inline — call via a worker thread
+        (e.g. ``asyncio.to_thread``) from async code.
+
+        Raises:
+            NoveumTraceError: If the client has been shutdown or the upload
+                fails.
+        """
+        if self._shutdown:
+            raise NoveumTraceError("Client has been shutdown")
+
+        try:
+            self.transport.send_audio_now(
+                audio_data=audio_data,
+                trace_id=trace_id,
+                span_id=span_id,
+                audio_uuid=audio_uuid,
+                metadata=metadata,
+            )
+        except NoveumTraceError:
+            raise
+        except Exception as e:
+            raise NoveumTraceError(f"Failed to send audio {audio_uuid}: {e}") from e
 
     def export_audio(
         self,

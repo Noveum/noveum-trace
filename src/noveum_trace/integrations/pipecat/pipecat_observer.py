@@ -71,7 +71,7 @@ import logging
 import uuid
 import wave
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, Optional
 
 from noveum_trace.integrations.pipecat._error_capture import _ErrorCaptureMixin
@@ -137,6 +137,10 @@ class NoveumTraceObserver(
         capture_errors: bool = True,
         capture_system_logs: bool = False,
         capture_session_metadata: bool = True,
+        client: Any = None,
+        deferred: bool = False,
+        audio_sink: Optional[Callable[..., Awaitable[Any]]] = None,
+        register_finish_safety_net: bool = True,
         **kwargs: Any,
     ) -> None:
         """
@@ -170,10 +174,80 @@ class NoveumTraceObserver(
             capture_session_metadata: When ``True`` (default), transport
                 and runner metadata (room URL, transport type, idle timeout, etc.)
                 are stamped onto the root conversation trace at connection time.
+            client: Optional per-observer ``NoveumClient``. When set,
+                :meth:`_get_client` resolves to it instead of the module-global
+                client, so multiple observers in one process can each talk to a
+                different Noveum project, and ``start_trace`` is called with
+                ``set_as_current=False`` (per-call clients never write the
+                shared current-trace context). When ``None`` (default), the
+                global client from ``noveum_trace.init()`` is used as before.
+            deferred: Declares that this observer's client uses a
+                capture-only transport (``DeferredTransport``): the trace is
+                built and finished normally but the export is retained in
+                memory for :meth:`build_payload_snapshot` instead of being
+                sent — the caller persists the snapshot and exports it later
+                via ``NoveumClient.send_trace_dict``. The flag's enforcement
+                job: deferred + ``record_audio=True`` REQUIRES ``audio_sink``
+                (raises ``ValueError`` otherwise), because a capture-only
+                transport has nowhere durable to put audio and spans must not
+                be stamped with audio uuids that reference nothing.
+            audio_sink: Optional async callable that receives each recorded
+                audio segment instead of it being uploaded to Noveum. Called as
+                ``await audio_sink(wav_bytes=..., audio_uuid=..., kind=...,
+                trace_id=..., span_id=..., metadata=...)`` and must return a
+                truthy value on success. ``kind`` is one of ``"stt"``,
+                ``"stt_raw"``, ``"tts"``, ``"conversation"``. Span audio-uuid
+                attributes are stamped exactly as in the upload path, so a sink
+                that stores the bytes can upload them later under the same uuid.
+            register_finish_safety_net: When ``True`` (default),
+                :meth:`attach_to_task` registers the ``on_pipeline_finished``
+                safety-net handler that guarantees trace teardown when
+                Pipecat's proxy queue is cancelled. Hosts that call
+                ``_finish_conversation`` themselves at a well-ordered point
+                (e.g. dograh's ``on_call_finished``, which runs after the
+                host's ``stop_recording()``) pass ``False`` so teardown cannot
+                fire before their audio flush.
+
+            Deferred-host recipe for dograh— a platform embedding this SDK (running
+            many tenants' calls on shared workers, exporting out-of-band)
+            typically sets all four together:
+
+                client=NoveumClient(transport_instance=DeferredTransport())
+                    Per-call injected client with a capture-only transport,
+                    NOT the module-global client: shared workers run concurrent
+                    calls, so a global client would race credentials and
+                    cross-contaminate trace context. The trace is finished in
+                    memory (``transport.captured_trace``) with zero network I/O.
+                deferred=True
+                    Arms the ``audio_sink``-required guard above.
+                audio_sink=<sink>
+                    Each segment is handed to the host's own store during the
+                    call instead of uploaded to Noveum; the host exports the
+                    parked bytes later under the same uuid.
+                register_finish_safety_net=False
+                    The host is the sole, well-ordered finisher (see above).
+
+                The host then persists ``build_payload_snapshot()`` and later
+                exports it with a REAL-credentialed client via
+                ``NoveumClient.send_trace_dict`` / ``send_audio_sync``.
             **kwargs: Forwarded to Pipecat ``BaseObserver`` / ``BaseObject``
                 (e.g. ``name=``).
         """
         super().__init__(**kwargs)
+
+        # Per-observer client / deferred-export configuration (see docstring).
+        self._injected_client = client
+        self._deferred = deferred
+        self._audio_sink = audio_sink
+        self._register_finish_safety_net = register_finish_safety_net
+
+        if deferred and record_audio and audio_sink is None:
+            raise ValueError(
+                "deferred=True with record_audio=True requires an audio_sink: "
+                "a capture-only transport cannot store audio, and spans must "
+                "not carry audio uuids that reference nothing. Pass an "
+                "audio_sink or set record_audio=False."
+            )
 
         self._trace_name_prefix = trace_name_prefix
         self._record_audio = record_audio
@@ -349,13 +423,92 @@ class NoveumTraceObserver(
     # ---------------------------------------------------------------------- #
 
     def _get_client(self) -> Any:
-        """Get the globally initialized Noveum client."""
+        """
+        Resolve the client for this observer: the injected per-observer client
+        if one was passed to the constructor, else the module-global client
+        (``None`` when the SDK is uninitialized).
+        """
+        if self._injected_client is not None:
+            return self._injected_client
         try:
             from noveum_trace import get_client
 
             return get_client()
         except Exception:
             return None
+
+    def build_payload_snapshot(self) -> Optional[dict[str, Any]]:
+        """
+        Serialize the conversation trace to a plain dict (``Trace.to_dict()``).
+
+        Intended for deferred hosts: call after the conversation has finished
+        to get a JSON-serializable snapshot for later export via
+        ``NoveumClient.send_trace_dict``. The finished trace is read from the
+        client transport's ``captured_trace`` (the ``DeferredTransport``
+        contract); falls back to the in-progress trace if the conversation has
+        not finished yet. Returns ``None`` if no trace was ever created.
+        """
+        transport = getattr(self._get_client(), "transport", None)
+        trace = getattr(transport, "captured_trace", None) or self._trace
+        if trace is None:
+            return None
+        try:
+            return trace.to_dict()
+        except Exception as e:
+            logger.warning("Failed to snapshot pipecat trace: %s", e, exc_info=True)
+            return None
+
+    async def _sink_segment_audio(
+        self,
+        frames: list[Any],
+        audio_uuid: str,
+        kind: str,
+        trace_id: str,
+        span_id: str,
+    ) -> bool:
+        """
+        Encode one buffered audio segment to WAV (off the event loop) and hand it
+        to the configured ``audio_sink``. Returns True on sink success. Callers
+        must only invoke this when ``self._audio_sink`` is set.
+        """
+        try:
+            from noveum_trace.integrations.pipecat.pipecat_utils import (
+                _frames_to_wav_bytes,
+                calculate_audio_duration_ms,
+            )
+
+            # Shallow-copy the frame list: teardown (_finish_conversation_impl,
+            # a different task) clears the instance buffers, and the encoder
+            # thread must not iterate a list being emptied under it. Frame
+            # objects are shared (immutable PCM bytes) — only membership is
+            # isolated.
+            frames = list(frames)
+            wav_bytes = await asyncio.to_thread(_frames_to_wav_bytes, frames)
+            if not wav_bytes:
+                logger.debug(
+                    "Empty WAV bytes for %s %s, skipping sink", kind, audio_uuid
+                )
+                return False
+            metadata = {
+                "duration_ms": calculate_audio_duration_ms(frames),
+                "format": "wav",
+                "type": kind,
+            }
+            return bool(
+                await self._audio_sink(
+                    wav_bytes=wav_bytes,
+                    audio_uuid=audio_uuid,
+                    kind=kind,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    metadata=metadata,
+                )
+            )
+        except Exception as e:
+            logger.warning(
+                "Audio sink failed for %s %s: %s", kind, audio_uuid, e, exc_info=True
+            )
+            return False
 
     def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None:
         """Append an audio frame to an STT buffer, dropping oldest when over cap."""
@@ -445,6 +598,15 @@ class NoveumTraceObserver(
         """
         if task is None:
             return
+
+        # Reuse guard (see also on_pipeline_started): attaching to a task marks
+        # the start of a new conversation — drop any previous conversation's
+        # capture so a conversation that dies before StartFrame cannot serve
+        # the prior conversation's trace from build_payload_snapshot().
+        transport = getattr(self._get_client(), "transport", None)
+        if transport is not None and hasattr(transport, "captured_trace"):
+            transport.captured_trace = None
+
         tto = getattr(task, "turn_tracking_observer", None)
         if tto is not None:
             self.attach_turn_tracking_observer(tto)
@@ -457,7 +619,16 @@ class NoveumTraceObserver(
         # coroutine, before _cancel_tasks() kills the TaskObserver proxy tasks.   #
         # _finish_conversation is idempotent, so whichever path fires first wins. #
         # ---------------------------------------------------------------------- #
-        if hasattr(task, "event_handler"):
+        if not self._register_finish_safety_net:
+            # Host opted out (register_finish_safety_net=False): it calls
+            # _finish_conversation itself at a point ordered AFTER its own
+            # audio flush, and this handler firing earlier would finish the
+            # trace with incomplete conversation audio on cancelled calls.
+            logger.debug(
+                "on_pipeline_finished safety net disabled by host — teardown "
+                "relies on the frame path and the host's explicit finish"
+            )
+        elif hasattr(task, "event_handler"):
             # Deduplication guard: check our own set of already-registered tasks
             # so repeated attach_to_task() calls on the same task are no-ops,
             # regardless of interleaving with other tasks.
@@ -862,8 +1033,23 @@ class NoveumTraceObserver(
                 logger.debug("No Noveum client available, skipping trace creation")
                 return
 
+            # Reuse guard: on a capture transport (DeferredTransport), drop the
+            # previous conversation's capture so build_payload_snapshot() can
+            # never serve call N-1's trace as call N's (e.g. call N dying
+            # before its own finish).
+            transport = getattr(client, "transport", None)
+            if transport is not None and hasattr(transport, "captured_trace"):
+                transport.captured_trace = None
+
             trace_name = f"{self._trace_name_prefix}.{SPAN_CONVERSATION.split('.')[-1]}"
-            self._trace = client.start_trace(name=trace_name, set_as_current=True)
+            # Per-observer (injected) clients never write the global
+            # current-trace context: in a many-calls-per-process host that
+            # contextvar is shared state, and the observer builds spans
+            # directly on the Trace object so it does not need it.
+            self._trace = client.start_trace(
+                name=trace_name,
+                set_as_current=(self._injected_client is None),
+            )
             logger.debug("Created pipecat conversation trace: %s", self._trace.trace_id)
         except Exception as e:
             logger.warning("Failed to create pipecat trace: %s", e, exc_info=True)
@@ -1525,22 +1711,38 @@ class NoveumTraceObserver(
                 logger.warning("Could not create pipecat.full_conversation span")
                 return
 
-            client = self._get_client()
+            audio_metadata = {
+                "duration_ms": duration_ms,
+                "format": "wav",
+                "type": "conversation",
+                "num_channels": ch,
+                "sample_rate": sr,
+            }
             upload_ok = False
             try:
-                if client:
+                if self._audio_sink is not None:
+                    upload_ok = bool(
+                        await self._audio_sink(
+                            wav_bytes=wav_bytes,
+                            audio_uuid=audio_uuid,
+                            kind="conversation",
+                            trace_id=span.trace_id,
+                            span_id=span.span_id,
+                            metadata=audio_metadata,
+                        )
+                    )
+                    logger.debug(
+                        "Sank full-conversation audio: %s (ok=%s)",
+                        audio_uuid,
+                        upload_ok,
+                    )
+                elif client := self._get_client():
                     client.export_audio(
                         audio_data=wav_bytes,
                         trace_id=span.trace_id,
                         span_id=span.span_id,
                         audio_uuid=audio_uuid,
-                        metadata={
-                            "duration_ms": duration_ms,
-                            "format": "wav",
-                            "type": "conversation",
-                            "num_channels": ch,
-                            "sample_rate": sr,
-                        },
+                        metadata=audio_metadata,
                     )
                     upload_ok = True
                     logger.debug(

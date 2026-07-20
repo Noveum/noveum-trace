@@ -350,19 +350,36 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
                 ):
                     client = self._get_client()
 
-                    async def _upload_post() -> bool:
-                        if not self._stt_audio_buffer:
-                            return True
-                        post_uuid = str(uuid.uuid4())
-                        ok = await asyncio.to_thread(
+                    async def _upload_one(
+                        buffer: list[Any], audio_uuid: str, kind: str
+                    ) -> bool:
+                        # Shallow copy: conversation teardown (a different task)
+                        # clears the instance buffers; the encoder thread must
+                        # not iterate a list being emptied under it.
+                        buffer = list(buffer)
+                        if self._audio_sink is not None:
+                            return await self._sink_segment_audio(
+                                buffer,
+                                audio_uuid,
+                                kind,
+                                span.trace_id,
+                                span.span_id,
+                            )
+                        return await asyncio.to_thread(
                             upload_audio_frames,
-                            self._stt_audio_buffer,
-                            post_uuid,
-                            "stt",
+                            buffer,
+                            audio_uuid,
+                            kind,
                             span.trace_id,
                             span.span_id,
                             client,
                         )
+
+                    async def _upload_post() -> bool:
+                        if not self._stt_audio_buffer:
+                            return True
+                        post_uuid = str(uuid.uuid4())
+                        ok = await _upload_one(self._stt_audio_buffer, post_uuid, "stt")
                         if ok:
                             span.attributes["stt.audio_uuid"] = post_uuid
                         return ok
@@ -373,14 +390,8 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
                         if not self._stt_raw_audio_buffer:
                             return True
                         raw_uuid = str(uuid.uuid4())
-                        ok = await asyncio.to_thread(
-                            upload_audio_frames,
-                            self._stt_raw_audio_buffer,
-                            raw_uuid,
-                            "stt_raw",
-                            span.trace_id,
-                            span.span_id,
-                            client,
+                        ok = await _upload_one(
+                            self._stt_raw_audio_buffer, raw_uuid, "stt_raw"
                         )
                         if ok:
                             span.attributes["stt.raw_audio_uuid"] = raw_uuid

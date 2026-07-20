@@ -367,6 +367,56 @@ class HttpTransport:
             )
             # Exception swallowed - audio export fails silently with error log
 
+    def send_audio_now(
+        self,
+        audio_data: bytes,
+        trace_id: str,
+        span_id: str,
+        audio_uuid: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Send one audio file synchronously and report the outcome.
+
+        Unlike :meth:`export_audio` (fire-and-forget via the batch queue, whose
+        failures are only logged), this performs the multipart POST inline and
+        raises on failure — for batch/completion callers that need per-item
+        delivery results and must not depend on queue drain timing.
+
+        Raises:
+            TransportError: If the transport is shutdown or the upload fails.
+        """
+        if self._shutdown:
+            raise TransportError("Transport has been shutdown")
+
+        audio_item = {
+            "audio_data": audio_data,
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "audio_uuid": audio_uuid,
+            "metadata": metadata or {},
+            "timestamp": time.time(),
+        }
+        self._send_single_audio(audio_item)
+
+    def send_trace_now(self, trace: Trace) -> dict[str, Any]:
+        """
+        Format and send one trace synchronously; return the API response.
+
+        The wire enrichment (:meth:`_format_trace_for_export` — project,
+        environment, sdk, otel blocks) runs here with THIS transport's config,
+        exactly as in the batched path. Raises on failure instead of queueing —
+        the delivery-observed counterpart of :meth:`export_trace`.
+
+        Raises:
+            TransportError: If the transport is shutdown or the send fails.
+        """
+        if self._shutdown:
+            raise TransportError("Transport has been shutdown")
+
+        trace_data = self._format_trace_for_export(trace)
+        return self._send_request(trace_data)
+
     def export_image(
         self,
         image_data: bytes,
@@ -872,7 +922,13 @@ class HttpTransport:
         Raises:
             TransportError: If the request fails
         """
-        url = self._build_api_url("/v1/trace")
+        # The backend has no single-trace route; ingestion goes through the
+        # batch endpoint, so one trace ships as a batch of one.
+        url = self._build_api_url("/v1/traces")
+        payload: dict[str, Any] = {
+            "traces": [trace_data],
+            "timestamp": time.time(),
+        }
 
         log_http_request(
             logger,
@@ -883,11 +939,11 @@ class HttpTransport:
             timeout=self.config.transport.timeout,
         )
 
-        self._write_dev_trace_payload(trace_data)
+        self._write_dev_trace_payload(payload)
 
-        post_body: dict[str, Any] = trace_data
+        post_body: dict[str, Any] = payload
         if self._pii_pseudonymizer is not None:
-            post_body = self._pii_pseudonymizer.pseudonymize_dict(trace_data)
+            post_body = self._pii_pseudonymizer.pseudonymize_dict(payload)
 
         try:
             # Send request with explicit Content-Type for JSON
@@ -944,7 +1000,12 @@ class HttpTransport:
                     response_text=self._get_safe_response_preview(response),
                 )
                 response.raise_for_status()
-                return response.json()
+                # raise_for_status() only raises on 4xx/5xx — an unexpected
+                # 2xx/3xx must not fall through as delivered (direct-send
+                # callers treat a normal return as delivery confirmation).
+                raise TransportError(
+                    f"Trace send returned unexpected status {response.status_code}"
+                )
 
         except requests.exceptions.SSLError as e:
             self._handle_ssl_error(e, url)
@@ -1224,6 +1285,13 @@ class HttpTransport:
                     audio_uuid=audio_uuid,
                 )
                 response.raise_for_status()
+                # raise_for_status only raises on 4xx/5xx — a 3xx or an
+                # unexpected 2xx must not fall through as success (callers
+                # like send_audio_now treat a normal return as delivered).
+                raise TransportError(
+                    f"Audio upload returned unexpected status "
+                    f"{response.status_code}"
+                )
 
         except requests.exceptions.Timeout as e:
             log_error_always(

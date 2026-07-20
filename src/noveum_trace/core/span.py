@@ -81,6 +81,10 @@ class Span:
         # Error information
         self.exception: Optional[Exception] = None
         self.stack_trace: Optional[str] = None
+        # Set only by from_dict: the serialized exception block of a restored
+        # span, re-emitted verbatim by to_dict (a live Exception cannot be
+        # rebuilt from strings). None on a normally-constructed span.
+        self._restored_exception: Optional[dict[str, Any]] = None
 
         # Flags
         self._finished = False
@@ -370,13 +374,18 @@ class Span:
             "links": self.links,
         }
 
-        # Add exception information if present
+        # Add exception information if present. A restored span (from_dict)
+        # carries the original block verbatim in _restored_exception — a real
+        # Exception object cannot be reconstructed from strings, and
+        # synthesizing one would corrupt the "type" field on re-serialization.
         if self.exception:
             data["exception"] = {
                 "type": type(self.exception).__name__,
                 "message": str(self.exception),
                 "stack_trace": self.stack_trace,
             }
+        elif self._restored_exception:
+            data["exception"] = self._restored_exception
 
         return data
 
@@ -419,6 +428,11 @@ class Span:
 
         # Restore links
         span.links = data.get("links", [])
+
+        # Preserve exception info losslessly across a to_dict/from_dict round
+        # trip (stashed dict, re-emitted by to_dict; see comment there).
+        if data.get("exception"):
+            span._restored_exception = data["exception"]
 
         return span
 

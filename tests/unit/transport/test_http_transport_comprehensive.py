@@ -815,12 +815,13 @@ class TestHttpTransportSendRequest:
             result = transport._send_request(trace_data)
 
             assert result == {"success": True}
-            transport.session.post.assert_called_once_with(
-                "https://api.noveum.ai/api/v1/trace",
-                json=trace_data,
-                headers={"Content-Type": "application/json"},
-                timeout=transport.config.transport.timeout,
-            )
+            # A single trace ships as a batch of one to /v1/traces.
+            transport.session.post.assert_called_once()
+            call = transport.session.post.call_args
+            assert call.args[0] == "https://api.noveum.ai/api/v1/traces"
+            assert call.kwargs["json"]["traces"] == [trace_data]
+            assert call.kwargs["headers"] == {"Content-Type": "application/json"}
+            assert call.kwargs["timeout"] == transport.config.transport.timeout
 
     def test_send_request_success_201_created(self):
         """Test successful HTTP request with 201 Created status."""
@@ -850,12 +851,13 @@ class TestHttpTransportSendRequest:
                 "timestamp": "2025-09-10T12:48:41.652Z",
                 "processing_time_ms": 3,
             }
-            transport.session.post.assert_called_once_with(
-                "https://api.noveum.ai/api/v1/trace",
-                json=trace_data,
-                headers={"Content-Type": "application/json"},
-                timeout=transport.config.transport.timeout,
-            )
+            # A single trace ships as a batch of one to /v1/traces.
+            transport.session.post.assert_called_once()
+            call = transport.session.post.call_args
+            assert call.args[0] == "https://api.noveum.ai/api/v1/traces"
+            assert call.kwargs["json"]["traces"] == [trace_data]
+            assert call.kwargs["headers"] == {"Content-Type": "application/json"}
+            assert call.kwargs["timeout"] == transport.config.transport.timeout
 
     def test_send_request_auth_error(self):
         """Test HTTP request with authentication error."""

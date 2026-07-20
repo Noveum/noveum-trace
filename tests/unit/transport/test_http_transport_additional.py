@@ -504,6 +504,7 @@ class TestHttpTransportPiiPseudonymization:
 
         trace_data = {"trace_id": "x", "note": "u@v.co"}
         transport._send_request(trace_data)
+        # A single trace ships as a batch of one to /v1/traces.
         posted = transport.session.post.call_args.kwargs["json"]
-        assert posted == trace_data
-        assert "u@v.co" in posted["note"]
+        assert posted["traces"] == [trace_data]
+        assert "u@v.co" in posted["traces"][0]["note"]
