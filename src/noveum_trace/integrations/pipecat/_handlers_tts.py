@@ -10,6 +10,7 @@ Handles:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -222,16 +223,33 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
             tts_status = "ok"
             if self._record_audio and self._tts_audio_buffer:
                 audio_uuid = str(uuid.uuid4())
+                # Shallow copy: conversation teardown (a different task) clears
+                # the instance buffer, which must not race the encoder thread
+                # iterating it across the awaits below.
+                frames = list(self._tts_audio_buffer)
                 upload_ok = False
                 try:
-                    upload_ok = upload_audio_frames(
-                        self._tts_audio_buffer,
-                        audio_uuid,
-                        "tts",
-                        span.trace_id,
-                        span.span_id,
-                        client=self._get_client(),
-                    )
+                    if self._audio_sink is not None:
+                        upload_ok = await self._sink_segment_audio(
+                            frames,
+                            audio_uuid,
+                            "tts",
+                            span.trace_id,
+                            span.span_id,
+                        )
+                    else:
+                        # WAV encoding is CPU-bound and blocks the event loop; run
+                        # it off the loop thread, matching
+                        # _handlers_stt._handle_transcription.
+                        upload_ok = await asyncio.to_thread(
+                            upload_audio_frames,
+                            frames,
+                            audio_uuid,
+                            "tts",
+                            span.trace_id,
+                            span.span_id,
+                            self._get_client(),
+                        )
                 except Exception as e:  # pylint: disable=broad-except
                     logger.warning(
                         "Failed to upload TTS audio %s: %s",

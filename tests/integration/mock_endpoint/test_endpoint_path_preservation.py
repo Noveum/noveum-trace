@@ -194,10 +194,13 @@ class TestEndpointPathPreservation:
         mock_session.post.assert_called_once()
         call_args = mock_session.post.call_args
 
-        # Check the URL argument (first positional argument)
+        # Check the URL argument (first positional argument). A single trace
+        # ships as a batch of one to /v1/traces — the backend has no
+        # single-trace route.
         actual_url = call_args[0][0]
-        expected_url = "http://localhost:8080/beta/v1/trace"
+        expected_url = "http://localhost:8080/beta/v1/traces"
         assert actual_url == expected_url
+        assert call_args.kwargs["json"]["traces"] == [trace_data]
 
     @pytest.mark.disable_transport_mocking
     @patch("noveum_trace.transport.http_transport.requests.Session")

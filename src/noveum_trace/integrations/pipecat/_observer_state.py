@@ -19,6 +19,11 @@ class _PipecatObserverState:
     """Annotation-only: fields mirror ``NoveumTraceObserver.__init__``."""
 
     _trace_name_prefix: str
+    # Per-observer client / deferred-export configuration
+    _injected_client: Any
+    _deferred: bool
+    _audio_sink: Any
+    _register_finish_safety_net: bool
     _record_audio: bool
     _record_raw_input_audio: bool
     _capture_text: bool
@@ -114,6 +119,15 @@ class _PipecatObserverMethods(Protocol):
 
     def _get_client(self) -> Any: ...
 
+    async def _sink_segment_audio(
+        self,
+        frames: list[Any],
+        audio_uuid: str,
+        kind: str,
+        trace_id: str,
+        span_id: str,
+    ) -> bool: ...
+
     async def _start_new_turn(self, turn_number: Optional[int] = None) -> None: ...
 
     async def _finish_conversation(self, cancelled: bool = False) -> None: ...
@@ -140,6 +154,15 @@ class _PipecatObserverMixinBase(_PipecatObserverState):
         ) -> Any: ...
 
         def _get_client(self) -> Any: ...
+
+        async def _sink_segment_audio(
+            self,
+            frames: list[Any],
+            audio_uuid: str,
+            kind: str,
+            trace_id: str,
+            span_id: str,
+        ) -> bool: ...
 
         async def _start_new_turn(self, turn_number: Optional[int] = None) -> None: ...
 
