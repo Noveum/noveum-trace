@@ -22,12 +22,15 @@ _log = logging.getLogger(__name__)
 class CostCapPolicy(AbstractPolicy):
     """Block calls that would exceed a per-project or per-org USD spend cap.
 
-    strict mode: reserves worst-case cost atomically in GuardAPIClient before
-    forwarding; reconciles after. Prevents any overshoot under concurrency.
+    strict mode: reserves worst-case cost before forwarding and reconciles after.
+    Prevents overshoot only when the backend supports atomic reservation — i.e.
+    the in-memory GuardAPIClient, which is single-process. With the HTTP backend
+    (no reserve endpoint) strict degrades to the shared model below.
 
-    non_strict mode: checks a local counter; allows all calls that look under-cap
-    at the moment of pre(). Reports actual cost in post(). May overshoot slightly
-    under high concurrency — advisory only.
+    shared / non_strict mode: reads accumulated spend (process-local for the
+    in-memory client, server-shared via /policies/state for the HTTP client) and
+    blocks when spend + estimate would exceed the cap; pushes actual cost in
+    post(). Overshoot is bounded by the poll interval, not the worker count.
 
     Scoping precedence (highest → lowest):
       1. explicit ``organization_id`` constructor arg → org-level cap
@@ -120,7 +123,14 @@ class CostCapPolicy(AbstractPolicy):
         with self._lock:
             mode = self.mode
 
-        if mode == EnforcementMode.strict:
+        # Strict reservation only holds when the backend can reserve atomically.
+        # The HTTP backend has no reserve endpoint, so strict degrades to the
+        # shared read-then-check path below.
+        use_reserve = mode == EnforcementMode.strict and getattr(
+            deps.api, "supports_reservation", True
+        )
+
+        if use_reserve:
             try:
                 result = deps.api.reserve(
                     call_id=ctx.call_id,
@@ -228,8 +238,11 @@ class CostCapPolicy(AbstractPolicy):
                 self.data_map.get(self.window, 0.0) + actual_usd
             )
 
+        use_reserve = mode == EnforcementMode.strict and getattr(
+            deps.api, "supports_reservation", True
+        )
         try:
-            if mode == EnforcementMode.strict:
+            if use_reserve:
                 if actual_usd <= reserved_usd:
                     # Return the unused headroom so the budget stays accurate.
                     deps.api.reconcile(ctx.call_id, scope_id, reserved_usd - actual_usd)
@@ -244,7 +257,15 @@ class CostCapPolicy(AbstractPolicy):
                         resp.model,
                     )
             else:
-                deps.api.report_usage(ctx.call_id, scope_id, actual_usd, resp.model)
+                # Shared model: push the full actual usage (idempotent by call_id).
+                deps.api.report_usage(
+                    ctx.call_id,
+                    scope_id,
+                    actual_usd,
+                    resp.model,
+                    resp.input_tokens,
+                    resp.output_tokens,
+                )
         except Exception:
             pass  # reporting failure is non-blocking; local counter already updated
 
@@ -260,7 +281,10 @@ class CostCapPolicy(AbstractPolicy):
             if "mode" in decision.state
             else self.mode
         )
-        if mode == EnforcementMode.strict:
+        use_reserve = mode == EnforcementMode.strict and getattr(
+            deps.api, "supports_reservation", True
+        )
+        if use_reserve:
             reserved_usd = decision.state.get("reserved_usd", 0.0)
             try:
                 # Always reconcile in strict mode — even with reserved_usd=0 this
@@ -309,7 +333,7 @@ class CostCapPolicy(AbstractPolicy):
         if not scope_id:
             return
         try:
-            state = deps.api.get_state(scope_id)
+            state = deps.api.get_state(scope_id, self.window)
             with self._lock:
                 self.data_map[self.window] = state.get("spend", 0.0)
         except Exception:

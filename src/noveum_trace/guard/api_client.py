@@ -14,15 +14,21 @@ class ReservationResult:
 
 
 class GuardAPIClient:
-    """In-memory stub for the Noveum Guard backend.
+    """In-memory backend for the Noveum Guard, and base class for HttpGuardAPIClient.
 
-    All state is per-process. Correct for single-process use and tests;
-    multi-process deployments need the real HTTP backend (swap this file only).
+    All state is per-process. Correct for single-process use and tests, and is
+    the only backend that supports atomic reserve/reconcile — multi-process
+    deployments should use ``HttpGuardAPIClient`` (guard/api_client_http.py),
+    which subclasses this and overrides the network-backed methods.
 
     Thread-safety: a single Lock guards every mutation. The lock is held only
     for the minimal critical section so high-concurrency callers are not
     serialised longer than necessary.
     """
+
+    # In-memory reservations are atomic within this process, so strict-mode
+    # reserve/reconcile are supported. The HTTP client sets this False.
+    supports_reservation: bool = True
 
     def __init__(
         self, api_key: str = "", base_url: str = "https://api.noveum.ai"
@@ -101,11 +107,14 @@ class GuardAPIClient:
         project_id: str,
         actual_usd: float,
         model: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
     ) -> None:
         """Record actual cost (non-strict post only).
 
         Non-strict never calls reserve(), so there is nothing to reconcile —
-        we simply add the actual spend.
+        we simply add the actual spend. Token counts are accepted for interface
+        parity with the HTTP client (which forwards them) but unused here.
         """
         if actual_usd < 0:
             raise ValueError(f"actual_usd must be non-negative, got {actual_usd}")
@@ -114,8 +123,14 @@ class GuardAPIClient:
 
     # Policy config / polling
 
-    def get_state(self, project_id: str) -> dict[str, Any]:
-        """Spend snapshot for poll(). Returns a copy to avoid lock-holding in caller."""
+    def get_state(
+        self, project_id: str, window: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Spend snapshot for poll(). Returns a copy to avoid lock-holding in caller.
+
+        ``window`` is accepted for interface parity with the HTTP client (which
+        selects a per-window counter); the in-memory stub tracks one bucket.
+        """
         with self._lock:
             return {"spend": self._spend.get(project_id, 0.0)}
 
