@@ -14,10 +14,12 @@ class ReservationResult:
 
 
 class GuardAPIClient:
-    """In-memory stub for the Noveum Guard backend.
+    """In-memory backend for the Noveum Guard, and base class for HttpGuardAPIClient.
 
-    All state is per-process. Correct for single-process use and tests;
-    multi-process deployments need the real HTTP backend (swap this file only).
+    All state is per-process. Correct for single-process use and tests, and is
+    the only backend that supports atomic reserve/reconcile — multi-process
+    deployments should use ``HttpGuardAPIClient`` (guard/api_client_http.py),
+    which subclasses this and overrides the network-backed methods.
 
     Thread-safety: a single Lock guards every mutation. The lock is held only
     for the minimal critical section so high-concurrency callers are not
