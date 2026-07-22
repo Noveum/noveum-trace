@@ -211,7 +211,7 @@ class TestMultipleWindowsRealCalls:
             project_id,
             windows=[
                 {"period": "1m", "maxRequests": 100},
-                {"period": "1m", "maxTokens": 10},
+                {"period": "1h", "maxTokens": 10},
             ],
         )
         client = anthropic.Anthropic(

@@ -95,7 +95,9 @@ class RateLimitPolicy(AbstractPolicy):
             max_tokens = w.get("maxTokens")
             requests = counts.get(f"requests_{period}", 0)
             tokens = counts.get(f"tokens_{period}", 0)
-            if max_requests and requests >= max_requests:
+            # ``is not None`` so a configured limit of 0 (block everything) is
+            # enforced; only an omitted/None threshold is left unenforced.
+            if max_requests is not None and requests >= max_requests:
                 return PolicyDecision.block(
                     self.name,
                     Phase.pre,
@@ -105,7 +107,7 @@ class RateLimitPolicy(AbstractPolicy):
                     ),
                     state={"scope_id": scope_id},
                 )
-            if max_tokens and tokens >= max_tokens:
+            if max_tokens is not None and tokens >= max_tokens:
                 return PolicyDecision.block(
                     self.name,
                     Phase.pre,

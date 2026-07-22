@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
+
+# In-memory rate windows (seconds). Mirrors the backend periods in
+# guardrails/schemas.ts; the HTTP backend does its own windowing server-side.
+_PERIODS = ("1m", "1h", "1d")
+_WINDOW_SECONDS = {"1m": 60.0, "1h": 3600.0, "1d": 86400.0}
+_MAX_WINDOW_SECONDS = 86400.0  # 1d — the longest window bounds retention
 
 
 @dataclass
@@ -45,12 +52,15 @@ class GuardAPIClient:
         self._inflight: dict[str, float] = {}
         # project_id → arbitrary policy config dict (refreshed by poll)
         self._policy_configs: dict[str, dict[str, Any]] = {}
-        # project_id → {"requests_1m": int, "tokens_1m": int, ...} for RateLimitPolicy
-        self._rate: dict[str, dict[str, int]] = {}
-        # call_ids already folded into _spend/_rate via report_usage — guards
-        # against double counting when more than one policy (e.g. CostCapPolicy
-        # in shared mode + RateLimitPolicy) reports the same call's usage.
-        self._reported_event_ids: set[str] = set()
+        # project_id → list of (monotonic_ts, tokens) per reported call, so the
+        # windowed request/token counts RateLimitPolicy reads only include events
+        # still inside their 1m/1h/1d window. Events past 1d are evicted.
+        self._rate_events: dict[str, list[tuple[float, int]]] = {}
+        # call_id → monotonic_ts of the report already folded into _spend/_rate —
+        # guards against double counting when more than one policy (e.g.
+        # CostCapPolicy in shared mode + RateLimitPolicy) reports the same call.
+        # Timestamped so stale ids can be evicted rather than growing unbounded.
+        self._reported_event_ids: dict[str, float] = {}
 
     # Core accounting
 
@@ -125,17 +135,16 @@ class GuardAPIClient:
         """
         if actual_usd < 0:
             raise ValueError(f"actual_usd must be non-negative, got {actual_usd}")
+        now = time.monotonic()
         with self._lock:
+            self._evict_expired(now)
             if call_id in self._reported_event_ids:
                 return
-            self._reported_event_ids.add(call_id)
+            self._reported_event_ids[call_id] = now
             self._spend[project_id] = self._spend.get(project_id, 0.0) + actual_usd
-            rate = self._rate.setdefault(project_id, {})
-            for period in ("1m", "1h", "1d"):
-                rate[f"requests_{period}"] = rate.get(f"requests_{period}", 0) + 1
-                rate[f"tokens_{period}"] = (
-                    rate.get(f"tokens_{period}", 0) + input_tokens + output_tokens
-                )
+            self._rate_events.setdefault(project_id, []).append(
+                (now, input_tokens + output_tokens)
+            )
 
     # Policy config / polling
 
@@ -149,11 +158,52 @@ class GuardAPIClient:
         selects a per-window cost counter); the in-memory stub tracks one
         bucket. ``rate`` mirrors the backend's requests_*/tokens_* shape.
         """
+        now = time.monotonic()
         with self._lock:
+            self._evict_expired(now)
             return {
                 "spend": self._spend.get(project_id, 0.0),
-                "rate": dict(self._rate.get(project_id, {})),
+                "rate": self._windowed_rate(project_id, now),
             }
+
+    def _evict_expired(self, now: float) -> None:
+        """Drop rate events and reported call_ids older than the largest window.
+
+        Caller must hold ``self._lock``. Bounds memory and keeps the windowed
+        counts accurate as events age out. Duplicate protection only needs to
+        outlive the longest window — a genuine retry always lands far sooner.
+        """
+        cutoff = now - _MAX_WINDOW_SECONDS
+        for pid in list(self._rate_events):
+            kept = [e for e in self._rate_events[pid] if e[0] >= cutoff]
+            if kept:
+                self._rate_events[pid] = kept
+            else:
+                del self._rate_events[pid]
+        for cid in [c for c, ts in self._reported_event_ids.items() if ts < cutoff]:
+            del self._reported_event_ids[cid]
+
+    def _windowed_rate(self, project_id: str, now: float) -> dict[str, int]:
+        """Request/token counts per window, counting only events inside each.
+
+        Caller must hold ``self._lock``. Returns ``{}`` when the project has no
+        live events, matching get_state()'s zero-state for a fresh project.
+        """
+        events = self._rate_events.get(project_id)
+        if not events:
+            return {}
+        result: dict[str, int] = {}
+        for period in _PERIODS:
+            cutoff = now - _WINDOW_SECONDS[period]
+            requests = 0
+            tokens = 0
+            for ts, tok in events:
+                if ts >= cutoff:
+                    requests += 1
+                    tokens += tok
+            result[f"requests_{period}"] = requests
+            result[f"tokens_{period}"] = tokens
+        return result
 
     def get_policy_config(self, project_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -225,8 +275,10 @@ class GuardAPIClient:
             return self._spend.get(project_id, 0.0)
 
     def current_rate(self, project_id: str) -> dict[str, int]:
+        now = time.monotonic()
         with self._lock:
-            return dict(self._rate.get(project_id, {}))
+            self._evict_expired(now)
+            return self._windowed_rate(project_id, now)
 
     def inflight_count(self) -> int:
         with self._lock:
@@ -238,5 +290,5 @@ class GuardAPIClient:
             self._spend.clear()
             self._inflight.clear()
             self._policy_configs.clear()
-            self._rate.clear()
+            self._rate_events.clear()
             self._reported_event_ids.clear()
