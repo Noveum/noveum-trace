@@ -86,12 +86,41 @@ class TestGetState:
             get_resp=_Resp(200, {"cost": {"30d_rolling": 1247.81, "1d_rolling": 12.0}}),
         )
         api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
-        assert api.get_state("proj", "30d_rolling") == {"spend": 1247.81}
+        assert api.get_state("proj", "30d_rolling") == {"spend": 1247.81, "rate": {}}
 
     def test_missing_window_reads_zero(self, monkeypatch):
         _patch(monkeypatch, get_resp=_Resp(200, {"cost": {}}))
         api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
-        assert api.get_state("proj", "7d_rolling") == {"spend": 0.0}
+        assert api.get_state("proj", "7d_rolling") == {"spend": 0.0, "rate": {}}
+
+    def test_reads_rate_counters(self, monkeypatch):
+        _patch(
+            monkeypatch,
+            get_resp=_Resp(
+                200,
+                {
+                    "cost": {"30d_rolling": 1.0},
+                    "rate": {
+                        "requests_1m": 3,
+                        "requests_1h": 3,
+                        "requests_1d": 3,
+                        "tokens_1m": 1900,
+                        "tokens_1h": 1900,
+                        "tokens_1d": 1900,
+                    },
+                },
+            ),
+        )
+        api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
+        state = api.get_state("proj", "30d_rolling")
+        assert state["rate"] == {
+            "requests_1m": 3,
+            "requests_1h": 3,
+            "requests_1d": 3,
+            "tokens_1m": 1900,
+            "tokens_1h": 1900,
+            "tokens_1d": 1900,
+        }
 
     def test_hits_project_state_url(self, monkeypatch):
         _patch(monkeypatch, get_resp=_Resp(200, {"cost": {}}))
@@ -121,12 +150,16 @@ class TestGetState:
         with pytest.raises(GuardBackendUnavailable):
             api.get_state("proj")
 
-    def test_strips_api_suffix_from_base_url(self, monkeypatch):
+    def test_preserves_api_suffix_from_base_url(self, monkeypatch):
+        """Guard endpoints live under /api on the production backend (verified
+        against the live control plane); DEFAULT_ENDPOINT already includes it,
+        so it must be kept, not stripped.
+        """
         _patch(monkeypatch, get_resp=_Resp(200, {"cost": {}}))
         api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai/api")
         api.get_state("proj")
         assert _FakeClient.calls[0]["url"].startswith(
-            "https://api.noveum.ai/v1/projects/proj"
+            "https://api.noveum.ai/api/v1/projects/proj"
         )
 
 
@@ -271,6 +304,50 @@ class TestFetchRemotePolicies:
                 "fail_closed": True,
                 "max_usd": 1500,
                 "window": "30d_rolling",
+            }
+        ]
+
+    def test_maps_rate_limit_shape(self, monkeypatch):
+        _patch(
+            monkeypatch,
+            get_resp=_Resp(
+                200,
+                [
+                    {
+                        "policyId": "p2",
+                        "name": "Burst rate",
+                        "type": "RATE_LIMIT",
+                        "enabled": True,
+                        "failClosed": True,
+                        "config": {
+                            "windows": [
+                                {
+                                    "period": "1m",
+                                    "maxRequests": 100,
+                                    "maxTokens": 200000,
+                                    "action": "BLOCK",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )
+        api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
+        result = api.fetch_remote_policies("proj")
+        assert result == [
+            {
+                "type": "rate_limit",
+                "name": "Burst rate",
+                "fail_closed": True,
+                "windows": [
+                    {
+                        "period": "1m",
+                        "maxRequests": 100,
+                        "maxTokens": 200000,
+                        "action": "BLOCK",
+                    }
+                ],
             }
         ]
 
