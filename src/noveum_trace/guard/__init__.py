@@ -6,7 +6,7 @@ from noveum_trace.guard.engine import PolicyEngine
 from noveum_trace.guard.exceptions import GuardBackendUnavailable, NoveumGuardBlocked
 from noveum_trace.guard.integrations.bedrock import instrument_bedrock
 from noveum_trace.guard.integrations.crewai import NoveumCrewAIInterceptor
-from noveum_trace.guard.policies import AbstractPolicy, CostCapPolicy
+from noveum_trace.guard.policies import AbstractPolicy, CostCapPolicy, RateLimitPolicy
 from noveum_trace.guard.poller import PolicyPoller
 from noveum_trace.guard.transport import (
     NoveumAsyncTransport,
@@ -64,6 +64,7 @@ __all__ = [
     # Policies
     "AbstractPolicy",
     "CostCapPolicy",
+    "RateLimitPolicy",
     # Transport
     "NoveumTransport",
     "NoveumAsyncTransport",

@@ -136,6 +136,69 @@ class TestReportUsage:
         api.report_usage(_call_id(), "proj", actual_usd=5.0, model="gpt-4o")
         assert api.inflight_count() == 0
 
+    def test_report_usage_bumps_rate_counters(self):
+        api = GuardAPIClient()
+        api.report_usage(
+            _call_id(),
+            "proj",
+            actual_usd=1.0,
+            model="gpt-4o",
+            input_tokens=100,
+            output_tokens=50,
+        )
+        rate = api.current_rate("proj")
+        assert rate["requests_1m"] == 1
+        assert rate["requests_1h"] == 1
+        assert rate["requests_1d"] == 1
+        assert rate["tokens_1m"] == 150
+        assert rate["tokens_1h"] == 150
+        assert rate["tokens_1d"] == 150
+
+    def test_report_usage_accumulates_rate_counters_across_calls(self):
+        api = GuardAPIClient()
+        api.report_usage(
+            _call_id(),
+            "proj",
+            actual_usd=1.0,
+            model="gpt-4o",
+            input_tokens=100,
+            output_tokens=50,
+        )
+        api.report_usage(
+            _call_id(),
+            "proj",
+            actual_usd=1.0,
+            model="gpt-4o",
+            input_tokens=10,
+            output_tokens=5,
+        )
+        rate = api.current_rate("proj")
+        assert rate["requests_1m"] == 2
+        assert rate["tokens_1m"] == 165
+
+    def test_report_usage_dedups_by_call_id(self):
+        """Two policies reporting the same call must not double count."""
+        api = GuardAPIClient()
+        call_id = _call_id()
+        api.report_usage(
+            call_id,
+            "proj",
+            actual_usd=1.0,
+            model="gpt-4o",
+            input_tokens=100,
+            output_tokens=50,
+        )
+        api.report_usage(
+            call_id,
+            "proj",
+            actual_usd=1.0,
+            model="gpt-4o",
+            input_tokens=100,
+            output_tokens=50,
+        )
+        assert api.current_spend("proj") == pytest.approx(1.0)
+        assert api.current_rate("proj")["requests_1m"] == 1
+
 
 # ---------------------------------------------------------------------------
 # get_state()
@@ -146,7 +209,7 @@ class TestGetState:
     def test_get_state_returns_zero_for_new_project(self):
         api = GuardAPIClient()
         state = api.get_state("new-proj")
-        assert state == {"spend": 0.0}
+        assert state == {"spend": 0.0, "rate": {}}
 
     def test_get_state_reflects_current_spend(self):
         api = GuardAPIClient()

@@ -76,7 +76,11 @@ class HttpGuardAPIClient(GuardAPIClient):
     def get_state(
         self, project_id: str, window: Optional[str] = None
     ) -> dict[str, Any]:
-        """Read shared spend for ``window`` from the backend live-state endpoint."""
+        """Read shared spend + rate counters from the backend live-state endpoint.
+
+        ``spend`` is the ``cost[window]`` bucket CostCapPolicy polls; ``rate``
+        is the ``requests_*``/``tokens_*`` counter map RateLimitPolicy polls.
+        """
         window = window or _DEFAULT_WINDOW
         url = f"{self.base_url}/v1/projects/{project_id}/policies/state"
         try:
@@ -85,8 +89,13 @@ class HttpGuardAPIClient(GuardAPIClient):
             with httpx.Client(timeout=self._timeout, follow_redirects=True) as client:
                 resp = client.get(url, headers=self._headers(), params=self._query())
             if resp.status_code == 200:
-                cost = resp.json().get("cost", {}) or {}
-                return {"spend": float(cost.get(window, 0.0) or 0.0)}
+                body = resp.json()
+                cost = body.get("cost", {}) or {}
+                rate = body.get("rate", {}) or {}
+                return {
+                    "spend": float(cost.get(window, 0.0) or 0.0),
+                    "rate": dict(rate),
+                }
             raise GuardBackendUnavailable(
                 f"get_state: backend returned {resp.status_code} "
                 f"for project {project_id!r}"
@@ -274,4 +283,6 @@ def _normalize_policy(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
         mapped["max_usd"] = config["maxUsd"]
     if "window" in config:
         mapped["window"] = config["window"]
+    if "windows" in config:
+        mapped["windows"] = config["windows"]
     return mapped
