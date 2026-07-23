@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.x] — Current (2026)
 
+### 1.5.21
+
+- **Pipecat**: Added a public synchronous `NoveumTraceObserver.attach_to_task_sync(task)` method for hosts that wire the observer OUTSIDE an event loop. It registers all observers, the `on_pipeline_finished` safety net, STT detection, and the `AudioBufferProcessor` `on_audio_data` handler synchronously, but does NOT start audio recording — the host calls `AudioBufferProcessor.start_recording()` itself (or uses the async `attach_to_task()`, which now delegates its synchronous wiring to `attach_to_task_sync` and only awaits the recording-start step).
+
 ### Current Public API (v1.x)
 
 The SDK has evolved significantly from the decorator-based 0.3.x era. The current public interface is **context-manager first**:
