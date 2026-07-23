@@ -175,7 +175,8 @@ def example_real_openai():
 
     # Simulate the OpenAI integration
     print("To use with real OpenAI:")
-    print("""
+    print(
+        """
     from openai import OpenAI
 
     # Initialize OpenAI client
@@ -199,7 +200,8 @@ def example_real_openai():
         content = chunk.choices[0].delta.content
         if content:
             print(content, end="")
-    """)
+    """
+    )
     print("\n")
 
 

@@ -380,9 +380,12 @@ async def test_attach_to_task_delegates_to_sync_then_starts_recording() -> None:
     obs = NoveumTraceObserver(record_audio=True)
     task = MagicMock()
 
-    with patch.object(obs, "attach_to_task_sync") as sync_mock, patch.object(
-        obs, "_ensure_audio_buffer_recording", new_callable=AsyncMock
-    ) as rec_mock:
+    with (
+        patch.object(obs, "attach_to_task_sync") as sync_mock,
+        patch.object(
+            obs, "_ensure_audio_buffer_recording", new_callable=AsyncMock
+        ) as rec_mock,
+    ):
         await obs.attach_to_task(task)
 
     sync_mock.assert_called_once_with(task)
