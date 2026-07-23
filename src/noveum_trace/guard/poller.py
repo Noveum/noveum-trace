@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
+from noveum_trace.guard.types import PolicyContext
 
 if TYPE_CHECKING:
     from noveum_trace.guard.engine import PolicyEngine
@@ -81,6 +82,7 @@ class PolicyPoller:
         tick: float = 1.0,
         project_id: Optional[str] = None,
         backend_fetch_interval: float = _BACKEND_FETCH_INTERVAL,
+        context: Optional[PolicyContext] = None,
     ) -> None:
         self._engine = engine
         self._tick = tick  # inner sleep granularity; must be < smallest poll_interval
@@ -93,8 +95,38 @@ class PolicyPoller:
         self._policy_jitter: dict[str, float] = {}  # policy.name → fixed jitter (s)
         # project_id for backend policy fetch; resolved lazily from _state if None
         self._project_id = project_id
+        # Context used to scope backend-fetched policies. init() starts the poller
+        # before publishing guard state, so relying on _state alone leaves them
+        # unscoped and their poll() a no-op.
+        self._context = context
         self._backend_fetch_interval = backend_fetch_interval
         self._last_backend_fetch: float = 0.0
+
+    def _binding_context(self) -> Optional[PolicyContext]:
+        """Context to bind a newly-instantiated policy to, so its poll() can
+        scope get_state(). Prefers the explicit context, then the ambient one,
+        then a minimal context built from the poller's own project_id.
+        """
+        if self._context is not None:
+            return self._context
+        try:
+            from noveum_trace.guard import _state
+
+            ctx = _state.get_context()
+        except Exception:
+            ctx = None
+        if ctx is not None:
+            return ctx
+        if self._project_id:
+            return PolicyContext(
+                project_id=self._project_id,
+                organization_id=None,
+                environment="",
+                trace_id=None,
+                span_id=None,
+                call_id="",
+            )
+        return None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -248,13 +280,17 @@ class PolicyPoller:
                     continue
                 try:
                     new_policy = _instantiate_policy(cls, policy_name, config)
-                    # Bind the ambient context so poll() can scope its get_state() call.
+                    # Bind a context so poll() can scope its get_state() call.
                     try:
-                        from noveum_trace.guard import _state
-
-                        ctx = _state.get_context()
+                        ctx = self._binding_context()
                         if ctx is not None:
                             new_policy.bind_context(ctx)
+                        else:
+                            _log.warning(
+                                "PolicyPoller: policy %r has no project scope — "
+                                "its poll() cannot read backend state.",
+                                policy_name,
+                            )
                     except Exception:
                         pass
                     self._engine.attach(new_policy)
