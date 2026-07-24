@@ -13,12 +13,17 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from noveum_trace.guard import _state as guard_state
 from noveum_trace.guard.api_client import GuardAPIClient
 from noveum_trace.guard.engine import PolicyEngine
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
 from noveum_trace.guard.policies.base import AbstractPolicy
+
+# Imported for its register_policy_type("rate_limit", ...) side effect, which the
+# scope-binding tests rely on to instantiate a policy from a backend config row.
+from noveum_trace.guard.policies.rate_limit import RateLimitPolicy  # noqa: F401
 from noveum_trace.guard.poller import PolicyPoller
-from noveum_trace.guard.types import PolicyDeps
+from noveum_trace.guard.types import ParsedRequest, PolicyContext, PolicyDeps
 
 # ---------------------------------------------------------------------------
 # Helpers — stub policy that records poll() calls
@@ -201,18 +206,24 @@ class TestAttachMidRun:
 
 
 class _FakeAPIClient:
-    """Stand-in for GuardAPIClient exposing only fetch_remote_policies()."""
+    """Stand-in for GuardAPIClient exposing fetch_remote_policies() + get_state()."""
 
-    def __init__(self, *, raise_exc=None, policies=None):
+    def __init__(self, *, raise_exc=None, policies=None, state=None):
         self._raise_exc = raise_exc
         self._policies = policies or []
+        self._state = state or {}
         self.calls = 0
+        self.state_calls: list = []
 
     def fetch_remote_policies(self, project_id):
         self.calls += 1
         if self._raise_exc is not None:
             raise self._raise_exc
         return self._policies
+
+    def get_state(self, project_id, window=None):
+        self.state_calls.append(project_id)
+        return dict(self._state)
 
 
 class TestBackendUnavailableHandling:
@@ -256,6 +267,128 @@ class TestBackendUnavailableHandling:
         poller._fetch_backend_policies()  # must not raise
 
         assert engine.is_backend_unavailable() is False
+
+
+# ---------------------------------------------------------------------------
+# Scope binding for backend-fetched policies
+# ---------------------------------------------------------------------------
+
+_RATE_POLICY_ROW = {
+    "type": "rate_limit",
+    "name": "backend-rate",
+    "fail_closed": True,
+    "windows": [{"period": "1h", "maxRequests": 10}],
+}
+_BACKEND_RATE = {"requests_1h": 99, "tokens_1h": 990}
+
+
+def _ctx(project_id: str) -> PolicyContext:
+    return PolicyContext(
+        project_id=project_id,
+        organization_id=None,
+        environment="test",
+        trace_id=None,
+        span_id=None,
+        call_id="c",
+    )
+
+
+def _parsed_request() -> ParsedRequest:
+    return ParsedRequest(
+        provider="openai",
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        max_tokens=16,
+        estimated_input_tokens=10,
+        raw_body=b"{}",
+    )
+
+
+class TestBackendPolicyScopeBinding:
+    """A policy instantiated from the backend must learn its project scope.
+
+    Without it ``poll()`` returns on its first line and the policy never reads
+    ``get_state()`` — enforcing only against calls made by this process, which
+    silently defeats cross-process rate limits and cost caps.
+    """
+
+    @staticmethod
+    def _fetch_and_poll(api, **poller_kwargs):
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine, **poller_kwargs)
+        poller._fetch_backend_policies()
+        poller._poll_all_now()
+        policy = next(p for p in engine.policies if p.name == "backend-rate")
+        return policy
+
+    def test_explicit_context_scopes_policy(self):
+        api = _FakeAPIClient(policies=[_RATE_POLICY_ROW], state={"rate": _BACKEND_RATE})
+
+        policy = self._fetch_and_poll(api, project_id="proj", context=_ctx("proj"))
+
+        assert policy._stored_scope_id() == "proj"
+        assert policy.data_map == _BACKEND_RATE
+        assert api.state_calls == ["proj"]
+
+    def test_project_id_alone_scopes_policy(self):
+        """No context anywhere — the poller's own project_id must still bind."""
+        api = _FakeAPIClient(policies=[_RATE_POLICY_ROW], state={"rate": _BACKEND_RATE})
+
+        policy = self._fetch_and_poll(api, project_id="proj")
+
+        assert policy._stored_scope_id() == "proj"
+        assert policy.data_map == _BACKEND_RATE
+
+    def test_ambient_state_context_scopes_policy(self):
+        api = _FakeAPIClient(policies=[_RATE_POLICY_ROW], state={"rate": _BACKEND_RATE})
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine)  # no project_id, no explicit context
+        guard_state.set_guard(engine, _ctx("ambient-proj"), poller)
+        try:
+            poller._fetch_backend_policies()
+            poller._poll_all_now()
+        finally:
+            guard_state.clear()
+
+        policy = next(p for p in engine.policies if p.name == "backend-rate")
+        assert policy._stored_scope_id() == "ambient-proj"
+        assert policy.data_map == _BACKEND_RATE
+
+    def test_explicit_context_wins_over_ambient(self):
+        api = _FakeAPIClient(policies=[_RATE_POLICY_ROW], state={"rate": _BACKEND_RATE})
+        engine = PolicyEngine(api_client=api)
+        poller = PolicyPoller(engine, project_id="explicit", context=_ctx("explicit"))
+        guard_state.set_guard(engine, _ctx("ambient"), poller)
+        try:
+            poller._fetch_backend_policies()
+        finally:
+            guard_state.clear()
+
+        policy = next(p for p in engine.policies if p.name == "backend-rate")
+        assert policy._stored_scope_id() == "explicit"
+
+    def test_binding_context_is_none_when_nothing_available(self):
+        poller = PolicyPoller(PolicyEngine(api_client=_FakeAPIClient()))
+
+        assert poller._binding_context() is None
+
+    def test_first_call_blocked_by_counts_from_another_process(self):
+        """The behaviour the binding exists for: a freshly started process must
+        inherit usage it did not make. The backend already reports 12 requests
+        against a cap of 10, so call number one is blocked even though this
+        process has made no calls at all.
+        """
+        api = _FakeAPIClient(
+            policies=[_RATE_POLICY_ROW],
+            state={"rate": {"requests_1h": 12, "tokens_1h": 120}},
+        )
+        policy = self._fetch_and_poll(api, project_id="proj", context=_ctx("proj"))
+
+        decision = policy.pre(_parsed_request(), _ctx("proj"), PolicyDeps(api=api))
+
+        assert decision.is_blocking
+        assert "12/10 requests per 1h" in decision.reason
 
 
 # ---------------------------------------------------------------------------

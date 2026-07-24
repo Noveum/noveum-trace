@@ -289,9 +289,9 @@ def init(
                 for _policy in policies or []:
                     _policy.bind_context(_ctx)
                     _engine.attach(_policy)
-                # Pass project_id explicitly so the poller can fetch backend
-                # policies even before the first pre_call() sets context.
-                _poller = PolicyPoller(_engine, project_id=_project_id)
+                # Pass project_id and context explicitly: start() runs before
+                # set_guard() below, so the poller cannot read either from _state.
+                _poller = PolicyPoller(_engine, project_id=_project_id, context=_ctx)
                 try:
                     _poller.start()
                 except Exception:
