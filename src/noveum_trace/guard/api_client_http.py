@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from noveum_trace.guard.api_client import (
-    _BLOCKED_BY_VALUES,
+    BLOCKED_BY_VALUES,
     GuardAPIClient,
     ReservationResult,
 )
@@ -165,7 +165,7 @@ class HttpGuardAPIClient(GuardAPIClient):
         Sent in place of the model call, so the backend can bill nothing, log the
         block, and email the owner. ``costUsd`` is 0 — the call never happened.
         """
-        if blocked_by not in _BLOCKED_BY_VALUES:
+        if blocked_by not in BLOCKED_BY_VALUES:
             # Would be a 400; drop it rather than poison a whole batch.
             _log.debug("blocked event dropped — invalid blockedBy %r", blocked_by)
             return

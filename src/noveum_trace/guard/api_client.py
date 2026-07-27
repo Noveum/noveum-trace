@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -14,7 +15,13 @@ _WINDOW_SECONDS = {"1m": 60.0, "1h": 3600.0, "1d": 86400.0}
 _MAX_WINDOW_SECONDS = 86400.0  # 1d — the longest window bounds retention
 
 # The only values /policies/usage accepts for blockedBy; anything else is a 400.
-_BLOCKED_BY_VALUES = ("COST_CAP", "RATE_LIMIT")
+# Public: HttpGuardAPIClient validates against it too, and policies map onto it.
+BLOCKED_BY_VALUES = ("COST_CAP", "RATE_LIMIT")
+
+# Per-project cap on the blocked-event inspection buffer. A hard bound rather
+# than time-based eviction: a sustained block storm would otherwise accumulate
+# millions of entries before the first window expiry.
+_MAX_BLOCKED_EVENTS = 1000
 
 
 @dataclass
@@ -64,9 +71,10 @@ class GuardAPIClient:
         # CostCapPolicy in shared mode + RateLimitPolicy) reports the same call.
         # Timestamped so stale ids can be evicted rather than growing unbounded.
         self._reported_event_ids: dict[str, float] = {}
-        # project_id → blocked events recorded for inspection. Never folded into
-        # _spend/_rate: a blocked call never ran, so it is not metered.
-        self._blocked_events: dict[str, list[dict[str, Any]]] = {}
+        # project_id → recent blocked events, for inspection only. Never folded
+        # into _spend/_rate: a blocked call never ran, so it is not metered.
+        # Bounded per project — oldest entries are dropped once full.
+        self._blocked_events: dict[str, deque[dict[str, Any]]] = {}
 
     # Core accounting
 
@@ -167,10 +175,13 @@ class GuardAPIClient:
         excluded from the counters policies check. ``blocked_by`` is the backend
         limit type ("COST_CAP" or "RATE_LIMIT") that tripped.
         """
-        if blocked_by not in _BLOCKED_BY_VALUES:
+        if blocked_by not in BLOCKED_BY_VALUES:
             return
         with self._lock:
-            self._blocked_events.setdefault(project_id, []).append(
+            events = self._blocked_events.setdefault(
+                project_id, deque(maxlen=_MAX_BLOCKED_EVENTS)
+            )
+            events.append(
                 {
                     "call_id": call_id,
                     "model": model,

@@ -224,6 +224,9 @@ class TestPolicySyncCarriesPolicyId:
 # ---------------------------------------------------------------------------
 
 
+# No API-key guard: both tests block before the provider is reached, so they
+# need the openai package but never a valid key.
+@pytest.mark.skipif(not OPENAI_AVAILABLE, reason="openai not installed")
 class TestBlockedEventIngest:
     def test_blocked_call_posts_blocked_event(self, usage_posts):
         """Exhausted cap → no provider call, one BLOCKED event accepted (202).
@@ -552,20 +555,29 @@ class TestRealBackendPolicies:
 class TestBackendRejectsMalformed:
     def test_blocked_without_blocked_by_is_rejected(self):
         """Confirms the 400 the SDK guards against is real, so the local
-        validation in report_blocked() is protecting something."""
+        validation in report_blocked() is protecting something.
+
+        Sent as a one-element array — the batched shape _post_usage always
+        uses — so this exercises the same validation path the SDK would hit.
+        """
         url = (
             f"{NOVEUM_ENDPOINT.rstrip('/')}/v1/projects/{NOVEUM_PROJECT}/policies/usage"
         )
         resp = httpx.post(
             url,
             headers={"Authorization": f"Bearer {NOVEUM_API_KEY}"},
-            json={
-                "model": MODEL,
-                "outcome": "BLOCKED",  # no blockedBy — malformed on purpose
-                "eventId": str(uuid.uuid4()),
-            },
+            json=[
+                {
+                    "model": MODEL,
+                    "outcome": "BLOCKED",  # no blockedBy — malformed on purpose
+                    "eventId": str(uuid.uuid4()),
+                }
+            ],
             timeout=15.0,
             follow_redirects=True,
         )
         print(f"\n[malformed] HTTP {resp.status_code} {resp.text[:300]}")
         assert resp.status_code == 400
+        # The array form itself is valid (every SDK push uses it), so pin the
+        # rejection to the missing field rather than the wrapper.
+        assert "blockedBy" in resp.text
