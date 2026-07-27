@@ -13,6 +13,7 @@ import uuid
 import httpx
 import pytest
 
+from noveum_trace.guard import api_client_http
 from noveum_trace.guard.api_client_http import HttpGuardAPIClient
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
 
@@ -22,9 +23,10 @@ def _call_id() -> str:
 
 
 class _Resp:
-    def __init__(self, status_code: int, json_data=None):
+    def __init__(self, status_code: int, json_data=None, headers=None):
         self.status_code = status_code
         self._json = json_data if json_data is not None else {}
+        self.headers = headers or {}
 
     def json(self):
         return self._json
@@ -34,6 +36,9 @@ class _FakeClient:
     """Records every get/post so tests can assert the HTTP contract."""
 
     calls: list[dict] = []
+    # Queued POST responses, consumed in order; the last one repeats so a retry
+    # loop keeps seeing the same status. Empty means "always 202".
+    post_resps: list = []
 
     def __init__(self, *, get_resp=None, get_exc=None, post_exc=None):
         self._get_resp = get_resp
@@ -66,12 +71,20 @@ class _FakeClient:
         )
         if self._post_exc is not None:
             raise self._post_exc
+        queued = _FakeClient.post_resps
+        if queued:
+            return queued.pop(0) if len(queued) > 1 else queued[0]
         return _Resp(202, {"success": True})
 
 
-def _patch(monkeypatch, **kwargs) -> None:
+def _patch(monkeypatch, post_resps=None, **kwargs) -> None:
     _FakeClient.calls = []
+    _FakeClient.post_resps = list(post_resps or [])
     monkeypatch.setattr(httpx, "Client", lambda **kw: _FakeClient(**kwargs))
+
+
+def _posts() -> list[dict]:
+    return [c for c in _FakeClient.calls if c["method"] == "POST"]
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +261,173 @@ class TestReportUsage:
 
 
 # ---------------------------------------------------------------------------
+# report_blocked — BLOCKED events on the same POST /policies/usage
+# ---------------------------------------------------------------------------
+
+
+class TestReportBlocked:
+    def test_event_has_backend_shape(self, monkeypatch):
+        _patch(monkeypatch)
+        api = HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+        cid = _call_id()
+        api.report_blocked(
+            cid,
+            "proj",
+            "gpt-4o",
+            "COST_CAP",
+            policy_id="pol_abc123",
+            reason="30d cost cap exceeded",
+        )
+        api.close()
+
+        post = _posts()[0]
+        assert post["url"] == "https://api.noveum.ai/v1/projects/proj/policies/usage"
+        event = post["json"][0]
+        assert event["outcome"] == "BLOCKED"
+        assert event["blockedBy"] == "COST_CAP"
+        assert event["model"] == "gpt-4o"
+        assert event["costUsd"] == 0.0  # the call never ran
+        assert event["policyId"] == "pol_abc123"
+        assert event["reason"] == "30d cost cap exceeded"
+        assert event["eventId"] == cid
+        assert event["timestamp"].endswith("Z")
+
+    def test_optional_fields_omitted_when_absent(self, monkeypatch):
+        _patch(monkeypatch)
+        api = HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "RATE_LIMIT")
+        api.close()
+
+        event = _posts()[0]["json"][0]
+        assert "policyId" not in event
+        assert "reason" not in event
+        assert event["blockedBy"] == "RATE_LIMIT"
+
+    def test_reason_truncated_to_backend_limit(self, monkeypatch):
+        _patch(monkeypatch)
+        api = HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "COST_CAP", reason="x" * 900)
+        api.close()
+        assert len(_posts()[0]["json"][0]["reason"]) == 500
+
+    def test_invalid_blocked_by_is_dropped(self, monkeypatch):
+        """An unknown blockedBy is a guaranteed 400 — never let it poison a batch."""
+        _patch(monkeypatch)
+        api = HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "SOMETHING_ELSE")
+        api.close()
+        assert _posts() == []
+
+    def test_blocked_and_allowed_share_one_batch(self, monkeypatch):
+        _patch(monkeypatch)
+        api = HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+        api.report_usage(_call_id(), "proj", 0.01, "gpt-4o", 10, 5)
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "COST_CAP")
+        api.close()
+
+        posts = _posts()
+        assert len(posts) == 1
+        outcomes = [e.get("outcome", "ALLOWED") for e in posts[0]["json"]]
+        assert outcomes == ["ALLOWED", "BLOCKED"]
+
+
+# ---------------------------------------------------------------------------
+# usage push — HTTP status handling
+# ---------------------------------------------------------------------------
+
+
+class TestUsagePushStatusHandling:
+    @staticmethod
+    def _api(monkeypatch, post_resps):
+        _patch(monkeypatch, post_resps=post_resps)
+        monkeypatch.setattr(api_client_http, "_RETRY_BASE_DELAY", 0.0)
+        return HttpGuardAPIClient(
+            api_key="k", base_url="https://api.noveum.ai", flush_interval=3600
+        )
+
+    def test_success_posts_once(self, monkeypatch):
+        api = self._api(monkeypatch, [_Resp(202, {"success": True})])
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        assert len(_posts()) == 1
+        api.close()
+
+    def test_400_is_not_retried(self, monkeypatch):
+        """A malformed payload fails identically every time — resending it only
+        burns requests."""
+        api = self._api(monkeypatch, [_Resp(400, {"error": "bad"})])
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        assert len(_posts()) == 1
+        api.close()
+
+    def test_500_is_retried_to_the_attempt_limit(self, monkeypatch):
+        api = self._api(monkeypatch, [_Resp(500)])
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        assert len(_posts()) == api_client_http._MAX_PUSH_ATTEMPTS
+        api.close()
+
+    def test_retry_reuses_the_same_event_id(self, monkeypatch):
+        """Idempotency: the backend dedups on eventId, so a resend must carry
+        the original one or the retry double-counts."""
+        api = self._api(monkeypatch, [_Resp(503)])
+        cid = _call_id()
+        api.report_usage(cid, "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        sent = [p["json"][0]["eventId"] for p in _posts()]
+        assert sent == [cid] * api_client_http._MAX_PUSH_ATTEMPTS
+        api.close()
+
+    def test_429_is_retried(self, monkeypatch):
+        api = self._api(monkeypatch, [_Resp(429, headers={"Retry-After": "0"})])
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        assert len(_posts()) == api_client_http._MAX_PUSH_ATTEMPTS
+        api.close()
+
+    def test_recovers_when_a_retry_succeeds(self, monkeypatch):
+        api = self._api(monkeypatch, [_Resp(500), _Resp(202, {"success": True})])
+        api.report_usage(_call_id(), "proj", 1.0, "gpt-4o")
+        api._flush_once()
+        assert len(_posts()) == 2  # stops as soon as one succeeds
+        api.close()
+
+
+class TestRetryDelay:
+    def test_honors_retry_after_seconds(self):
+        api = HttpGuardAPIClient(api_key="k")
+        assert api._retry_delay(_Resp(429, headers={"Retry-After": "7"}), 1) == 7.0
+
+    def test_caps_retry_after(self):
+        """A hostile or mistaken header must not park the flush thread for hours."""
+        api = HttpGuardAPIClient(api_key="k")
+        delay = api._retry_delay(_Resp(429, headers={"Retry-After": "99999"}), 1)
+        assert delay == api_client_http._MAX_RETRY_DELAY
+
+    def test_http_date_falls_back_to_backoff(self):
+        api = HttpGuardAPIClient(api_key="k")
+        resp = _Resp(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})
+        assert api._retry_delay(resp, 2) == api_client_http._RETRY_BASE_DELAY * 2
+
+    def test_backoff_doubles_without_a_header(self):
+        api = HttpGuardAPIClient(api_key="k")
+        base = api_client_http._RETRY_BASE_DELAY
+        delays = [api._retry_delay(_Resp(500), n) for n in (1, 2, 3)]
+        assert delays == [base, base * 2, base * 4]
+
+
+# ---------------------------------------------------------------------------
 # reserve / reconcile — unsupported by the HTTP backend
 # ---------------------------------------------------------------------------
 
@@ -302,6 +482,7 @@ class TestFetchRemotePolicies:
                 "type": "cost_cap",
                 "name": "Monthly budget",
                 "fail_closed": True,
+                "policy_id": "p1",
                 "max_usd": 1500,
                 "window": "30d_rolling",
             }
@@ -340,6 +521,7 @@ class TestFetchRemotePolicies:
                 "type": "rate_limit",
                 "name": "Burst rate",
                 "fail_closed": True,
+                "policy_id": "p2",
                 "windows": [
                     {
                         "period": "1m",

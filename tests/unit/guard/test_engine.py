@@ -534,3 +534,90 @@ class TestMultipleCostCapPolicies:
         # proj-a blocks (cap=0), proj-b untouched
         assert block is not None
         assert api.current_spend("proj-b") == 0.0
+
+
+class TestBlockedEventReporting:
+    """A block must reach /policies/usage — that is what emails the owner."""
+
+    def test_cost_cap_block_is_reported(self):
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(
+            CostCapPolicy(
+                max_usd=0.0,
+                mode=EnforcementMode.strict,
+                project_id="proj",
+                policy_id="pol_abc123",
+            )
+        )
+        ctx = _ctx()
+
+        block, _ = engine.pre_call(_req(model="gpt-4o"), ctx)
+
+        assert block is not None
+        events = api.blocked_events("proj")
+        assert len(events) == 1
+        assert events[0]["blocked_by"] == "COST_CAP"
+        assert events[0]["policy_id"] == "pol_abc123"
+        assert events[0]["model"] == "gpt-4o"
+        assert events[0]["call_id"] == ctx.call_id
+        assert "Cost cap" in events[0]["reason"]
+
+    def test_blocked_call_is_not_metered(self):
+        """A blocked call never ran, so it must not count toward spend."""
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(
+            CostCapPolicy(max_usd=0.0, mode=EnforcementMode.strict, project_id="proj")
+        )
+        engine.pre_call(_req(), _ctx())
+        assert api.current_spend("proj") == 0.0
+
+    def test_fail_closed_exception_block_is_not_reported(self):
+        """A crashing policy is a bug, not a limit — reporting it would fire a
+        spurious owner email and corrupt the audit log."""
+
+        class Exploding(AbstractPolicy):
+            name = "exploding"
+            fail_closed = True
+
+            def pre(self, parsed, ctx, deps):
+                raise RuntimeError("boom")
+
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(Exploding())
+
+        block, _ = engine.pre_call(_req(), _ctx())
+
+        assert block is not None and block.is_blocking
+        assert api.blocked_events("proj") == []
+
+    def test_control_plane_block_is_not_reported(self):
+        """Failing closed on an unreachable control plane is an availability
+        event, not a cost cap or rate limit."""
+        api = GuardAPIClient()
+        engine = PolicyEngine(api_client=api)
+        engine.set_backend_unavailable(True)
+
+        block, _ = engine.pre_call(_req(), _ctx())
+
+        assert block is not None and block.is_blocking
+        assert api.blocked_events("proj") == []
+
+    def test_report_failure_does_not_break_the_block(self):
+        """Reporting is best-effort; a backend wobble must not turn a clean
+        block into an exception in the caller's LLM call."""
+
+        class ExplodingReporter(GuardAPIClient):
+            def report_blocked(self, *args, **kwargs):
+                raise RuntimeError("usage endpoint down")
+
+        api = ExplodingReporter()
+        engine = PolicyEngine(api_client=api)
+        engine.attach(
+            CostCapPolicy(max_usd=0.0, mode=EnforcementMode.strict, project_id="proj")
+        )
+
+        block, _ = engine.pre_call(_req(), _ctx())
+        assert block is not None and block.is_blocking

@@ -39,6 +39,7 @@ class RateLimitPolicy(AbstractPolicy):
     """
 
     name = "rate_limit"
+    blocked_by = "RATE_LIMIT"
     poll_interval: float = 30.0
 
     def __init__(
@@ -47,12 +48,14 @@ class RateLimitPolicy(AbstractPolicy):
         fail_closed: bool = True,
         project_id: Optional[str] = None,
         organization_id: Optional[str] = None,
+        policy_id: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.windows = list(windows) if windows else []
         self.fail_closed = fail_closed
         self._project_id = project_id
         self._organization_id = organization_id
+        self._policy_id = policy_id
 
     def bind_context(self, ctx: PolicyContext) -> None:
         # Adopt the ambient org/project so the background poller can scope
@@ -86,6 +89,12 @@ class RateLimitPolicy(AbstractPolicy):
         with self._lock:
             windows = list(self.windows)
             counts = dict(self.data_map)
+            policy_id = self._policy_id
+        block_state = {
+            "scope_id": scope_id,
+            "blocked_by": self.blocked_by,
+            "policy_id": policy_id,
+        }
 
         for w in windows:
             period = w.get("period")
@@ -105,7 +114,7 @@ class RateLimitPolicy(AbstractPolicy):
                         f"Rate limit reached: {requests}/{max_requests} "
                         f"requests per {period}"
                     ),
-                    state={"scope_id": scope_id},
+                    state=dict(block_state),
                 )
             if max_tokens is not None and tokens >= max_tokens:
                 return PolicyDecision.block(
@@ -114,7 +123,7 @@ class RateLimitPolicy(AbstractPolicy):
                     reason=(
                         f"Rate limit reached: {tokens}/{max_tokens} tokens per {period}"
                     ),
-                    state={"scope_id": scope_id},
+                    state=dict(block_state),
                 )
 
         return PolicyDecision.allow(self.name, Phase.pre, state={"scope_id": scope_id})
@@ -166,6 +175,7 @@ class RateLimitPolicy(AbstractPolicy):
             ``fail_closed``     — bool; whether to block on unexpected exception
             ``organization_id`` — switch or set org-level scoping
             ``project_id``      — switch or set project-level scoping
+            ``policy_id``       — backend policy id, sent on BLOCKED events
         """
         with self._lock:
             if "windows" in config:
@@ -176,6 +186,8 @@ class RateLimitPolicy(AbstractPolicy):
                 self._organization_id = config["organization_id"] or None
             if "project_id" in config:
                 self._project_id = config["project_id"] or None
+            if "policy_id" in config:
+                self._policy_id = config["policy_id"] or None
 
     def poll(self, deps: PolicyDeps) -> None:
         scope_id = self._stored_scope_id()
