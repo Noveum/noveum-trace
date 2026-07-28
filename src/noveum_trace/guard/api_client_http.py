@@ -5,7 +5,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from noveum_trace.guard.api_client import GuardAPIClient, ReservationResult
+from noveum_trace.guard.api_client import (
+    BLOCKED_BY_VALUES,
+    GuardAPIClient,
+    ReservationResult,
+)
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
 
 _log = logging.getLogger(__name__)
@@ -15,6 +19,19 @@ _DEFAULT_WINDOW = "30d_rolling"
 
 # Map backend PolicyType enum (uppercase) → SDK policy registry key (lowercase).
 _TYPE_MAP = {"COST_CAP": "cost_cap", "RATE_LIMIT": "rate_limit"}
+
+# Usage-push retry budget. Only 5xx and 429 are retried; the backend dedups on
+# eventId so a resend can never double-count.
+_MAX_PUSH_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 0.5  # seconds; doubles per attempt
+_MAX_RETRY_DELAY = 30.0  # ceiling for a server-supplied Retry-After
+
+# Backend caps reason at 500 chars; longer values are a 400.
+_MAX_REASON_LEN = 500
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class HttpGuardAPIClient(GuardAPIClient):
@@ -127,9 +144,46 @@ class HttpGuardAPIClient(GuardAPIClient):
             "outputTokens": max(0, int(output_tokens)),
             "costUsd": float(actual_usd),
             "requestCount": 1,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso(),
             "eventId": call_id,  # idempotency key — backend dedups on retry
         }
+        self._enqueue(project_id, event)
+
+    # Block write — enqueue for the same batched POST /policies/usage
+
+    def report_blocked(
+        self,
+        call_id: str,
+        project_id: str,
+        model: str,
+        blocked_by: str,
+        policy_id: Optional[str] = None,
+        reason: str = "",
+    ) -> None:
+        """Queue a BLOCKED event for a call the Guard stopped before it ran.
+
+        Sent in place of the model call, so the backend can bill nothing, log the
+        block, and email the owner. ``costUsd`` is 0 — the call never happened.
+        """
+        if blocked_by not in BLOCKED_BY_VALUES:
+            # Would be a 400; drop it rather than poison a whole batch.
+            _log.debug("blocked event dropped — invalid blockedBy %r", blocked_by)
+            return
+        event: dict[str, Any] = {
+            "model": model or "unknown",
+            "outcome": "BLOCKED",
+            "blockedBy": blocked_by,
+            "costUsd": 0.0,
+            "timestamp": _now_iso(),
+            "eventId": call_id,  # idempotency key — backend dedups on retry
+        }
+        if policy_id:
+            event["policyId"] = policy_id
+        if reason:
+            event["reason"] = reason[:_MAX_REASON_LEN]
+        self._enqueue(project_id, event)
+
+    def _enqueue(self, project_id: str, event: dict[str, Any]) -> None:
         with self._queue_lock:
             self._queue.append((project_id, event))
             full = len(self._queue) >= self._batch_max
@@ -230,26 +284,78 @@ class HttpGuardAPIClient(GuardAPIClient):
             self._post_usage(scope_id, events)
 
     def _post_usage(self, scope_id: str, events: list[dict[str, Any]]) -> None:
-        url = f"{self.base_url}/v1/projects/{scope_id}/policies/usage"
-        try:
-            import httpx
+        """POST one batch, retrying only what a retry can fix.
 
-            with httpx.Client(timeout=self._timeout, follow_redirects=True) as client:
-                client.post(
-                    url,
-                    headers=self._headers(),
-                    params=self._query(),
-                    json=events,
+        5xx and 429 are transient, so they are resent with the same eventIds
+        (the backend dedups). A 4xx means the payload itself is wrong — logged
+        loudly and dropped, because resending it would fail identically.
+        Runs on the flush thread, so a backoff never delays the caller.
+        """
+        url = f"{self.base_url}/v1/projects/{scope_id}/policies/usage"
+        for attempt in range(1, _MAX_PUSH_ATTEMPTS + 1):
+            try:
+                import httpx
+
+                with httpx.Client(
+                    timeout=self._timeout, follow_redirects=True
+                ) as client:
+                    resp = client.post(
+                        url,
+                        headers=self._headers(),
+                        params=self._query(),
+                        json=events,
+                    )
+                status = resp.status_code
+                if status < 300:
+                    return
+                if status == 429 or status >= 500:
+                    if attempt == _MAX_PUSH_ATTEMPTS:
+                        _log.warning(
+                            "usage push gave up after %d attempts for project %r "
+                            "(%d events, last status %d)",
+                            attempt,
+                            scope_id,
+                            len(events),
+                            status,
+                        )
+                        return
+                    if self._stop.wait(self._retry_delay(resp, attempt)):
+                        return  # shutting down; drop rather than delay close()
+                    continue
+                _log.error(
+                    "usage push rejected for project %r (%d events): HTTP %d — "
+                    "payload is malformed, not retrying",
+                    scope_id,
+                    len(events),
+                    status,
                 )
-        except Exception as exc:
-            # Best-effort: a dropped batch under-counts spend slightly; it never
-            # over-counts (idempotent) and the backend stays authoritative.
-            _log.debug(
-                "usage push failed for project %r (%d events) — %s",
-                scope_id,
-                len(events),
-                exc,
-            )
+                return
+            except Exception as exc:
+                # Network-level failure: retry on the same schedule as a 5xx.
+                if attempt == _MAX_PUSH_ATTEMPTS:
+                    # Best-effort: a dropped batch under-counts spend slightly; it
+                    # never over-counts (idempotent) and the backend stays
+                    # authoritative.
+                    _log.debug(
+                        "usage push failed for project %r (%d events) — %s",
+                        scope_id,
+                        len(events),
+                        exc,
+                    )
+                    return
+                if self._stop.wait(_RETRY_BASE_DELAY * (2 ** (attempt - 1))):
+                    return
+
+    # resp is Any because httpx is imported lazily — no module-level Response type.
+    def _retry_delay(self, resp: Any, attempt: int) -> float:
+        """Seconds to wait before the next attempt; honors Retry-After on 429."""
+        retry_after = (getattr(resp, "headers", None) or {}).get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), _MAX_RETRY_DELAY)
+            except (TypeError, ValueError):
+                pass  # HTTP-date form — fall back to exponential backoff
+        return _RETRY_BASE_DELAY * (2 ** (attempt - 1))
 
     def close(self) -> None:
         """Stop the flush thread and drain any queued usage events."""
@@ -279,6 +385,9 @@ def _normalize_policy(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
         "name": raw.get("name", sdk_type),
         "fail_closed": raw.get("failClosed", True),
     }
+    # Carried through so a BLOCKED event can name the policy that blocked.
+    if raw.get("policyId"):
+        mapped["policy_id"] = raw["policyId"]
     if "maxUsd" in config:
         mapped["max_usd"] = config["maxUsd"]
     if "window" in config:

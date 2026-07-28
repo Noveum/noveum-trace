@@ -139,6 +139,7 @@ class PolicyEngine:
                 # entry must be cleaned up even though state may carry reserved_usd=0.
                 for p, prev_d in ran:
                     self._safe_invoke(p, p.release, prev_d, ctx, deps)
+                self._report_blocked(decision, parsed, ctx)
                 return decision, ran
 
         return None, ran
@@ -186,6 +187,35 @@ class PolicyEngine:
                 pass
 
     # Internal
+
+    def _report_blocked(
+        self,
+        decision: PolicyDecision,
+        parsed: ParsedRequest,
+        ctx: PolicyContext,
+    ) -> None:
+        """Push a BLOCKED usage event for a call a limit policy stopped.
+
+        Reported here rather than in each transport so all four call sites
+        (sync, async, bedrock, crewai) are covered once. Only decisions carrying
+        ``blocked_by`` are sent: a fail-closed or control-plane block is not a
+        limit event, and the backend rejects any other ``blockedBy`` value.
+        """
+        blocked_by = decision.state.get("blocked_by")
+        if not blocked_by:
+            return
+        try:
+            self._api_client.report_blocked(
+                call_id=ctx.call_id,
+                project_id=decision.state.get("scope_id") or ctx.project_id,
+                model=parsed.model,
+                blocked_by=blocked_by,
+                policy_id=decision.state.get("policy_id"),
+                reason=decision.reason,
+            )
+        except Exception as exc:
+            # Never let reporting turn a clean block into an error for the caller.
+            _log.debug("blocked-event report failed for %s — %s", ctx.call_id, exc)
 
     def _safe_invoke(
         self,

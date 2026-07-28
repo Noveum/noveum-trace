@@ -29,6 +29,9 @@ class AbstractPolicy(ABC):
     mode: EnforcementMode = EnforcementMode.strict
     fail_closed: bool = True  # block on unexpected exception (safe default)
     priority: int = 100  # lower = runs first; ties broken by registration order
+    # Backend limit type sent as ``blockedBy`` when this policy blocks a call.
+    # None means this policy's blocks are not limit events and go unreported.
+    blocked_by: ClassVar[Optional[str]] = None
     poll_interval: Optional[float] = (
         None  # seconds; None means poller skips this policy
     )

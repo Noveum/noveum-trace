@@ -6,7 +6,7 @@ import uuid
 import httpx
 import pytest
 
-from noveum_trace.guard.api_client import GuardAPIClient
+from noveum_trace.guard.api_client import _MAX_BLOCKED_EVENTS, GuardAPIClient
 from noveum_trace.guard.exceptions import GuardBackendUnavailable
 
 # ---------------------------------------------------------------------------
@@ -363,3 +363,60 @@ class TestConcurrency:
             t.join()
 
         assert api.current_spend("proj") <= cap
+
+
+# ---------------------------------------------------------------------------
+# report_blocked()
+# ---------------------------------------------------------------------------
+
+
+class TestReportBlocked:
+    def test_records_the_event(self):
+        api = GuardAPIClient()
+        cid = _call_id()
+        api.report_blocked(
+            cid, "proj", "gpt-4o", "COST_CAP", policy_id="pol_1", reason="cap hit"
+        )
+        events = api.blocked_events("proj")
+        assert len(events) == 1
+        assert events[0] == {
+            "call_id": cid,
+            "model": "gpt-4o",
+            "blocked_by": "COST_CAP",
+            "policy_id": "pol_1",
+            "reason": "cap hit",
+        }
+
+    def test_invalid_blocked_by_is_ignored(self):
+        api = GuardAPIClient()
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "NOT_A_LIMIT")
+        assert api.blocked_events("proj") == []
+
+    def test_blocked_call_is_not_metered(self):
+        """The call never ran, so it must not count toward spend or rate."""
+        api = GuardAPIClient()
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "RATE_LIMIT")
+        assert api.current_spend("proj") == 0.0
+        assert api.current_rate("proj") == {}
+
+    def test_buffer_is_bounded(self):
+        """A long-running process under sustained blocking must not grow the
+        inspection buffer without bound."""
+        api = GuardAPIClient()
+        for _ in range(_MAX_BLOCKED_EVENTS + 250):
+            api.report_blocked(_call_id(), "proj", "gpt-4o", "RATE_LIMIT")
+        assert len(api.blocked_events("proj")) == _MAX_BLOCKED_EVENTS
+
+    def test_bounded_buffer_drops_the_oldest(self):
+        api = GuardAPIClient()
+        for i in range(_MAX_BLOCKED_EVENTS + 1):
+            api.report_blocked(str(i), "proj", "gpt-4o", "RATE_LIMIT")
+        events = api.blocked_events("proj")
+        assert events[0]["call_id"] == "1"  # "0" was evicted
+        assert events[-1]["call_id"] == str(_MAX_BLOCKED_EVENTS)
+
+    def test_reset_clears_blocked_events(self):
+        api = GuardAPIClient()
+        api.report_blocked(_call_id(), "proj", "gpt-4o", "COST_CAP")
+        api.reset()
+        assert api.blocked_events("proj") == []

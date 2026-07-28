@@ -40,6 +40,7 @@ class CostCapPolicy(AbstractPolicy):
     """
 
     name = "cost_cap"
+    blocked_by = "COST_CAP"
     poll_interval: float = 30.0
 
     def __init__(
@@ -51,6 +52,7 @@ class CostCapPolicy(AbstractPolicy):
         scope_to_models: Optional[list[str]] = None,
         project_id: Optional[str] = None,
         organization_id: Optional[str] = None,
+        policy_id: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.max_usd = max_usd
@@ -65,6 +67,7 @@ class CostCapPolicy(AbstractPolicy):
         self.scope_to_models = scope_to_models
         self._project_id = project_id
         self._organization_id = organization_id
+        self._policy_id = policy_id
 
     def bind_context(self, ctx: PolicyContext) -> None:
         # Adopt the ambient org/project so the background poller can scope
@@ -122,6 +125,7 @@ class CostCapPolicy(AbstractPolicy):
         scope_id = self._scope_id(ctx)
         with self._lock:
             mode = self.mode
+            policy_id = self._policy_id
 
         # Strict reservation only holds when the backend can reserve atomically.
         # The HTTP backend has no reserve endpoint, so strict degrades to the
@@ -148,6 +152,8 @@ class CostCapPolicy(AbstractPolicy):
                             "reserved_usd": 0.0,
                             "scope_id": scope_id,
                             "mode": mode.value,
+                            "blocked_by": self.blocked_by,
+                            "policy_id": policy_id,
                         },  # nothing reserved; release is a no-op
                     )
                 return PolicyDecision.allow(
@@ -199,6 +205,8 @@ class CostCapPolicy(AbstractPolicy):
                         "reserved_usd": 0.0,
                         "scope_id": scope_id,
                         "mode": mode.value,
+                        "blocked_by": self.blocked_by,
+                        "policy_id": policy_id,
                     },
                 )
             return PolicyDecision.allow(
@@ -308,6 +316,7 @@ class CostCapPolicy(AbstractPolicy):
             ``fail_closed``     — bool; whether to block on unexpected exception
             ``organization_id`` — switch or set org-level scoping
             ``project_id``      — switch or set project-level scoping
+            ``policy_id``       — backend policy id, sent on BLOCKED events
         """
         with self._lock:
             if "max_usd" in config:
@@ -327,6 +336,8 @@ class CostCapPolicy(AbstractPolicy):
                 self._organization_id = config["organization_id"] or None
             if "project_id" in config:
                 self._project_id = config["project_id"] or None
+            if "policy_id" in config:
+                self._policy_id = config["policy_id"] or None
 
     def poll(self, deps: PolicyDeps) -> None:
         scope_id = self._stored_scope_id()
