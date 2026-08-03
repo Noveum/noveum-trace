@@ -10,8 +10,9 @@ Every symbol, extra, and version below is taken from the current source
 any PR — do not document an API, extra, or flag that does not exist in the
 released package.
 
-- Package: `noveum-trace` (PyPI), version `1.5.20`, `requires-python = ">=3.9"`,
-  Apache-2.0.
+- Package: `noveum-trace` (PyPI), `requires-python = ">=3.9"`, Apache-2.0. See
+  `pyproject.toml` for the current version (do not pin a version number here — it
+  goes stale on every release).
 - Install: `pip install "noveum-trace[<extra>]"`.
 
 ## 1. Support matrix
