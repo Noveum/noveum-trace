@@ -475,6 +475,19 @@ except ImportError:
     # CrewAI not installed
     pass
 
+try:
+    from noveum_trace.integrations.llamaindex import (
+        NoveumLlamaIndexSpanHandler,
+        setup_llamaindex_tracing,
+    )
+
+    _integration_exports.extend(
+        ["NoveumLlamaIndexSpanHandler", "setup_llamaindex_tracing"]
+    )
+except ImportError:
+    # LlamaIndex not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions

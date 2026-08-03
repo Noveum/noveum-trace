@@ -70,3 +70,14 @@ try:
     __all__.extend(["NoveumCrewAIListener", "setup_crewai_tracing"])
 except ImportError:
     pass
+
+# LlamaIndex integration (requires llama-index-core)
+try:
+    from noveum_trace.integrations.llamaindex import (
+        NoveumLlamaIndexSpanHandler,
+        setup_llamaindex_tracing,
+    )
+
+    __all__.extend(["NoveumLlamaIndexSpanHandler", "setup_llamaindex_tracing"])
+except ImportError:
+    pass
