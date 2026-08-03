@@ -84,10 +84,17 @@ noveum_trace.init(api_key="...", project="my-crew")  # required first
 
 listener = setup_crewai_tracing()
 crew.callback_function = listener
+try:
+    crew.kickoff()
+finally:
+    listener.shutdown()   # detaches the listener
+    noveum_trace.flush()  # shutdown() does not flush the SDK
 ```
 
 `setup_crewai_tracing()` raises `RuntimeError` if `noveum_trace.init()` has not
-been called.
+been called. Wrap `crew.kickoff()` in `try/finally`, call `listener.shutdown()`
+to detach, then `noveum_trace.flush()` so buffered spans are delivered before a
+short-lived process exits.
 
 ### LiveKit — `setup_livekit_tracing`
 
@@ -139,9 +146,11 @@ All default `True`: `capture_inputs`, `capture_outputs`, `capture_llm_messages`,
 ### LiveKit — `setup_livekit_tracing(session, *, ...)`
 
 `enabled=True`, `trace_name_prefix=None`, `record=True`,
-`cleanup_audio_files=True`. `record=True` captures full conversation audio; pass
-`record=False` to disable audio capture. (LiveKit uses `record`, not
-`record_audio`.)
+`cleanup_audio_files=True`. (LiveKit uses `record`, not `record_audio`.)
+`record=False` only stops the wrapper from forcing `session.start(record=True)`;
+if the application starts its own `RecorderIO`, conversation audio can still be
+uploaded. To disable the LiveKit integration entirely (no start-method wrapping,
+no event handlers, no audio upload), pass `enabled=False`.
 
 ### Pipecat — `NoveumPipecatTracer(...)`
 
@@ -157,6 +166,34 @@ observer also exposes `capture_text=True` (LLM/TTS text) and
 No per-field capture toggles; the handler captures prompts, responses, and tool
 results by default. Reduce exposure at the application layer (redaction, or not
 attaching the handler to sensitive chains).
+
+### Disabling capture (quick reference)
+
+```python
+# CrewAI: turn off payload capture
+listener = setup_crewai_tracing(
+    capture_inputs=False,
+    capture_outputs=False,
+    capture_llm_messages=False,
+    capture_tool_schemas=False,
+    capture_memory=False,
+    capture_knowledge=False,
+)
+
+# Pipecat: no audio, no LLM/TTS text, no tool-call capture
+tracer = NoveumPipecatTracer(
+    record_audio=False,
+    record_raw_input_audio=False,
+    capture_text=False,
+    capture_function_calls=False,
+)
+
+# LiveKit: disable the integration entirely (record=False alone is not enough)
+setup_livekit_tracing(session, enabled=False)
+
+# LangChain / LangGraph: omit the handler on chains that handle sensitive data
+result = sensitive_chain.invoke({"text": "..."})  # no callbacks=[handler]
+```
 
 ## 5. Upstream positioning language
 
