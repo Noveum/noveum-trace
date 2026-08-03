@@ -32,6 +32,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pip install livekit livekit-agents
+          # llama-index-core is pure-Python and installs on 3.9-3.13, so the
+          # LlamaIndex handler unit tests run on the full matrix.
+          pip install "llama-index-core>=0.11,<1.0"
 
       - name: Run unit tests with coverage
         run: |
