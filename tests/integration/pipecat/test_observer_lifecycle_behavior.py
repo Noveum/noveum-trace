@@ -312,10 +312,7 @@ async def test_attach_to_task_wires_real_observer_event_names() -> None:
 
             return deco
 
-    with patch.object(
-        obs, "_attach_audio_buffer_from_pipeline", new_callable=AsyncMock
-    ):
-        await obs.attach_to_task(FakeTask())
+    await obs.attach_to_task(FakeTask())
 
     # Real TurnTrackingObserver records subscriptions in _event_handlers.
     assert "on_turn_started" in tto._event_handlers
@@ -348,11 +345,8 @@ async def test_attach_to_task_idempotent_pipeline_finished_registration() -> Non
             return deco
 
     task = FakeTask()
-    with patch.object(
-        obs, "_attach_audio_buffer_from_pipeline", new_callable=AsyncMock
-    ):
-        await obs.attach_to_task(task)
-        await obs.attach_to_task(task)
+    await obs.attach_to_task(task)
+    await obs.attach_to_task(task)
 
     assert registrations["n"] == 1
     assert task in obs._registered_pipeline_tasks

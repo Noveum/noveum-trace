@@ -753,8 +753,7 @@ class NoveumTraceObserver(
         the full stereo conversation WAV is captured on session end.
 
         Does NOT start recording — ``start_recording()`` is asynchronous and is
-        handled by :meth:`_attach_audio_buffer_from_pipeline` /
-        :meth:`_ensure_audio_buffer_recording`. When the same ABP is already
+        handled by :meth:`_ensure_audio_buffer_recording`. When the same ABP is already
         attached, this is a no-op (``self._audio_buffer_processor`` is left
         unchanged so the async caller can ensure recording).
 
@@ -819,47 +818,6 @@ class NoveumTraceObserver(
             # If the new ABP couldn't be wired, prefer keeping the previous one.
             self._audio_buffer_processor = prev_proc
             return
-
-    async def _attach_audio_buffer_from_pipeline(self, task: Any) -> None:
-        """
-        Walk the task's pipeline processors looking for an ``AudioBufferProcessor``.
-
-        If found, register ``_on_conversation_audio`` on its ``on_audio_data``
-        event so the full stereo conversation WAV is captured on session end and
-        start recording (the one async step).
-
-        If ``record_audio=True`` but no ``AudioBufferProcessor`` is present, logs
-        a warning so the user knows conversation-level audio won't be captured.
-        """
-        prev_proc = self._audio_buffer_processor
-        # Synchronous walk + handler registration (sets _audio_buffer_processor
-        # when a new proc is found; leaves it unchanged for same/absent proc).
-        self._attach_audio_buffer_handler_sync(task)
-
-        proc = self._audio_buffer_processor
-        if proc is None:
-            return
-
-        # Same ABP already attached (or none newly found): ensure recording.
-        if proc is prev_proc:
-            await self._ensure_audio_buffer_recording()
-            return
-
-        # Newly-attached proc: start recording directly. ABP drops
-        # InputAudio/OutputAudio until start_recording(); observer on_push_frame
-        # runs after process_frame, so start here before run().
-        try:
-            await proc.start_recording()
-            self._abp_is_recording = True
-            logger.debug(
-                "Attached to AudioBufferProcessor; start_recording() completed"
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to start AudioBufferProcessor recording: %s",
-                e,
-                exc_info=True,
-            )
 
     async def _ensure_audio_buffer_recording(self) -> None:
         """
