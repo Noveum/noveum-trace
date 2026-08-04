@@ -82,8 +82,7 @@ from noveum_trace.integrations.crewai import setup_crewai_tracing
 
 noveum_trace.init(api_key="...", project="my-crew")  # required first
 
-listener = setup_crewai_tracing()
-crew.callback_function = listener
+listener = setup_crewai_tracing()  # registers with CrewAI's global event bus
 try:
     crew.kickoff()
 finally:
@@ -92,9 +91,12 @@ finally:
 ```
 
 `setup_crewai_tracing()` raises `RuntimeError` if `noveum_trace.init()` has not
-been called. Wrap `crew.kickoff()` in `try/finally`, call `listener.shutdown()`
-to detach, then `noveum_trace.flush()` so buffered spans are delivered before a
-short-lived process exits.
+been called. The listener registers with CrewAI's global event bus on
+construction (`NoveumCrewAIListener` subclasses `crewai.events.BaseEventListener`),
+so do **not** assign it to `crew.callback_function` — that field does not exist
+on current `Crew` versions and raises `ValueError`. Wrap `crew.kickoff()` in
+`try/finally`, call `listener.shutdown()` to detach, then `noveum_trace.flush()`
+so buffered spans are delivered before a short-lived process exits.
 
 ### LiveKit — `setup_livekit_tracing`
 
@@ -170,14 +172,23 @@ attaching the handler to sensitive chains).
 ### Disabling capture (quick reference)
 
 ```python
-# CrewAI: turn off payload capture
+# CrewAI: turn off every capture channel
 listener = setup_crewai_tracing(
     capture_inputs=False,
     capture_outputs=False,
     capture_llm_messages=False,
     capture_tool_schemas=False,
+    capture_agent_snapshot=False,
+    capture_crew_snapshot=False,
     capture_memory=False,
     capture_knowledge=False,
+    capture_a2a=False,
+    capture_mcp=False,
+    capture_flow=False,
+    capture_reasoning=False,
+    capture_guardrails=False,
+    capture_streaming=False,
+    capture_thinking=False,
 )
 
 # Pipecat: no audio, no LLM/TTS text, no tool-call capture
