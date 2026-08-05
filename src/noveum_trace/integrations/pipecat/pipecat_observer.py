@@ -593,6 +593,42 @@ class NoveumTraceObserver(
         before ``runner.run(task)``, so conversation audio recording can start
         before the pipeline processes PCM.
 
+        This delegates all synchronous wiring to :meth:`attach_to_task_sync` and
+        then performs the one genuinely-async step — starting
+        ``AudioBufferProcessor`` recording — so hosts running inside an event
+        loop can attach everything with a single ``await``.
+
+        Safe to call multiple times; repeated calls with the same observers are
+        no-ops.
+        """
+        # attach_to_task_sync registers all observers, the safety net, and the
+        # audio on_audio_data handler (setting self._audio_buffer_processor).
+        self.attach_to_task_sync(task)
+
+        # The only genuinely-async step: start AudioBufferProcessor recording.
+        # _ensure_audio_buffer_recording is idempotent and a no-op when no ABP
+        # was attached, so this safely covers the fresh/same/absent-proc cases.
+        if self._record_audio:
+            await self._ensure_audio_buffer_recording()
+
+    def attach_to_task_sync(self, task: Any) -> None:
+        """
+        Synchronous variant of :meth:`attach_to_task` for hosts wiring the
+        observer OUTSIDE an event loop.
+
+        Registers everything that does not require ``await``: it resets the
+        transport's captured trace, subscribes to the turn-tracking and latency
+        observers, installs the ``on_pipeline_finished`` safety-net handler,
+        detects whether the pipeline has an STT service, and — when
+        ``record_audio=True`` — registers ``_on_conversation_audio`` on the
+        ``AudioBufferProcessor``'s ``on_audio_data`` event.
+
+        It does NOT start ``AudioBufferProcessor`` recording, because
+        ``start_recording()`` is asynchronous. The HOST is responsible for
+        calling ``AudioBufferProcessor.start_recording()`` before conversation
+        audio flows, OR use the async :meth:`attach_to_task` which starts
+        recording for you.
+
         Safe to call multiple times; repeated calls with the same observers are
         no-ops.
         """
@@ -614,6 +650,23 @@ class NoveumTraceObserver(
         if lto is not None:
             self.attach_latency_observer(lto)
 
+        self._register_finish_safety_net_handler(task)
+
+        self._detect_pipeline_has_stt(task)
+
+        # Auto-detect AudioBufferProcessor and register the on_audio_data handler
+        # (synchronous). Recording is started separately (async).
+        if self._record_audio:
+            self._attach_audio_buffer_handler_sync(task)
+
+    def _register_finish_safety_net_handler(self, task: Any) -> None:
+        """
+        Register the ``on_pipeline_finished`` safety-net handler on ``task``.
+
+        The safety net guarantees ``_finish_conversation`` runs even when
+        Pipecat cancels the ``TaskObserver`` proxy queue before it drains.
+        Synchronous: ``task.event_handler`` registration is not awaited.
+        """
         # ---------------------------------------------------------------------- #
         # Safety net: on_pipeline_finished fires inline in the main pipeline      #
         # coroutine, before _cancel_tasks() kills the TaskObserver proxy tasks.   #
@@ -678,12 +731,6 @@ class NoveumTraceObserver(
                 "trace cleanup relies on on_push_frame CancelFrame/EndFrame path only"
             )
 
-        self._detect_pipeline_has_stt(task)
-
-        # Auto-detect AudioBufferProcessor for full-conversation recording
-        if self._record_audio:
-            await self._attach_audio_buffer_from_pipeline(task)
-
     def _iter_nested_processors(self, node: Any) -> Iterator[Any]:
         """Depth-first walk of Pipecat compound processors (Pipeline inside Pipeline)."""
         procs = (
@@ -695,12 +742,20 @@ class NoveumTraceObserver(
             yield proc
             yield from self._iter_nested_processors(proc)
 
-    async def _attach_audio_buffer_from_pipeline(self, task: Any) -> None:
+    def _attach_audio_buffer_handler_sync(self, task: Any) -> None:
         """
-        Walk the task's pipeline processors looking for an ``AudioBufferProcessor``.
+        Synchronous part of AudioBufferProcessor wiring.
 
-        If found, register ``_on_conversation_audio`` on its ``on_audio_data``
-        event so the full stereo conversation WAV is captured on session end.
+        Walks the task's pipeline processors looking for an
+        ``AudioBufferProcessor``. If a NEW one is found, registers
+        ``_on_conversation_audio`` on its ``on_audio_data`` event, resets the
+        conversation-audio buffers, and sets ``self._audio_buffer_processor`` so
+        the full stereo conversation WAV is captured on session end.
+
+        Does NOT start recording — ``start_recording()`` is asynchronous and is
+        handled by :meth:`_ensure_audio_buffer_recording`. When the same ABP is already
+        attached, this is a no-op (``self._audio_buffer_processor`` is left
+        unchanged so the async caller can ensure recording).
 
         If ``record_audio=True`` but no ``AudioBufferProcessor`` is present, logs
         a warning so the user knows conversation-level audio won't be captured.
@@ -734,9 +789,10 @@ class NoveumTraceObserver(
                 )
             return
 
-        # If the same ABP is still active for this observer, don't re-register the handler.
+        # If the same ABP is still active for this observer, don't re-register the
+        # handler. Leave self._audio_buffer_processor unchanged so the async
+        # caller detects "same proc" and ensures recording instead.
         if found_proc is self._audio_buffer_processor:
-            await self._ensure_audio_buffer_recording()
             return
 
         # Swap ABP when a new PipelineTask (or changed pipeline) is attached.
@@ -752,22 +808,8 @@ class NoveumTraceObserver(
             self._audio_buffer_processor.add_event_handler(
                 "on_audio_data", self._on_conversation_audio
             )
-            # ABP drops InputAudio/OutputAudio until start_recording(); observer
-            # on_push_frame runs after process_frame, so start here before run().
-            try:
-                await self._audio_buffer_processor.start_recording()
-                self._abp_is_recording = True
-            except Exception as e:
-                logger.warning(
-                    "Failed to start AudioBufferProcessor recording: %s",
-                    e,
-                    exc_info=True,
-                )
             logger.info(
                 "Noveum trace: full-conversation audio attached (nested pipeline OK)"
-            )
-            logger.debug(
-                "Attached to AudioBufferProcessor; start_recording() completed"
             )
         except Exception as e:
             logger.warning(
@@ -776,7 +818,6 @@ class NoveumTraceObserver(
             # If the new ABP couldn't be wired, prefer keeping the previous one.
             self._audio_buffer_processor = prev_proc
             return
-        return
 
     async def _ensure_audio_buffer_recording(self) -> None:
         """

@@ -151,7 +151,7 @@ class NoveumPipecatTracer:
             # we only operate on the customer's processors; Pipeline(inner) re-adds them.
             inner = list(pipeline._processors[1:-1])
 
-            # Same MRO check used by _attach_audio_buffer_from_pipeline in pipecat_observer.py
+            # Same MRO check used by _attach_audio_buffer_handler_sync in pipecat_observer.py
             has_abp = any(
                 any(base.__name__ == "AudioBufferProcessor" for base in type(p).__mro__)
                 for p in inner

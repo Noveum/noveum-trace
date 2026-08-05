@@ -262,9 +262,7 @@ async def test_attach_to_task_wires_observers() -> None:
     task._pipeline = None
     task.pipeline = None
 
-    with patch.object(
-        obs, "_attach_audio_buffer_from_pipeline", new_callable=AsyncMock
-    ):
+    with patch.object(obs, "_ensure_audio_buffer_recording", new_callable=AsyncMock):
         await obs.attach_to_task(task)
 
     task.turn_tracking_observer.add_event_handler.assert_called()
@@ -295,6 +293,7 @@ async def test_attach_audio_buffer_registers_processor() -> None:
 
     abp = MagicMock()
     abp.__class__.__name__ = "AudioBufferProcessor"
+    abp._recording = False
     abp.start_recording = AsyncMock()
 
     pipeline = MagicMock()
@@ -303,13 +302,93 @@ async def test_attach_audio_buffer_registers_processor() -> None:
     task._pipeline = pipeline
 
     obs = NoveumTraceObserver(record_audio=True)
-    await obs._attach_audio_buffer_from_pipeline(task)
+    await obs.attach_to_task(task)
 
     assert obs._audio_buffer_processor is abp
     abp.add_event_handler.assert_called()
     abp.start_recording.assert_called_once()
     call_args = abp.add_event_handler.call_args[0]
     assert call_args[0] == "on_audio_data"
+
+
+def test_attach_to_task_sync_registers_audio_handler_without_start_recording() -> None:
+    """attach_to_task_sync (the public sync path) registers the on_audio_data
+    handler + wires the ABP synchronously, but must NOT start recording — the
+    host owns AudioBufferProcessor.start_recording() (a coroutine). No event
+    loop / await is required to call it."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    abp = MagicMock()
+    abp.__class__.__name__ = "AudioBufferProcessor"
+    abp.start_recording = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.processors = [abp]
+    task = MagicMock()
+    task._pipeline = pipeline
+
+    obs = NoveumTraceObserver(record_audio=True)
+    # Synchronous call — no `await`.
+    obs.attach_to_task_sync(task)
+
+    assert obs._audio_buffer_processor is abp
+    abp.add_event_handler.assert_called()
+    assert abp.add_event_handler.call_args[0][0] == "on_audio_data"
+    # The whole point of the sync path: recording is deferred to the host.
+    abp.start_recording.assert_not_called()
+
+
+def test_attach_to_task_sync_skips_audio_when_record_audio_false() -> None:
+    """With record_audio=False the sync path still wires observers but never
+    walks the pipeline for an ABP nor registers the audio handler."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    abp = MagicMock()
+    abp.__class__.__name__ = "AudioBufferProcessor"
+
+    pipeline = MagicMock()
+    pipeline.processors = [abp]
+    task = MagicMock()
+    task._pipeline = pipeline
+    task.turn_tracking_observer = MagicMock()
+    task._user_bot_latency_observer = MagicMock()
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs.attach_to_task_sync(task)
+
+    assert obs._audio_buffer_processor is None
+    abp.add_event_handler.assert_not_called()
+    # Observers are still wired regardless of audio recording.
+    task.turn_tracking_observer.add_event_handler.assert_called()
+    task._user_bot_latency_observer.add_event_handler.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_attach_to_task_delegates_to_sync_then_starts_recording() -> None:
+    """The async attach_to_task must DELEGATE to attach_to_task_sync (no
+    duplicated wiring) and then perform the single async step — starting ABP
+    recording via _ensure_audio_buffer_recording."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=True)
+    task = MagicMock()
+
+    with (
+        patch.object(obs, "attach_to_task_sync") as sync_mock,
+        patch.object(
+            obs, "_ensure_audio_buffer_recording", new_callable=AsyncMock
+        ) as rec_mock,
+    ):
+        await obs.attach_to_task(task)
+
+    sync_mock.assert_called_once_with(task)
+    rec_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
