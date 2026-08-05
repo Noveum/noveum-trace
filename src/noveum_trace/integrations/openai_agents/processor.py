@@ -106,9 +106,11 @@ class NoveumTraceProcessor(TracingProcessor):
             (``noveum_trace.init(...)``).
         capture_inputs: Capture raw tool/function/custom inputs. Off by default
             (privacy-safe) because inputs can contain sensitive payloads.
-        capture_outputs: Capture raw tool/function/LLM outputs. Off by default.
-        capture_llm_messages: Capture full LLM prompt/response message arrays.
-            Off by default — this is the most sensitive payload.
+        capture_outputs: Capture raw tool/function outputs. Off by default. (LLM
+            prompt/response content is controlled by ``capture_llm_messages``.)
+        capture_llm_messages: Capture full LLM prompt/response message arrays for
+            both generation and response spans. Off by default — the most
+            sensitive payload.
         capture_tool_schemas: Capture structural metadata such as an agent's tool
             and handoff names. On by default (names/structure, not argument values).
         capture_trace_metadata: Copy the OpenAI trace ``metadata`` / ``group_id``
@@ -393,16 +395,19 @@ class NoveumTraceProcessor(TracingProcessor):
         response_id = getattr(response, "id", None)
         if response_id:
             attributes[C.ATTR_LLM_REQUEST_ID] = str(response_id)
-        if self.capture_inputs:
+        # Response input/output are LLM messages, so they are gated on
+        # ``capture_llm_messages`` (consistent with ``_map_generation``), not on
+        # the tool-oriented ``capture_inputs`` / ``capture_outputs`` flags.
+        if self.capture_llm_messages:
             response_input = getattr(span_data, "input", None)
             if response_input is not None:
                 attributes[C.ATTR_LLM_INPUT] = to_serialisable(response_input)
-        if self.capture_outputs and response is not None:
-            output_text = getattr(response, "output_text", None)
-            if output_text:
-                attributes[C.ATTR_LLM_OUTPUT] = truncate_text(
-                    output_text, C.MAX_TEXT_LENGTH
-                )
+            if response is not None:
+                output_text = getattr(response, "output_text", None)
+                if output_text:
+                    attributes[C.ATTR_LLM_OUTPUT] = truncate_text(
+                        output_text, C.MAX_TEXT_LENGTH
+                    )
 
     def _map_handoff(self, span_data: Any, attributes: dict[str, Any]) -> None:
         from_agent = getattr(span_data, "from_agent", None)

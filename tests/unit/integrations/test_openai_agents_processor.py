@@ -271,6 +271,37 @@ class TestCaptureFlags:
         assert ("llm.input" in nspan.attributes) is capture
         assert ("llm.output" in nspan.attributes) is capture
 
+    def test_response_llm_content_gated_by_llm_messages(self) -> None:
+        # Response-span input/output are LLM content, gated on
+        # capture_llm_messages — NOT on capture_inputs / capture_outputs.
+        response = SimpleNamespace(
+            model="gpt-4o", id="resp_1", usage=None, output_text="the answer"
+        )
+        sd = SimpleNamespace(type="response", response=response, input="the prompt")
+
+        # capture_inputs/outputs on, capture_llm_messages off -> no LLM content
+        client = _make_client()
+        proc = NoveumTraceProcessor(
+            client=client, capture_inputs=True, capture_outputs=True
+        )
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+        assert nspan.attributes["llm.model"] == "gpt-4o"
+        assert "llm.input" not in nspan.attributes
+        assert "llm.output" not in nspan.attributes
+
+        # capture_llm_messages on -> LLM content captured
+        client2 = _make_client()
+        proc2 = NoveumTraceProcessor(client=client2, capture_llm_messages=True)
+        proc2.on_trace_start(_oai_trace())
+        proc2.on_span_start(_oai_span("s2", sd))
+        nspan2 = proc2._spans["s2"]
+        proc2.on_span_end(_oai_span("s2", sd))
+        assert nspan2.attributes["llm.input"] == "the prompt"
+        assert nspan2.attributes["llm.output"] == "the answer"
+
 
 # ---------------------------------------------------------------------------
 # Errors, flush, shutdown, resilience

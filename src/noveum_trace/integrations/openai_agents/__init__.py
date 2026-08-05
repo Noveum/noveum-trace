@@ -29,10 +29,12 @@ Configuration Options
 All options passed to ``NoveumTraceProcessor`` or ``setup_openai_agents_tracing``:
 
   capture_inputs          — Capture raw tool / function / custom inputs (default: off)
-  capture_outputs         — Capture raw tool / function / LLM outputs (default: off)
-  capture_llm_messages    — Capture full LLM prompt/response messages (default: off)
+  capture_outputs         — Capture raw tool / function outputs (default: off)
+  capture_llm_messages    — Capture full LLM prompt/response messages, generation
+                            and response spans (default: off)
   capture_tool_schemas    — Capture agent tool / handoff names (default: on)
-  capture_trace_metadata  — Copy OpenAI trace metadata / group_id (default: on)
+  capture_trace_metadata  — Copy OpenAI trace metadata / group_id (default: on;
+                            may contain sensitive data — see the integration guide)
   capture_cost            — Estimate LLM cost from tokens (default: on)
   trace_name_prefix       — Prefix for unnamed workflows (default: "openai_agents")
 """

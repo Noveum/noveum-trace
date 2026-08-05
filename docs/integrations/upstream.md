@@ -118,7 +118,8 @@ add_trace_processor(NoveumTraceProcessor())
 OpenAI Agents trace/span (agent, generation, response, tool/function, handoff,
 guardrail) onto a Noveum trace/span. `setup_openai_agents_tracing()` registers it;
 pass `replace_processors=True` to make Noveum the only processor (disables OpenAI's
-own trace upload). Call `noveum_trace.flush()` before a short-lived process exits.
+own trace upload). For a short-lived process, call `noveum_trace.flush()` then
+`noveum_trace.shutdown()` before exit.
 
 ### LiveKit — `setup_livekit_tracing`
 
@@ -171,12 +172,14 @@ All default `True`: `capture_inputs`, `capture_outputs`, `capture_llm_messages`,
 
 Privacy-safe defaults — unlike the capture-by-default integrations, raw payloads
 are **off** by default: `capture_inputs=False` (tool/function inputs),
-`capture_outputs=False` (tool/function/LLM outputs), `capture_llm_messages=False`
-(full LLM prompt/response messages). Structural metadata is on:
-`capture_tool_schemas=True` (agent tool / handoff names, not argument values),
-`capture_trace_metadata=True` (OpenAI trace `metadata` / `group_id`),
-`capture_cost=True`. Non-capture default: `trace_name_prefix="openai_agents"`.
-Model name, provider, token usage, latency, and errors are always captured.
+`capture_outputs=False` (tool/function outputs), `capture_llm_messages=False`
+(full LLM prompt/response messages, generation and response spans). Structural
+metadata is on: `capture_tool_schemas=True` (agent tool / handoff names, not
+argument values), `capture_cost=True`. `capture_trace_metadata=True` sends the
+OpenAI trace `metadata` / `group_id` as-is (no redaction) — set it `False` if
+those may hold sensitive data. Non-capture default:
+`trace_name_prefix="openai_agents"`. Model name, provider, token usage, latency,
+and error type/message are always captured.
 
 ### LiveKit — `setup_livekit_tracing(session, *, ...)`
 

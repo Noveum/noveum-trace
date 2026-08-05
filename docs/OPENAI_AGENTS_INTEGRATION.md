@@ -46,7 +46,8 @@ from agents import Agent, Runner
 agent = Agent(name="Assistant", instructions="You are helpful.")
 result = await Runner.run(agent, "Hello!")
 
-noveum_trace.flush()  # export buffered traces before exit
+noveum_trace.flush()     # export buffered traces
+noveum_trace.shutdown()  # release SDK resources at application termination
 ```
 
 ## Convenience factory
@@ -55,6 +56,7 @@ noveum_trace.flush()  # export buffered traces before exit
 call. It requires `noveum_trace.init(...)` to have run first:
 
 ```python
+import noveum_trace
 from noveum_trace.integrations.openai_agents import setup_openai_agents_tracing
 
 noveum_trace.init(project="my-project", api_key="...")
@@ -76,10 +78,10 @@ All options are accepted by `NoveumTraceProcessor(...)` and
 | Option | Default | Captures |
 | --- | --- | --- |
 | `capture_inputs` | `False` | Raw tool / function / custom-span inputs |
-| `capture_outputs` | `False` | Raw tool / function / LLM outputs |
-| `capture_llm_messages` | `False` | Full LLM prompt/response message arrays |
+| `capture_outputs` | `False` | Raw tool / function outputs |
+| `capture_llm_messages` | `False` | Full LLM prompt/response messages (generation & response spans) |
 | `capture_tool_schemas` | `True` | Agent tool & handoff **names** (not argument values) |
-| `capture_trace_metadata` | `True` | OpenAI trace `metadata` and `group_id` |
+| `capture_trace_metadata` | `True` | OpenAI trace `metadata` and `group_id` (see privacy note) |
 | `capture_cost` | `True` | Estimated LLM cost from model + token counts |
 | `trace_name_prefix` | `"openai_agents"` | Prefix used when a workflow has no name |
 
@@ -89,6 +91,14 @@ in via `capture_inputs`, `capture_outputs`, or `capture_llm_messages`. Structura
 metadata that is always captured: span type, agent/tool/handoff names, model
 name and provider, token usage, estimated cost, guardrail triggered flag, latency
 (span start/end), and error type/message.
+
+**Note on trace metadata and errors.** With `capture_trace_metadata=True`
+(default), the OpenAI trace's `metadata` and `group_id` are serialized as-is,
+with no allowlist or redaction — if you place sensitive data there, it is sent to
+Noveum. Set `capture_trace_metadata=False` to disable this. Error details
+(message, and any structured `error.data` on a span) are also captured by default
+for observability and may echo sensitive context; redact at the source if that is
+a concern.
 
 ```python
 # Capture full payloads (e.g. in a trusted dev environment)
@@ -133,12 +143,14 @@ Agents SDK additionally wraps every processor callback in its own try/except.
 ## Troubleshooting
 
 - **No traces appear:** confirm `noveum_trace.init(...)` ran before the agent
-  executed, and call `noveum_trace.flush()` (or rely on `shutdown`) before the
-  process exits.
+  executed. For a short-lived process, call `noveum_trace.flush()` then
+  `noveum_trace.shutdown()` before it exits — `flush()` sends buffered traces and
+  `shutdown()` releases SDK resources.
 - **`ImportError` from `setup_openai_agents_tracing`:** the `openai-agents` extra
   is not installed — `pip install "noveum-trace[openai-agents]"`.
-- **Tool arguments / LLM messages missing:** these are opt-in; enable
-  `capture_inputs` / `capture_outputs` / `capture_llm_messages`.
+- **Tool arguments missing:** enable `capture_inputs` / `capture_outputs`.
+- **LLM prompts/responses missing:** enable `capture_llm_messages` (this controls
+  LLM message content on both generation and response spans).
 
 ## Example script
 

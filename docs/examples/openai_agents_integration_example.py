@@ -51,11 +51,13 @@ async def main() -> None:
         tools=[get_weather],
     )
 
-    result = await Runner.run(agent, "What is the weather in San Francisco?")
-    print(result.final_output)
-
-    # Flush buffered traces before the process exits.
-    noveum_trace.flush()
+    try:
+        result = await Runner.run(agent, "What is the weather in San Francisco?")
+        print(result.final_output)
+    finally:
+        # Flush buffered traces and release SDK resources, even on failure.
+        noveum_trace.flush()
+        noveum_trace.shutdown()
 
 
 if __name__ == "__main__":
