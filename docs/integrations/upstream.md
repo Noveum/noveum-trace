@@ -125,8 +125,10 @@ setup_llamaindex_tracing()  # registers span + event handlers on the root dispat
 
 Registers span + event handlers on LlamaIndex's instrumentation dispatcher
 (`llama_index.core.instrumentation`), mapping query engines, retrievers,
-synthesizers, LLM, and embedding calls onto Noveum traces/spans. Call
-`noveum_trace.flush()` before a short-lived process exits.
+synthesizers, LLM, and embedding calls onto Noveum traces/spans.
+`setup_llamaindex_tracing()` raises if `noveum_trace.init()` has not run and no
+explicit `client=` is given. For a short-lived process, call
+`noveum_trace.flush()` then `noveum_trace.shutdown()` before exit.
 
 ### LangChain / LangGraph — `NoveumTraceCallbackHandler`
 

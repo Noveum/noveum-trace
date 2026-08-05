@@ -326,3 +326,19 @@ class TestSetup:
         assert isinstance(handler, NoveumLlamaIndexSpanHandler)
         dispatcher.add_span_handler.assert_called_once()
         dispatcher.add_event_handler.assert_called_once()
+
+    def test_setup_requires_initialization(self, monkeypatch) -> None:
+        import noveum_trace
+
+        monkeypatch.setattr(noveum_trace, "is_initialized", lambda: False)
+        with pytest.raises(RuntimeError):
+            setup_llamaindex_tracing()  # no client, SDK not initialised
+
+    def test_setup_with_explicit_client_skips_init_check(self, monkeypatch) -> None:
+        import noveum_trace
+
+        monkeypatch.setattr(noveum_trace, "is_initialized", lambda: False)
+        handler = setup_llamaindex_tracing(
+            client=_make_client(), dispatcher=MagicMock()
+        )
+        assert isinstance(handler, NoveumLlamaIndexSpanHandler)

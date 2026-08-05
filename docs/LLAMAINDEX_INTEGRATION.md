@@ -45,7 +45,8 @@ from llama_index.core import Document, VectorStoreIndex
 index = VectorStoreIndex.from_documents([Document(text="...")])
 response = index.as_query_engine().query("...")
 
-noveum_trace.flush()  # export buffered traces before exit
+noveum_trace.flush()     # export buffered traces
+noveum_trace.shutdown()  # release SDK resources at application termination
 ```
 
 `setup_llamaindex_tracing()` attaches to the **root** dispatcher, so all
@@ -116,7 +117,10 @@ handler exceptions in its dispatcher, so tracing can never break a query.
 ## Troubleshooting
 
 - **No traces appear:** confirm `noveum_trace.init(...)` ran before
-  `setup_llamaindex_tracing()`, and call `noveum_trace.flush()` before exit.
+  `setup_llamaindex_tracing()` (it now raises if the SDK is not initialized and
+  no explicit `client=` is given). For short-lived processes, call
+  `noveum_trace.flush()` then `noveum_trace.shutdown()` before exit — `flush()`
+  sends buffered traces and `shutdown()` releases SDK resources.
 - **Query text / node content missing:** these are opt-in; enable
   `capture_inputs` / `capture_outputs` / `capture_llm_messages`.
 - **Token counts missing:** LlamaIndex exposes usage on the provider-native

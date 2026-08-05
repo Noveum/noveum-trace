@@ -451,7 +451,25 @@ def setup_llamaindex_tracing(
 
     Returns:
         The registered :class:`NoveumLlamaIndexSpanHandler`.
+
+    Raises:
+        RuntimeError: If ``noveum_trace.init()`` has not been called and no
+            explicit ``client`` is provided (otherwise LlamaIndex activity would
+            be silently untraced).
     """
+    if client is None:
+        try:
+            from noveum_trace import is_initialized
+        except ImportError as exc:  # pragma: no cover - noveum_trace always present
+            raise RuntimeError(
+                "noveum_trace is not installed. Install with: pip install noveum-trace"
+            ) from exc
+        if not is_initialized():
+            raise RuntimeError(
+                "Noveum tracing is not initialized. Call noveum_trace.init() "
+                "before setup_llamaindex_tracing() (or pass an explicit client=)."
+            )
+
     span_handler = NoveumLlamaIndexSpanHandler(
         client=client,
         trace_name_prefix=trace_name_prefix,

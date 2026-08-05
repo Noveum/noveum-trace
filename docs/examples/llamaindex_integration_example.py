@@ -40,14 +40,15 @@ def main() -> None:
         Document(text="Noveum provides AI tracing and observability for LLM apps."),
         Document(text="LlamaIndex builds retrieval-augmented generation pipelines."),
     ]
-    index = VectorStoreIndex.from_documents(documents)
 
-    query_engine = index.as_query_engine()
-    response = query_engine.query("What does Noveum do?")
-    print(response)
-
-    # Flush buffered traces before the process exits.
-    noveum_trace.flush()
+    try:
+        index = VectorStoreIndex.from_documents(documents)
+        response = index.as_query_engine().query("What does Noveum do?")
+        print(response)
+    finally:
+        # Flush buffered traces and release SDK resources, even on failure.
+        noveum_trace.flush()
+        noveum_trace.shutdown()
 
 
 if __name__ == "__main__":
