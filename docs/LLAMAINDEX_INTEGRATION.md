@@ -9,7 +9,7 @@ LlamaIndex threads through its `active_span_id` context variable.
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.10+ (required by current `llama-index-core`)
 - A Noveum project + API key
 - `llama-index-core >= 0.11`
 
@@ -101,7 +101,7 @@ setup_llamaindex_tracing(
 | Component | Supported |
 | --- | --- |
 | `llama-index-core` | `>= 0.11, < 1.0` |
-| Python | `>= 3.9` |
+| Python | `>= 3.10` (required by current `llama-index-core`) |
 
 The integration targets the stable `llama_index.core.instrumentation` dispatcher
 (available since 0.10.x). Handlers read event/span fields defensively, so newer

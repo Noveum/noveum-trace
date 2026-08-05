@@ -484,8 +484,9 @@ try:
     _integration_exports.extend(
         ["NoveumLlamaIndexSpanHandler", "setup_llamaindex_tracing"]
     )
-except ImportError:
-    # LlamaIndex not installed
+except Exception:
+    # LlamaIndex not installed, or unusable on this runtime (e.g. Python 3.9).
+    # An optional integration must never break ``import noveum_trace``.
     pass
 
 # Export public API

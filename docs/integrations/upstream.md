@@ -47,7 +47,7 @@ and the upstream framework's own floor.
 | Core SDK / direct OpenAI + Anthropic | 3.9+ | `openai>=1.0.0`, `anthropic>=0.3.0` |
 | LangChain | 3.10+ | `langchain-core>=0.1.0` (+ `Pillow>=9.0.0`) |
 | LangGraph | 3.10+ | `langchain-core>=0.1.0` (shares the `langchain` extra) |
-| LlamaIndex | 3.9+ | `llama-index-core>=0.11,<1.0` |
+| LlamaIndex | 3.10+ | `llama-index-core>=0.11,<1.0; python_version>='3.10'` |
 | LiveKit | 3.10+ | `livekit>=1.0.19,<2`, `livekit-agents>=1.0.0` |
 | CrewAI | 3.10+ | `crewai>=0.177.0; python_version>='3.10'` |
 | Pipecat | 3.11+ (required by `pipecat-ai`) | `pipecat-ai>=0.0.108`; `pipecat-otel` adds `opentelemetry-api>=1.0.0`, `opentelemetry-sdk>=1.0.0` |

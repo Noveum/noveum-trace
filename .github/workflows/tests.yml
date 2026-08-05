@@ -32,9 +32,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pip install livekit livekit-agents
-          # llama-index-core is pure-Python and installs on 3.9-3.13, so the
-          # LlamaIndex handler unit tests run on the full matrix.
-          pip install "llama-index-core>=0.11,<1.0"
+
+      - name: Install llama-index-core (Python 3.10+)
+        # llama-index-core requires Python 3.10+ (its transitive `banks` dep uses
+        # 3.10 union syntax). On 3.9 the LlamaIndex handler tests skip via
+        # importorskip; on 3.10+ they run against the real package.
+        if: matrix.python-version != '3.9'
+        run: pip install "llama-index-core>=0.11,<1.0"
 
       - name: Run unit tests with coverage
         run: |
