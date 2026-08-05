@@ -24,10 +24,11 @@ released package.
 | LiveKit | `noveum_trace.integrations.livekit` | `livekit` | `setup_livekit_tracing(session)` | Community-maintained observability integration. Candidate for upstream docs/listing. |
 | Pipecat | `noveum_trace.integrations.pipecat` | `pipecat` (add `pipecat-otel` for OTEL span export) | `NoveumPipecatTracer` (two-call: `observe_pipeline` + `register_task_handlers`) | Community-maintained observability integration (observer). Candidate for upstream docs/listing. |
 | CrewAI | `noveum_trace.integrations.crewai` | `crewai` | `setup_crewai_tracing()` (or `NoveumCrewAIListener`) | Community-maintained observability integration (listener). Candidate for upstream docs/listing. |
+| OpenAI Agents SDK | `noveum_trace.integrations.openai_agents` (also re-exported at package root) | `openai-agents` | `setup_openai_agents_tracing()` (or `NoveumTraceProcessor`) | Community-maintained observability integration (external trace processor). Candidate for upstream docs/listing. |
 | OpenTelemetry alignment | `noveum_trace.integrations.pipecat.custom_spans` | `pipecat-otel` | Plain OTEL spans folded into the Pipecat trace via `capture_custom_spans=True` (registers an OTEL `SpanProcessor`) | Bridge only — there is no standalone OTEL exporter. Do not describe a general-purpose OpenTelemetry backend. |
 
-**Not yet supported — do not claim support in any listing:** OpenAI Agents SDK,
-LlamaIndex, AutoGen, Vercel AI SDK, and LiteLLM have no dedicated integration
+**Not yet supported — do not claim support in any listing:** LlamaIndex,
+AutoGen, Vercel AI SDK, and LiteLLM have no dedicated integration
 module in `src/noveum_trace/integrations/`. Direct OpenAI/Anthropic calls can be
 traced with the core context managers (`trace_llm_call`), but that is not a
 framework integration.
@@ -48,6 +49,7 @@ and the upstream framework's own floor.
 | LangGraph | 3.10+ | `langchain-core>=0.1.0` (shares the `langchain` extra) |
 | LiveKit | 3.10+ | `livekit>=1.0.19,<2`, `livekit-agents>=1.0.0` |
 | CrewAI | 3.10+ | `crewai>=0.177.0; python_version>='3.10'` |
+| OpenAI Agents SDK | 3.10+ | `openai-agents>=0.19.2; python_version>='3.10'` |
 | Pipecat | 3.11+ (required by `pipecat-ai`) | `pipecat-ai>=0.0.108`; `pipecat-otel` adds `opentelemetry-api>=1.0.0`, `opentelemetry-sdk>=1.0.0` |
 
 Other extras: `bedrock` (`boto3>=1.34.0`), `pii_redaction` (`spacy>=3.7.0`).
@@ -98,6 +100,26 @@ on current `Crew` versions and raises `ValueError`. Wrap `crew.kickoff()` in
 `try/finally`, call `listener.shutdown()` to detach, then `noveum_trace.flush()`
 so buffered spans are delivered before a short-lived process exits.
 
+### OpenAI Agents SDK — `setup_openai_agents_tracing` / `NoveumTraceProcessor`
+
+```python
+import noveum_trace
+from agents import add_trace_processor
+from noveum_trace.integrations.openai_agents import NoveumTraceProcessor
+
+noveum_trace.init(api_key="...", project="my-agents-app")
+
+add_trace_processor(NoveumTraceProcessor())
+# or: from noveum_trace.integrations.openai_agents import setup_openai_agents_tracing
+#     setup_openai_agents_tracing()  # creates + registers the processor
+```
+
+`NoveumTraceProcessor` implements `agents.tracing.TracingProcessor` and maps each
+OpenAI Agents trace/span (agent, generation, response, tool/function, handoff,
+guardrail) onto a Noveum trace/span. `setup_openai_agents_tracing()` registers it;
+pass `replace_processors=True` to make Noveum the only processor (disables OpenAI's
+own trace upload). Call `noveum_trace.flush()` before a short-lived process exits.
+
 ### LiveKit — `setup_livekit_tracing`
 
 ```python
@@ -144,6 +166,17 @@ All default `True`: `capture_inputs`, `capture_outputs`, `capture_llm_messages`,
 `capture_flow`, `capture_reasoning`, `capture_guardrails`, `capture_streaming`,
 `capture_thinking`. Non-capture defaults: `trace_name_prefix="crewai"`,
 `verbose=False`.
+
+### OpenAI Agents SDK — `NoveumTraceProcessor(...)` / `setup_openai_agents_tracing(...)`
+
+Privacy-safe defaults — unlike the capture-by-default integrations, raw payloads
+are **off** by default: `capture_inputs=False` (tool/function inputs),
+`capture_outputs=False` (tool/function/LLM outputs), `capture_llm_messages=False`
+(full LLM prompt/response messages). Structural metadata is on:
+`capture_tool_schemas=True` (agent tool / handoff names, not argument values),
+`capture_trace_metadata=True` (OpenAI trace `metadata` / `group_id`),
+`capture_cost=True`. Non-capture default: `trace_name_prefix="openai_agents"`.
+Model name, provider, token usage, latency, and errors are always captured.
 
 ### LiveKit — `setup_livekit_tracing(session, *, ...)`
 
