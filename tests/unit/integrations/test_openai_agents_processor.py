@@ -121,13 +121,30 @@ class TestConstruction:
         assert hasattr(processor_module, "OPENAI_AGENTS_AVAILABLE")
         assert callable(NoveumTraceProcessor)
 
-    def test_privacy_safe_defaults(self) -> None:
+    def test_captures_everything_by_default(self) -> None:
         proc = NoveumTraceProcessor()
+        assert proc.capture_inputs is True
+        assert proc.capture_outputs is True
+        assert proc.capture_llm_messages is True
+        assert proc.capture_tool_schemas is True
+        assert proc.capture_trace_metadata is True
+        assert proc.capture_cost is True
+
+    def test_capture_flags_can_be_disabled(self) -> None:
+        proc = NoveumTraceProcessor(
+            capture_inputs=False,
+            capture_outputs=False,
+            capture_llm_messages=False,
+            capture_tool_schemas=False,
+            capture_trace_metadata=False,
+            capture_cost=False,
+        )
         assert proc.capture_inputs is False
         assert proc.capture_outputs is False
         assert proc.capture_llm_messages is False
-        assert proc.capture_tool_schemas is True
-        assert proc.capture_trace_metadata is True
+        assert proc.capture_tool_schemas is False
+        assert proc.capture_trace_metadata is False
+        assert proc.capture_cost is False
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +299,10 @@ class TestCaptureFlags:
         # capture_inputs/outputs on, capture_llm_messages off -> no LLM content
         client = _make_client()
         proc = NoveumTraceProcessor(
-            client=client, capture_inputs=True, capture_outputs=True
+            client=client,
+            capture_inputs=True,
+            capture_outputs=True,
+            capture_llm_messages=False,
         )
         proc.on_trace_start(_oai_trace())
         proc.on_span_start(_oai_span("s1", sd))
@@ -376,3 +396,287 @@ class TestSetupFactory:
         else:
             with pytest.raises(ImportError):
                 setup_openai_agents_tracing(api_key="x")
+
+
+# ---------------------------------------------------------------------------
+# Full-payload capture (no truncation, richer LLM/agent/tool attributes)
+# ---------------------------------------------------------------------------
+
+
+class TestFullPayloadCapture:
+    def test_long_payloads_are_not_truncated(self) -> None:
+        huge = "x" * 50_000
+        sd = SimpleNamespace(type="function", name="tool", input=huge, output=huge)
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["tool.input"] == huge
+        assert nspan.attributes["tool.output"] == huge
+        assert "…" not in nspan.attributes["tool.output"]
+
+    def test_long_system_prompt_survives_intact(self) -> None:
+        prompt = "system instructions " * 2_000
+        sd = SimpleNamespace(
+            type="generation",
+            model="gpt-4o",
+            model_config=None,
+            usage=None,
+            input=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": "hi"},
+            ],
+            output=[{"role": "assistant", "content": "hello"}],
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["llm.system_prompt"] == prompt
+        assert nspan.attributes["llm.input_text"] == "user: hi"
+        assert nspan.attributes["llm.output_text"] == "assistant: hello"
+
+    def test_generation_captures_tool_calls(self) -> None:
+        sd = SimpleNamespace(
+            type="generation",
+            model="gpt-4o",
+            model_config={"temperature": 0.2, "reasoning": {"effort": "high"}},
+            usage=None,
+            input=[{"role": "user", "content": "weather?"}],
+            output=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["llm.tool_call_count"] == 1
+        assert nspan.attributes["llm.tool_calls"][0]["name"] == "get_weather"
+        assert nspan.attributes["llm.tool_calls"][0]["arguments"] == '{"city":"Paris"}'
+        assert nspan.attributes["llm.temperature"] == 0.2
+        assert nspan.attributes["llm.reasoning_effort"] == "high"
+
+    def test_generation_captures_cache_and_reasoning_tokens(self) -> None:
+        sd = SimpleNamespace(
+            type="generation",
+            model="gpt-4o",
+            model_config=None,
+            input=None,
+            output=None,
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {
+                    "cached_tokens": 64,
+                    "cache_write_tokens": 8,
+                },
+                "output_tokens_details": {"reasoning_tokens": 12},
+            },
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["llm.cached_input_tokens"] == 64
+        assert nspan.attributes["llm.cache_write_input_tokens"] == 8
+        assert nspan.attributes["llm.reasoning_tokens"] == 12
+        assert nspan.attributes["llm.cache_hit"] is True
+
+    def test_response_span_flat_cache_usage(self) -> None:
+        response = SimpleNamespace(
+            model="gpt-4o", id="resp_1", usage=None, output_text="ok", output=[]
+        )
+        sd = SimpleNamespace(
+            type="response",
+            response=response,
+            input=None,
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+            },
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["llm.cached_input_tokens"] == 0
+        assert nspan.attributes["llm.cache_hit"] is False
+
+    def test_response_span_captures_instructions_tools_and_reasoning(self) -> None:
+        response = SimpleNamespace(
+            model="gpt-4o",
+            id="resp_1",
+            usage=None,
+            status="completed",
+            temperature=0.5,
+            top_p=1.0,
+            max_output_tokens=512,
+            instructions="You are a helpful weather bot.",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Look up weather",
+                    "parameters": {"type": "object"},
+                }
+            ],
+            output=[
+                {"type": "reasoning", "summary": [{"text": "The user wants weather."}]},
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_1",
+                    "arguments": '{"city":"Paris"}',
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "It is sunny."}],
+                },
+            ],
+            output_text="It is sunny.",
+        )
+        sd = SimpleNamespace(type="response", response=response, input="weather?")
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        attrs = nspan.attributes
+        assert attrs["llm.system_prompt"] == "You are a helpful weather bot."
+        assert attrs["llm.available_tool_count"] == 1
+        assert attrs["llm.available_tools"][0]["name"] == "get_weather"
+        assert attrs["llm.tool_calls"][0]["call_id"] == "call_1"
+        assert attrs["llm.reasoning"] == "The user wants weather."
+        assert attrs["llm.output_text"] == "It is sunny."
+        assert attrs["llm.response_status"] == "completed"
+        assert attrs["llm.temperature"] == 0.5
+        assert attrs["llm.max_tokens"] == 512
+
+    def test_agent_span_captures_metadata_and_tool_count(self) -> None:
+        sd = SimpleNamespace(
+            type="agent",
+            name="Weather agent",
+            handoffs=["billing"],
+            tools=["get_weather", "get_forecast"],
+            output_type="str",
+            metadata={"team": "growth"},
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["agent.tool_count"] == 2
+        assert nspan.attributes["agent.metadata"] == {"team": "growth"}
+
+    def test_function_span_flags_mcp_tool_calls(self) -> None:
+        sd = SimpleNamespace(
+            type="function",
+            name="search",
+            input="{}",
+            output="result",
+            mcp_data={"server": "docs"},
+        )
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        proc.on_span_start(_oai_span("s1", sd))
+        nspan = proc._spans["s1"]
+        proc.on_span_end(_oai_span("s1", sd))
+
+        assert nspan.attributes["tool.is_mcp"] is True
+        assert nspan.attributes["tool.mcp_data"] == {"server": "docs"}
+
+
+# ---------------------------------------------------------------------------
+# Parent resolution
+# ---------------------------------------------------------------------------
+
+
+class TestParentResolution:
+    def test_child_uses_openai_parent_id(self) -> None:
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+
+        parent_sd = SimpleNamespace(type="agent", name="A")
+        child_sd = SimpleNamespace(type="function", name="t", input=None, output=None)
+        proc.on_span_start(_oai_span("p1", parent_sd))
+        parent_noveum_id = proc._spans["p1"].span_id
+        proc.on_span_start(_oai_span("c1", child_sd, parent_id="p1"))
+
+        assert proc._spans["c1"].parent_span_id == parent_noveum_id
+
+    def test_child_starting_after_parent_ends_keeps_parentage(self) -> None:
+        # Parent lookup must survive the parent span closing: the openai-id to
+        # noveum-id map lives for the whole trace, not just while the parent
+        # span object is open.
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+
+        parent_sd = SimpleNamespace(type="agent", name="A")
+        child_sd = SimpleNamespace(type="function", name="t", input=None, output=None)
+        proc.on_span_start(_oai_span("p1", parent_sd))
+        parent_noveum_id = proc._spans["p1"].span_id
+        proc.on_span_end(_oai_span("p1", parent_sd))
+
+        proc.on_span_start(_oai_span("c1", child_sd, parent_id="p1"))
+        assert proc._spans["c1"].parent_span_id == parent_noveum_id
+
+    def test_unknown_parent_falls_back_to_trace_root(self) -> None:
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+        sd = SimpleNamespace(type="function", name="t", input=None, output=None)
+        proc.on_span_start(_oai_span("c1", sd, parent_id="never-seen"))
+        assert proc._spans["c1"].parent_span_id is None
+
+    def test_trace_end_clears_span_id_map(self) -> None:
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        trace = _oai_trace()
+        proc.on_trace_start(trace)
+        sd = SimpleNamespace(type="agent", name="A")
+        proc.on_span_start(_oai_span("p1", sd))
+        proc.on_trace_end(trace)
+
+        assert proc._noveum_span_ids == {}
+        assert proc._trace_span_ids == {}
+        assert proc._spans == {}

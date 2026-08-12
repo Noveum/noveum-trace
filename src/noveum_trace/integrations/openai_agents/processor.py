@@ -24,15 +24,24 @@ import logging
 import threading
 from typing import Any, Optional
 
-from noveum_trace.integrations.openai_agents import constants as C
-from noveum_trace.integrations.openai_agents.utils import (
-    coerce_iso_datetime,
+from noveum_trace.integrations._common import (
+    coerce_datetime,
     derive_provider,
     estimate_cost_safe,
-    extract_model_config,
     extract_usage_tokens,
-    to_serialisable,
-    truncate_text,
+    finish_span,
+    safe_serialize,
+    set_span_attributes,
+    stringify,
+)
+from noveum_trace.integrations.openai_agents import constants as C
+from noveum_trace.integrations.openai_agents.utils import (
+    extract_message_text,
+    extract_model_config,
+    extract_response_output,
+    extract_system_prompt,
+    extract_tool_calls,
+    extract_tool_schemas,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,24 +81,8 @@ def _span_data_type(span_data: Any) -> str:
     return str(span_type) if span_type is not None else ""
 
 
-def _set_attributes(span: Any, attributes: dict[str, Any]) -> None:
-    """Write *attributes* onto *span*, tolerating already-finished spans."""
-    if not attributes or span is None:
-        return
-    try:
-        span.set_attributes(attributes)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("failed to set span attributes: %s", exc)
-
-
-def _finish_span(span: Any, end_time: Any) -> None:
-    """Finish *span* with *end_time*, never raising into the host application."""
-    if span is None:
-        return
-    try:
-        span.finish(end_time)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("failed to finish span: %s", exc)
+_set_attributes = set_span_attributes
+_finish_span = finish_span
 
 
 class NoveumTraceProcessor(TracingProcessor):
@@ -104,28 +97,36 @@ class NoveumTraceProcessor(TracingProcessor):
         client: Explicit :class:`~noveum_trace.core.client.NoveumClient`. When
             omitted the processor uses the globally initialised client
             (``noveum_trace.init(...)``).
-        capture_inputs: Capture raw tool/function/custom inputs. Off by default
-            (privacy-safe) because inputs can contain sensitive payloads.
-        capture_outputs: Capture raw tool/function outputs. Off by default. (LLM
+        capture_inputs: Capture raw tool/function/custom inputs. On by default —
+            a trace without inputs cannot be replayed or evaluated.
+        capture_outputs: Capture raw tool/function outputs. On by default. (LLM
             prompt/response content is controlled by ``capture_llm_messages``.)
-        capture_llm_messages: Capture full LLM prompt/response message arrays for
-            both generation and response spans. Off by default — the most
-            sensitive payload.
+        capture_llm_messages: Capture full LLM prompt/response message arrays,
+            system prompts and tool calls for generation and response spans. On
+            by default.
         capture_tool_schemas: Capture structural metadata such as an agent's tool
-            and handoff names. On by default (names/structure, not argument values).
+            and handoff names and the tool schemas offered to the model.
         capture_trace_metadata: Copy the OpenAI trace ``metadata`` / ``group_id``
             onto the Noveum trace. On by default (user-supplied workflow metadata).
         capture_cost: Estimate and attach LLM cost from model + token counts.
         trace_name_prefix: Prefix used when the OpenAI trace has no workflow name.
+
+    Note:
+        The Agents SDK decides separately whether to *record* prompt and
+        response payloads on its span data at all. Running with
+        ``RunConfig(trace_include_sensitive_data=False)`` or the
+        ``OPENAI_AGENTS_DONT_LOG_MODEL_DATA`` environment variable leaves
+        ``span_data.input`` / ``span_data.output`` unset upstream, and no
+        capture flag here can recover data the SDK never recorded.
     """
 
     def __init__(
         self,
         client: Any = None,
         *,
-        capture_inputs: bool = False,
-        capture_outputs: bool = False,
-        capture_llm_messages: bool = False,
+        capture_inputs: bool = True,
+        capture_outputs: bool = True,
+        capture_llm_messages: bool = True,
         capture_tool_schemas: bool = True,
         capture_trace_metadata: bool = True,
         capture_cost: bool = True,
@@ -142,6 +143,8 @@ class NoveumTraceProcessor(TracingProcessor):
         self._lock = threading.RLock()
         self._traces: dict[str, Any] = {}
         self._spans: dict[str, Any] = {}
+        self._noveum_span_ids: dict[str, str] = {}
+        self._trace_span_ids: dict[str, set[str]] = {}
         self._is_shutdown = False
 
     # ------------------------------------------------------------------
@@ -193,7 +196,7 @@ class NoveumTraceProcessor(TracingProcessor):
                     attributes[C.ATTR_GROUP_ID] = str(group_id)
                 metadata = getattr(trace, "metadata", None)
                 if metadata:
-                    attributes[C.ATTR_TRACE_METADATA] = to_serialisable(metadata)
+                    attributes[C.ATTR_TRACE_METADATA] = safe_serialize(metadata)
 
             noveum_trace_obj = client.start_trace(
                 name=trace_name,
@@ -213,13 +216,16 @@ class NoveumTraceProcessor(TracingProcessor):
                 return
             with self._lock:
                 noveum_trace_obj = self._traces.pop(str(trace_id), None)
-                orphan_ids = [
-                    span_id
-                    for span_id, span in self._spans.items()
-                    if getattr(span, "trace_id", None)
-                    == getattr(noveum_trace_obj, "trace_id", object())
+                owned_span_ids = self._trace_span_ids.pop(str(trace_id), set())
+                orphans = [
+                    span
+                    for span in (
+                        self._spans.pop(owned_id, None) for owned_id in owned_span_ids
+                    )
+                    if span is not None
                 ]
-                orphans = [self._spans.pop(span_id) for span_id in orphan_ids]
+                for owned_id in owned_span_ids:
+                    self._noveum_span_ids.pop(owned_id, None)
             if noveum_trace_obj is None:
                 return
             for orphan in orphans:
@@ -237,7 +243,23 @@ class NoveumTraceProcessor(TracingProcessor):
             logger.debug("on_trace_end failed: %s", exc, exc_info=True)
 
     def on_span_start(self, span: Any) -> None:
-        """Open a Noveum span, linking it to its parent when one exists."""
+        """
+        Open a Noveum span, linking it to its parent when one exists.
+
+        Parentage is taken straight from the Agents SDK: every span carries a
+        ``parent_id`` naming the OpenAI span that encloses it (the SDK maintains
+        that stack in a context variable, so it is correct across concurrent and
+        async agent runs, including handoffs between agents). That OpenAI id is
+        translated through ``_noveum_span_ids`` to the Noveum span it was mapped
+        to, and the result becomes the new span's ``parent_span_id``.
+
+        The id map deliberately outlives the live span objects in ``_spans`` and
+        is only cleared when the whole trace ends, so a child that opens after
+        its parent has already closed still attaches to the right parent instead
+        of silently reattaching to the trace root. A span with no ``parent_id``
+        (or one whose parent was never mapped) becomes a root-level child of the
+        trace.
+        """
         try:
             trace_id = getattr(span, "trace_id", None)
             span_id = getattr(span, "span_id", None)
@@ -252,13 +274,11 @@ class NoveumTraceProcessor(TracingProcessor):
             parent_id = getattr(span, "parent_id", None)
             if parent_id is not None:
                 with self._lock:
-                    parent_noveum_span = self._spans.get(str(parent_id))
-                if parent_noveum_span is not None:
-                    parent_span_id = getattr(parent_noveum_span, "span_id", None)
+                    parent_span_id = self._noveum_span_ids.get(str(parent_id))
 
             span_type = _span_data_type(getattr(span, "span_data", None))
             span_name = C.SPAN_NAME_BY_TYPE.get(span_type, C.SPAN_DEFAULT)
-            start_time = coerce_iso_datetime(getattr(span, "started_at", None))
+            start_time = coerce_datetime(getattr(span, "started_at", None))
 
             noveum_span = noveum_trace_obj.create_span(
                 name=span_name,
@@ -268,6 +288,10 @@ class NoveumTraceProcessor(TracingProcessor):
             )
             with self._lock:
                 self._spans[str(span_id)] = noveum_span
+                mapped_id = getattr(noveum_span, "span_id", None)
+                if mapped_id is not None:
+                    self._noveum_span_ids[str(span_id)] = mapped_id
+                self._trace_span_ids.setdefault(str(trace_id), set()).add(str(span_id))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("on_span_start failed: %s", exc, exc_info=True)
 
@@ -293,7 +317,7 @@ class NoveumTraceProcessor(TracingProcessor):
                 attributes[C.ATTR_STATUS] = C.STATUS_OK
 
             _set_attributes(noveum_span, attributes)
-            end_time = coerce_iso_datetime(getattr(span, "ended_at", None))
+            end_time = coerce_datetime(getattr(span, "ended_at", None))
             _finish_span(noveum_span, end_time)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("on_span_end failed: %s", exc, exc_info=True)
@@ -342,51 +366,86 @@ class NoveumTraceProcessor(TracingProcessor):
         return attributes
 
     def _map_agent(self, span_data: Any, attributes: dict[str, Any]) -> None:
+        """
+        Map an ``agent`` span.
+
+        ``AgentSpanData`` describes the agent's *configuration* — its name, the
+        names of the tools and handoffs it was given, and its output type. The
+        calls it actually made are separate child spans: each tool invocation
+        (arguments and result) is a ``function`` span, each MCP tool listing an
+        ``mcp_tools`` span, each model call a ``generation`` or ``response``
+        span, and the input the agent ran on is the input of its first model
+        call. There is no tool result or conversation payload on this span to
+        read.
+        """
         name = getattr(span_data, "name", None)
         if name:
             attributes[C.ATTR_AGENT_NAME] = str(name)
         output_type = getattr(span_data, "output_type", None)
         if output_type:
             attributes[C.ATTR_AGENT_OUTPUT_TYPE] = str(output_type)
+        metadata = getattr(span_data, "metadata", None)
+        if metadata:
+            attributes[C.ATTR_AGENT_METADATA] = safe_serialize(metadata)
         if self.capture_tool_schemas:
             handoffs = getattr(span_data, "handoffs", None)
             if handoffs:
-                attributes[C.ATTR_AGENT_HANDOFFS] = to_serialisable(handoffs)
+                attributes[C.ATTR_AGENT_HANDOFFS] = safe_serialize(handoffs)
             tools = getattr(span_data, "tools", None)
             if tools:
-                attributes[C.ATTR_AGENT_TOOLS] = to_serialisable(tools)
+                attributes[C.ATTR_AGENT_TOOLS] = safe_serialize(tools)
+                try:
+                    attributes[C.ATTR_AGENT_TOOL_COUNT] = len(tools)
+                except TypeError:
+                    pass
 
     def _map_function(self, span_data: Any, attributes: dict[str, Any]) -> None:
+        """Map a tool/function call: name, arguments, result, MCP provenance."""
         name = getattr(span_data, "name", None)
         if name:
             attributes[C.ATTR_TOOL_NAME] = str(name)
+        mcp_data = getattr(span_data, "mcp_data", None)
+        if mcp_data:
+            attributes[C.ATTR_TOOL_IS_MCP] = True
+            attributes[C.ATTR_TOOL_MCP_DATA] = safe_serialize(mcp_data)
         if self.capture_inputs:
             tool_input = getattr(span_data, "input", None)
             if tool_input is not None:
-                attributes[C.ATTR_TOOL_INPUT] = truncate_text(
-                    tool_input, C.MAX_TEXT_LENGTH
-                )
+                attributes[C.ATTR_TOOL_INPUT] = stringify(tool_input)
         if self.capture_outputs:
             tool_output = getattr(span_data, "output", None)
             if tool_output is not None:
-                attributes[C.ATTR_TOOL_OUTPUT] = truncate_text(
-                    tool_output, C.MAX_TEXT_LENGTH
-                )
+                attributes[C.ATTR_TOOL_OUTPUT] = stringify(tool_output)
 
     def _map_generation(self, span_data: Any, attributes: dict[str, Any]) -> None:
+        """Map a Chat-Completions generation call."""
         model = getattr(span_data, "model", None)
         self._apply_model(model, attributes)
         self._apply_model_config(getattr(span_data, "model_config", None), attributes)
         self._apply_usage(model, getattr(span_data, "usage", None), attributes)
-        if self.capture_llm_messages:
-            llm_input = getattr(span_data, "input", None)
-            if llm_input is not None:
-                attributes[C.ATTR_LLM_INPUT] = to_serialisable(llm_input)
-            llm_output = getattr(span_data, "output", None)
-            if llm_output is not None:
-                attributes[C.ATTR_LLM_OUTPUT] = to_serialisable(llm_output)
+        if not self.capture_llm_messages:
+            return
+
+        llm_input = getattr(span_data, "input", None)
+        if llm_input is not None:
+            attributes[C.ATTR_LLM_INPUT] = safe_serialize(llm_input)
+            system_prompt = extract_system_prompt(llm_input)
+            if system_prompt:
+                attributes[C.ATTR_LLM_SYSTEM_PROMPT] = system_prompt
+            input_text = extract_message_text(llm_input)
+            if input_text:
+                attributes[C.ATTR_LLM_INPUT_TEXT] = input_text
+
+        llm_output = getattr(span_data, "output", None)
+        if llm_output is not None:
+            attributes[C.ATTR_LLM_OUTPUT] = safe_serialize(llm_output)
+            output_text = extract_message_text(llm_output, skip_system=False)
+            if output_text:
+                attributes[C.ATTR_LLM_OUTPUT_TEXT] = output_text
+            self._apply_tool_calls(extract_tool_calls(llm_output), attributes)
 
     def _map_response(self, span_data: Any, attributes: dict[str, Any]) -> None:
+        """Map a Responses-API call, including its tool schemas and reasoning."""
         response = getattr(span_data, "response", None)
         model = getattr(response, "model", None)
         self._apply_model(model, attributes)
@@ -395,19 +454,61 @@ class NoveumTraceProcessor(TracingProcessor):
         response_id = getattr(response, "id", None)
         if response_id:
             attributes[C.ATTR_LLM_REQUEST_ID] = str(response_id)
+
+        if response is not None:
+            self._apply_model_config(response, attributes)
+            status = getattr(response, "status", None)
+            if status:
+                attributes[C.ATTR_LLM_RESPONSE_STATUS] = str(status)
+            if self.capture_tool_schemas:
+                tools = getattr(response, "tools", None)
+                if tools:
+                    schemas = extract_tool_schemas(tools)
+                    if schemas:
+                        attributes[C.ATTR_LLM_AVAILABLE_TOOLS] = schemas
+                        attributes[C.ATTR_LLM_AVAILABLE_TOOL_COUNT] = len(schemas)
+
         # Response input/output are LLM messages, so they are gated on
         # ``capture_llm_messages`` (consistent with ``_map_generation``), not on
         # the tool-oriented ``capture_inputs`` / ``capture_outputs`` flags.
-        if self.capture_llm_messages:
-            response_input = getattr(span_data, "input", None)
-            if response_input is not None:
-                attributes[C.ATTR_LLM_INPUT] = to_serialisable(response_input)
-            if response is not None:
-                output_text = getattr(response, "output_text", None)
-                if output_text:
-                    attributes[C.ATTR_LLM_OUTPUT] = truncate_text(
-                        output_text, C.MAX_TEXT_LENGTH
-                    )
+        if not self.capture_llm_messages:
+            return
+
+        response_input = getattr(span_data, "input", None)
+        if response_input is not None:
+            attributes[C.ATTR_LLM_INPUT] = safe_serialize(response_input)
+            input_text = (
+                response_input
+                if isinstance(response_input, str)
+                else extract_message_text(response_input)
+            )
+            if input_text:
+                attributes[C.ATTR_LLM_INPUT_TEXT] = input_text
+
+        if response is None:
+            return
+        instructions = getattr(response, "instructions", None)
+        if instructions:
+            attributes[C.ATTR_LLM_SYSTEM_PROMPT] = (
+                instructions
+                if isinstance(instructions, str)
+                else stringify(safe_serialize(instructions))
+            )
+        output = extract_response_output(response)
+        if "text" in output:
+            attributes[C.ATTR_LLM_OUTPUT] = output["text"]
+            attributes[C.ATTR_LLM_OUTPUT_TEXT] = output["text"]
+        if "reasoning" in output:
+            attributes[C.ATTR_LLM_REASONING] = output["reasoning"]
+        self._apply_tool_calls(output.get("tool_calls") or [], attributes)
+
+    def _apply_tool_calls(
+        self, tool_calls: list[dict[str, Any]], attributes: dict[str, Any]
+    ) -> None:
+        if not tool_calls:
+            return
+        attributes[C.ATTR_LLM_TOOL_CALLS] = tool_calls
+        attributes[C.ATTR_LLM_TOOL_CALL_COUNT] = len(tool_calls)
 
     def _map_handoff(self, span_data: Any, attributes: dict[str, Any]) -> None:
         from_agent = getattr(span_data, "from_agent", None)
@@ -432,7 +533,7 @@ class NoveumTraceProcessor(TracingProcessor):
         if self.capture_inputs:
             data = getattr(span_data, "data", None)
             if data:
-                attributes[C.ATTR_CUSTOM_DATA] = to_serialisable(data)
+                attributes[C.ATTR_CUSTOM_DATA] = safe_serialize(data)
 
     def _map_mcp_tools(self, span_data: Any, attributes: dict[str, Any]) -> None:
         server = getattr(span_data, "server", None)
@@ -441,7 +542,11 @@ class NoveumTraceProcessor(TracingProcessor):
         if self.capture_tool_schemas:
             result = getattr(span_data, "result", None)
             if result:
-                attributes[C.ATTR_MCP_TOOLS] = to_serialisable(result)
+                attributes[C.ATTR_MCP_TOOLS] = safe_serialize(result)
+                try:
+                    attributes[C.ATTR_MCP_TOOL_COUNT] = len(result)
+                except TypeError:
+                    pass
 
     def _map_task_turn(self, span_data: Any, attributes: dict[str, Any]) -> None:
         self._apply_usage(None, getattr(span_data, "usage", None), attributes)
@@ -473,8 +578,18 @@ class NoveumTraceProcessor(TracingProcessor):
             attributes[C.ATTR_LLM_TOP_P] = config["top_p"]
         if "max_tokens" in config:
             attributes[C.ATTR_LLM_MAX_TOKENS] = config["max_tokens"]
+        if "reasoning_effort" in config:
+            attributes[C.ATTR_LLM_REASONING_EFFORT] = config["reasoning_effort"]
 
     def _apply_usage(self, model: Any, usage: Any, attributes: dict[str, Any]) -> None:
+        """
+        Attach token counts and estimated cost.
+
+        Covers the cache and reasoning breakdowns the SDK reports: generation
+        spans nest them under ``input_tokens_details`` / ``output_tokens_details``
+        while response, turn and task spans report the flat
+        ``cached_input_tokens`` / ``cache_write_input_tokens`` form.
+        """
         tokens = extract_usage_tokens(usage)
         if tokens["input_tokens"] is not None:
             attributes[C.ATTR_LLM_INPUT_TOKENS] = tokens["input_tokens"]
@@ -482,6 +597,15 @@ class NoveumTraceProcessor(TracingProcessor):
             attributes[C.ATTR_LLM_OUTPUT_TOKENS] = tokens["output_tokens"]
         if tokens["total_tokens"] is not None:
             attributes[C.ATTR_LLM_TOTAL_TOKENS] = tokens["total_tokens"]
+        if tokens["cached_input_tokens"] is not None:
+            attributes[C.ATTR_LLM_CACHED_INPUT_TOKENS] = tokens["cached_input_tokens"]
+            attributes[C.ATTR_LLM_CACHE_HIT] = tokens["cached_input_tokens"] > 0
+        if tokens["cache_write_input_tokens"] is not None:
+            attributes[C.ATTR_LLM_CACHE_WRITE_INPUT_TOKENS] = tokens[
+                "cache_write_input_tokens"
+            ]
+        if tokens["reasoning_tokens"] is not None:
+            attributes[C.ATTR_LLM_REASONING_TOKENS] = tokens["reasoning_tokens"]
         if self.capture_cost and model:
             cost = estimate_cost_safe(
                 str(model), tokens["input_tokens"], tokens["output_tokens"]
@@ -506,9 +630,9 @@ class NoveumTraceProcessor(TracingProcessor):
             message = getattr(error, "message", None) or str(error)
             data = getattr(error, "data", None)
         if message is not None:
-            attributes[C.ATTR_ERROR_MESSAGE] = truncate_text(message, C.MAX_TEXT_LENGTH)
+            attributes[C.ATTR_ERROR_MESSAGE] = stringify(message)
         if data:
-            attributes[C.ATTR_ERROR_DATA] = to_serialisable(data)
+            attributes[C.ATTR_ERROR_DATA] = safe_serialize(data)
         try:
             from noveum_trace.core.span import SpanStatus
 

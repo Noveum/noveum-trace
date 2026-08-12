@@ -73,7 +73,9 @@ ATTR_STATUS = "openai_agents.status"
 ATTR_AGENT_NAME = "agent.name"
 ATTR_AGENT_HANDOFFS = "agent.handoffs"
 ATTR_AGENT_TOOLS = "agent.tools"
+ATTR_AGENT_TOOL_COUNT = "agent.tool_count"
 ATTR_AGENT_OUTPUT_TYPE = "agent.output_type"
+ATTR_AGENT_METADATA = "agent.metadata"
 
 # ---------------------------------------------------------------------------
 # Tool / function attribute keys   (prefix: tool.*)
@@ -82,6 +84,8 @@ ATTR_AGENT_OUTPUT_TYPE = "agent.output_type"
 ATTR_TOOL_NAME = "tool.name"
 ATTR_TOOL_INPUT = "tool.input"
 ATTR_TOOL_OUTPUT = "tool.output"
+ATTR_TOOL_IS_MCP = "tool.is_mcp"
+ATTR_TOOL_MCP_DATA = "tool.mcp_data"
 
 # ---------------------------------------------------------------------------
 # LLM attribute keys   (prefix: llm.* — consumed by the gen_ai crosswalk)
@@ -91,13 +95,27 @@ ATTR_LLM_MODEL = "llm.model"
 ATTR_LLM_PROVIDER = "llm.provider"
 ATTR_LLM_INPUT = "llm.input"
 ATTR_LLM_OUTPUT = "llm.output"
+ATTR_LLM_INPUT_TEXT = "llm.input_text"
+ATTR_LLM_OUTPUT_TEXT = "llm.output_text"
+ATTR_LLM_SYSTEM_PROMPT = "llm.system_prompt"
+ATTR_LLM_AVAILABLE_TOOLS = "llm.available_tools"
+ATTR_LLM_AVAILABLE_TOOL_COUNT = "llm.available_tool_count"
+ATTR_LLM_TOOL_CALLS = "llm.tool_calls"
+ATTR_LLM_TOOL_CALL_COUNT = "llm.tool_call_count"
+ATTR_LLM_REASONING = "llm.reasoning"
 ATTR_LLM_INPUT_TOKENS = "llm.input_tokens"
 ATTR_LLM_OUTPUT_TOKENS = "llm.output_tokens"
 ATTR_LLM_TOTAL_TOKENS = "llm.total_tokens"
+ATTR_LLM_CACHED_INPUT_TOKENS = "llm.cached_input_tokens"
+ATTR_LLM_CACHE_WRITE_INPUT_TOKENS = "llm.cache_write_input_tokens"
+ATTR_LLM_CACHE_HIT = "llm.cache_hit"
+ATTR_LLM_REASONING_TOKENS = "llm.reasoning_tokens"
 ATTR_LLM_TEMPERATURE = "llm.temperature"
 ATTR_LLM_MAX_TOKENS = "llm.max_tokens"
 ATTR_LLM_TOP_P = "llm.top_p"
 ATTR_LLM_REQUEST_ID = "llm.request_id"
+ATTR_LLM_RESPONSE_STATUS = "llm.response_status"
+ATTR_LLM_REASONING_EFFORT = "llm.reasoning_effort"
 ATTR_LLM_COST_INPUT = "llm.cost.input"
 ATTR_LLM_COST_OUTPUT = "llm.cost.output"
 ATTR_LLM_COST_TOTAL = "llm.cost.total"
@@ -123,6 +141,7 @@ ATTR_GUARDRAIL_TRIGGERED = "guardrail.triggered"
 
 ATTR_MCP_SERVER = "mcp.server_name"
 ATTR_MCP_TOOLS = "mcp.tools"
+ATTR_MCP_TOOL_COUNT = "mcp.tool_count"
 
 # ---------------------------------------------------------------------------
 # Custom-span attribute keys   (prefix: custom.*)
@@ -151,10 +170,12 @@ STATUS_OK = "ok"
 STATUS_ERROR = "error"
 
 # ---------------------------------------------------------------------------
-# Limits / defaults
+# Defaults
 # ---------------------------------------------------------------------------
 
-MAX_TEXT_LENGTH = 8_192
+# Payloads are recorded in full. System prompts, tool results and message
+# arrays routinely exceed any fixed character budget, and a clipped prompt is
+# not usable for evaluation or replay, so this integration does not truncate.
 DEFAULT_TRACE_NAME_PREFIX = "openai_agents"
 
 # Informational — the minimum ``openai-agents`` release these mappings were

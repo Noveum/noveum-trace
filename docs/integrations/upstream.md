@@ -116,7 +116,8 @@ add_trace_processor(NoveumTraceProcessor())
 
 `NoveumTraceProcessor` implements `agents.tracing.TracingProcessor` and maps each
 OpenAI Agents trace/span (agent, generation, response, tool/function, handoff,
-guardrail) onto a Noveum trace/span. `setup_openai_agents_tracing()` registers it;
+guardrail, `mcp_tools`, `custom`, task/turn) onto a Noveum trace/span, preserving
+parentage from the SDK's own `parent_id`. `setup_openai_agents_tracing()` registers it;
 pass `replace_processors=True` to make Noveum the only processor (disables OpenAI's
 own trace upload). For a short-lived process, call `noveum_trace.flush()` then
 `noveum_trace.shutdown()` before exit.
@@ -170,16 +171,21 @@ All default `True`: `capture_inputs`, `capture_outputs`, `capture_llm_messages`,
 
 ### OpenAI Agents SDK — `NoveumTraceProcessor(...)` / `setup_openai_agents_tracing(...)`
 
-Privacy-safe defaults — unlike the capture-by-default integrations, raw payloads
-are **off** by default: `capture_inputs=False` (tool/function inputs),
-`capture_outputs=False` (tool/function outputs), `capture_llm_messages=False`
-(full LLM prompt/response messages, generation and response spans). Structural
-metadata is on: `capture_tool_schemas=True` (agent tool / handoff names, not
-argument values), `capture_cost=True`. `capture_trace_metadata=True` sends the
-OpenAI trace `metadata` / `group_id` as-is (no redaction) — set it `False` if
-those may hold sensitive data. Non-capture default:
-`trace_name_prefix="openai_agents"`. Model name, provider, token usage, latency,
-and error type/message are always captured.
+All default `True`, matching the other capture-by-default integrations:
+`capture_inputs` (tool/function inputs), `capture_outputs` (tool/function
+outputs), `capture_llm_messages` (full LLM prompt/response messages, system
+prompts and tool calls on generation and response spans), `capture_tool_schemas`
+(agent tool / handoff names plus the tool schemas offered to the model),
+`capture_cost`, and `capture_trace_metadata` — which sends the OpenAI trace
+`metadata` / `group_id` as-is (no redaction), so set it `False` if those may
+hold sensitive data. Non-capture default: `trace_name_prefix="openai_agents"`.
+Model name, provider, token usage (including cached and reasoning tokens),
+latency, and error type/message are always captured. Payloads are not truncated.
+
+Note that the Agents SDK gates payload recording independently: with
+`RunConfig(trace_include_sensitive_data=False)` or the
+`OPENAI_AGENTS_DONT_LOG_MODEL_DATA` environment variable, prompts and responses
+never reach any processor, and no capture flag can recover them.
 
 ### LiveKit — `setup_livekit_tracing(session, *, ...)`
 

@@ -41,9 +41,10 @@ async def main() -> None:
         api_key=os.environ.get("NOVEUM_API_KEY"),
     )
 
-    # Capture inputs/outputs is opt-in (privacy-safe defaults). Enable it here so
-    # the example traces show the tool arguments and results.
-    add_trace_processor(NoveumTraceProcessor(capture_inputs=True, capture_outputs=True))
+    # Everything is captured by default — prompts, tool arguments and results.
+    # Pass capture_inputs / capture_outputs / capture_llm_messages as False to
+    # reduce what is sent.
+    add_trace_processor(NoveumTraceProcessor())
 
     agent = Agent(
         name="Weather assistant",

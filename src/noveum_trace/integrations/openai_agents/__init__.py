@@ -28,15 +28,23 @@ Configuration Options
 ---------------------
 All options passed to ``NoveumTraceProcessor`` or ``setup_openai_agents_tracing``:
 
-  capture_inputs          — Capture raw tool / function / custom inputs (default: off)
-  capture_outputs         — Capture raw tool / function outputs (default: off)
-  capture_llm_messages    — Capture full LLM prompt/response messages, generation
-                            and response spans (default: off)
-  capture_tool_schemas    — Capture agent tool / handoff names (default: on)
+  capture_inputs          — Capture raw tool / function / custom inputs (default: on)
+  capture_outputs         — Capture raw tool / function outputs (default: on)
+  capture_llm_messages    — Capture full LLM prompt/response messages, system
+                            prompts and tool calls, on generation and response
+                            spans (default: on)
+  capture_tool_schemas    — Capture agent tool / handoff names and the tool
+                            schemas offered to the model (default: on)
   capture_trace_metadata  — Copy OpenAI trace metadata / group_id (default: on;
                             may contain sensitive data — see the integration guide)
   capture_cost            — Estimate LLM cost from tokens (default: on)
   trace_name_prefix       — Prefix for unnamed workflows (default: "openai_agents")
+
+Everything is captured by default; set the flags to ``False`` to reduce what is
+sent. Note that the Agents SDK separately decides whether to record prompt and
+response payloads at all — with ``RunConfig(trace_include_sensitive_data=False)``
+or ``OPENAI_AGENTS_DONT_LOG_MODEL_DATA`` set, those payloads never reach any
+processor and no flag here can recover them.
 """
 
 from noveum_trace.integrations.openai_agents.processor import (
