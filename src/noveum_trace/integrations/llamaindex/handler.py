@@ -25,19 +25,28 @@ from llama_index.core.instrumentation.event_handlers.base import BaseEventHandle
 from llama_index.core.instrumentation.span.base import BaseSpan
 from llama_index.core.instrumentation.span_handlers.base import BaseSpanHandler
 
+from noveum_trace.integrations._common import (
+    estimate_cost_safe,
+    finish_span,
+    probe,
+    set_span_attributes,
+    stringify,
+)
 from noveum_trace.integrations.llamaindex import constants as C
 from noveum_trace.integrations.llamaindex.utils import (
     classify_operation,
     derive_provider,
     extract_model_name,
-    extract_node_contents,
     extract_node_scores,
     extract_query_str,
     extract_response_text,
+    extract_system_prompt,
     extract_token_usage,
+    extract_tool_metadata,
     operation_from_span_id,
     serialize_messages,
-    truncate_text,
+    serialize_nodes,
+    vector_dimensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,23 +62,8 @@ _LLM_END_EVENTS = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def _set_attrs(span: Any, attrs: dict[str, Any]) -> None:
-    if not attrs or span is None:
-        return
-    try:
-        span.set_attributes(attrs)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("failed to set span attributes: %s", exc)
-
-
-def _finish_span(span: Any) -> None:
-    if span is None:
-        return
-    try:
-        if not span.is_finished():
-            span.finish()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("failed to finish span: %s", exc)
+_set_attrs = set_span_attributes
+_finish_span = finish_span
 
 
 def _apply_error(span: Any, err: Any) -> None:
@@ -78,7 +72,7 @@ def _apply_error(span: Any, err: Any) -> None:
     attrs: dict[str, Any] = {C.ATTR_STATUS: C.STATUS_ERROR}
     if err is not None:
         attrs[C.ATTR_ERROR_TYPE] = type(err).__name__
-        attrs[C.ATTR_ERROR_MESSAGE] = truncate_text(str(err), C.MAX_TEXT_LENGTH)
+        attrs[C.ATTR_ERROR_MESSAGE] = stringify(err)
     try:
         span.set_attributes(attrs)
         from noveum_trace.core.span import SpanStatus
@@ -166,6 +160,11 @@ class NoveumLlamaIndexSpanHandler(BaseSpanHandler[NoveumLlamaIndexSpan]):
                 C.ATTR_OPERATION: operation,
                 C.ATTR_SPAN_TYPE: classify_operation(operation),
             }
+            # The retriever instance is the only place the configured top-k is
+            # visible; the retrieval events do not carry it.
+            top_k = probe(instance, "similarity_top_k", "top_k")
+            if isinstance(top_k, int):
+                attributes[C.ATTR_RETRIEVAL_TOP_K] = top_k
 
             parent = self.open_spans.get(parent_span_id) if parent_span_id else None
             if parent is not None and getattr(parent, "noveum_trace", None) is not None:
@@ -283,9 +282,11 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
     """
 
     span_handler: Any = None
-    capture_inputs: bool = False
-    capture_outputs: bool = False
-    capture_llm_messages: bool = False
+    capture_inputs: bool = True
+    capture_outputs: bool = True
+    capture_llm_messages: bool = True
+    capture_cost: bool = True
+    capture_embedding_chunks: bool = False
 
     @classmethod
     def class_name(cls) -> str:
@@ -322,7 +323,9 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
         if name in _LLM_START_EVENTS:
             self._map_llm_start(event, attrs)
         elif name in _LLM_END_EVENTS:
-            self._map_llm_end(event, attrs)
+            self._map_llm_end(event, attrs, noveum_span)
+        elif name == "AgentToolCallEvent":
+            self._map_tool_call(event, attrs)
         elif name == "EmbeddingStartEvent":
             attrs[C.ATTR_SPAN_TYPE] = C.SPAN_TYPE_EMBEDDING
             model = extract_model_name(getattr(event, "model_dict", None))
@@ -335,7 +338,7 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
             if self.capture_inputs:
                 query = extract_query_str(getattr(event, "str_or_query_bundle", None))
                 if query:
-                    attrs[C.ATTR_RETRIEVAL_QUERY] = truncate_text(query)
+                    attrs[C.ATTR_RETRIEVAL_QUERY] = query
         elif name == "RetrievalEndEvent":
             self._map_retrieval_end(event, attrs)
         elif name == "QueryStartEvent":
@@ -343,18 +346,13 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
             if self.capture_inputs:
                 query = extract_query_str(getattr(event, "query", None))
                 if query:
-                    attrs[C.ATTR_QUERY_TEXT] = truncate_text(query)
+                    attrs[C.ATTR_QUERY_TEXT] = query
         elif name == "QueryEndEvent":
-            if self.capture_outputs:
-                response = getattr(event, "response", None)
-                if response is not None:
-                    attrs[C.ATTR_QUERY_RESPONSE] = truncate_text(str(response))
+            self._map_query_end(event, attrs)
         elif name == "ReRankStartEvent":
             self._map_rerank_start(event, attrs)
         elif name == "ReRankEndEvent":
-            nodes = getattr(event, "nodes", None)
-            if nodes is not None:
-                attrs[C.ATTR_RERANK_OUTPUT_NODE_COUNT] = len(nodes)
+            self._map_rerank_end(event, attrs)
 
         _set_attrs(noveum_span, attrs)
 
@@ -366,15 +364,31 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
             provider = derive_provider(model)
             if provider:
                 attrs[C.ATTR_LLM_PROVIDER] = provider
+
+        model_dict = getattr(event, "model_dict", None)
+        additional = getattr(event, "additional_kwargs", None)
+        tools = probe(additional, "tools") or probe(model_dict, "tools")
+        if tools and self.capture_llm_messages:
+            schemas = [
+                extract_tool_metadata(tool) or {"tool": stringify(tool)}
+                for tool in tools
+            ]
+            attrs[C.ATTR_LLM_AVAILABLE_TOOLS] = schemas
+            attrs[C.ATTR_LLM_AVAILABLE_TOOL_COUNT] = len(schemas)
+
         if self.capture_llm_messages:
-            messages = serialize_messages(getattr(event, "messages", None))
+            raw_messages = getattr(event, "messages", None)
+            messages = serialize_messages(raw_messages)
             if messages:
                 attrs[C.ATTR_LLM_INPUT] = messages
+                system_prompt = extract_system_prompt(raw_messages)
+                if system_prompt:
+                    attrs[C.ATTR_LLM_SYSTEM_PROMPT] = system_prompt
             prompt = getattr(event, "prompt", None)
             if prompt is not None:
-                attrs[C.ATTR_LLM_INPUT] = truncate_text(prompt)
+                attrs[C.ATTR_LLM_INPUT] = stringify(prompt)
 
-    def _map_llm_end(self, event: Any, attrs: dict[str, Any]) -> None:
+    def _map_llm_end(self, event: Any, attrs: dict[str, Any], noveum_span: Any) -> None:
         response = getattr(event, "response", None)
         usage = extract_token_usage(response)
         if usage["input_tokens"] is not None:
@@ -383,31 +397,135 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
             attrs[C.ATTR_LLM_OUTPUT_TOKENS] = usage["output_tokens"]
         if usage["total_tokens"] is not None:
             attrs[C.ATTR_LLM_TOTAL_TOKENS] = usage["total_tokens"]
+        if usage["cached_input_tokens"] is not None:
+            attrs[C.ATTR_LLM_CACHED_INPUT_TOKENS] = usage["cached_input_tokens"]
+        if usage["reasoning_tokens"] is not None:
+            attrs[C.ATTR_LLM_REASONING_TOKENS] = usage["reasoning_tokens"]
+
+        if self.capture_cost:
+            self._apply_cost(usage, attrs, noveum_span)
+
+        tool_calls = self._response_tool_calls(response)
+        if tool_calls:
+            attrs[C.ATTR_LLM_TOOL_CALLS] = tool_calls
+            attrs[C.ATTR_LLM_TOOL_CALL_COUNT] = len(tool_calls)
+
         if self.capture_outputs:
             text = extract_response_text(response)
             if text is None:
                 output = getattr(event, "output", None)
-                text = str(output) if output is not None else None
+                text = stringify(output) if output is not None else None
             if text:
-                attrs[C.ATTR_LLM_OUTPUT] = truncate_text(text)
+                attrs[C.ATTR_LLM_OUTPUT] = text
+
+    def _apply_cost(
+        self, usage: dict[str, Any], attrs: dict[str, Any], noveum_span: Any
+    ) -> None:
+        """
+        Estimate cost from the model recorded by the matching start event.
+
+        LlamaIndex splits a call across ``LLMChatStartEvent`` (which carries the
+        model) and ``LLMChatEndEvent`` (which carries usage), so the model is
+        read back off the span the start event already annotated.
+        """
+        model = attrs.get(C.ATTR_LLM_MODEL)
+        if not model:
+            existing = getattr(noveum_span, "attributes", None)
+            if isinstance(existing, dict):
+                model = existing.get(C.ATTR_LLM_MODEL)
+        if not model:
+            return
+        cost = estimate_cost_safe(
+            str(model), usage["input_tokens"], usage["output_tokens"]
+        )
+        if cost.get("total"):
+            attrs[C.ATTR_LLM_COST_INPUT] = cost.get("input")
+            attrs[C.ATTR_LLM_COST_OUTPUT] = cost.get("output")
+            attrs[C.ATTR_LLM_COST_TOTAL] = cost.get("total")
+            attrs[C.ATTR_LLM_COST_CURRENCY] = cost.get("currency")
+
+    def _response_tool_calls(self, response: Any) -> list[dict[str, Any]]:
+        """Pull tool calls off a ``ChatResponse`` message's additional kwargs."""
+        message = probe(response, "message")
+        additional = (
+            probe(message, "additional_kwargs") if message is not None else None
+        )
+        raw_calls = probe(additional, "tool_calls") if additional else None
+        calls: list[dict[str, Any]] = []
+        for raw in raw_calls or []:
+            function = probe(raw, "function")
+            name = (
+                probe(function, "name") if function is not None else probe(raw, "name")
+            )
+            arguments = (
+                probe(function, "arguments")
+                if function is not None
+                else probe(raw, "arguments")
+            )
+            if name is None and arguments is None:
+                continue
+            entry: dict[str, Any] = {"name": stringify(name) if name else None}
+            call_id = probe(raw, "id", "tool_call_id")
+            if call_id is not None:
+                entry["call_id"] = stringify(call_id)
+            if arguments is not None:
+                entry["arguments"] = stringify(arguments)
+            calls.append(entry)
+        return calls
+
+    def _map_tool_call(self, event: Any, attrs: dict[str, Any]) -> None:
+        """Map an agent tool invocation (``AgentToolCallEvent``)."""
+        metadata = extract_tool_metadata(getattr(event, "tool", None))
+        if metadata.get("name"):
+            attrs[C.ATTR_TOOL_NAME] = metadata["name"]
+        if metadata.get("description"):
+            attrs[C.ATTR_TOOL_DESCRIPTION] = metadata["description"]
+        if self.capture_inputs:
+            arguments = getattr(event, "arguments", None)
+            if arguments is not None:
+                attrs[C.ATTR_TOOL_INPUT] = stringify(arguments)
 
     def _map_embedding_end(self, event: Any, attrs: dict[str, Any]) -> None:
+        """
+        Map an embedding call.
+
+        Counts and vector width are always recorded; the chunk *text* is behind
+        ``capture_embedding_chunks`` because indexing a corpus emits one
+        embedding call per batch, and capturing their text would copy the whole
+        source corpus into the trace store. The embedding vectors themselves are
+        never attached — a float array is not usable in a trace viewer.
+        """
         chunks = getattr(event, "chunks", None)
         if chunks is not None:
             attrs[C.ATTR_EMBEDDING_CHUNK_COUNT] = len(chunks)
+            if self.capture_embedding_chunks:
+                attrs[C.ATTR_EMBEDDING_CHUNKS] = [stringify(c) for c in chunks]
         embeddings = getattr(event, "embeddings", None)
         if embeddings is not None:
             attrs[C.ATTR_EMBEDDING_VECTOR_COUNT] = len(embeddings)
+            dimensions = vector_dimensions(embeddings)
+            if dimensions is not None:
+                attrs[C.ATTR_EMBEDDING_DIMENSIONS] = dimensions
 
     def _map_retrieval_end(self, event: Any, attrs: dict[str, Any]) -> None:
         nodes = getattr(event, "nodes", None)
-        if nodes is not None:
-            attrs[C.ATTR_RETRIEVAL_NODE_COUNT] = len(nodes)
-            attrs[C.ATTR_RETRIEVAL_SCORES] = extract_node_scores(nodes)
-            if self.capture_outputs:
-                attrs[C.ATTR_RETRIEVAL_NODES] = extract_node_contents(
-                    nodes, C.MAX_NODE_CONTENT_LENGTH
-                )
+        if nodes is None:
+            return
+        attrs[C.ATTR_RETRIEVAL_NODE_COUNT] = len(nodes)
+        # Ordered best-match first: the retriever's own top-k similarity scores.
+        attrs[C.ATTR_RETRIEVAL_SCORES] = extract_node_scores(nodes)
+        if self.capture_outputs:
+            attrs[C.ATTR_RETRIEVAL_NODES] = serialize_nodes(nodes)
+
+    def _map_query_end(self, event: Any, attrs: dict[str, Any]) -> None:
+        response = getattr(event, "response", None)
+        if response is None:
+            return
+        if self.capture_outputs:
+            attrs[C.ATTR_QUERY_RESPONSE] = stringify(response)
+            source_nodes = getattr(response, "source_nodes", None)
+            if source_nodes:
+                attrs[C.ATTR_QUERY_SOURCE_NODES] = serialize_nodes(source_nodes)
 
     def _map_rerank_start(self, event: Any, attrs: dict[str, Any]) -> None:
         attrs[C.ATTR_SPAN_TYPE] = C.SPAN_TYPE_RERANK
@@ -417,17 +535,43 @@ class NoveumLlamaIndexEventHandler(BaseEventHandler):
         top_n = getattr(event, "top_n", None)
         if top_n is not None:
             attrs[C.ATTR_RERANK_TOP_N] = top_n
+        if self.capture_inputs:
+            query = extract_query_str(getattr(event, "query", None))
+            if query:
+                attrs[C.ATTR_RERANK_QUERY] = query
         nodes = getattr(event, "nodes", None)
         if nodes is not None:
             attrs[C.ATTR_RERANK_INPUT_NODE_COUNT] = len(nodes)
+            attrs[C.ATTR_RERANK_INPUT_SCORES] = extract_node_scores(nodes)
+            if self.capture_inputs:
+                attrs[C.ATTR_RERANK_INPUT_NODES] = serialize_nodes(nodes)
+
+    def _map_rerank_end(self, event: Any, attrs: dict[str, Any]) -> None:
+        """
+        Map the reranked result set.
+
+        An LLM-backed reranker (``LLMRerank`` and friends) runs its scoring
+        prompt through the dispatcher as a nested LLM span, so its reasoning is
+        captured there as ``llm.output`` rather than on this span — the rerank
+        events themselves carry only the node lists.
+        """
+        nodes = getattr(event, "nodes", None)
+        if nodes is None:
+            return
+        attrs[C.ATTR_RERANK_OUTPUT_NODE_COUNT] = len(nodes)
+        attrs[C.ATTR_RERANK_OUTPUT_SCORES] = extract_node_scores(nodes)
+        if self.capture_outputs:
+            attrs[C.ATTR_RERANK_OUTPUT_NODES] = serialize_nodes(nodes)
 
 
 def setup_llamaindex_tracing(
     client: Any = None,
     *,
-    capture_inputs: bool = False,
-    capture_outputs: bool = False,
-    capture_llm_messages: bool = False,
+    capture_inputs: bool = True,
+    capture_outputs: bool = True,
+    capture_llm_messages: bool = True,
+    capture_cost: bool = True,
+    capture_embedding_chunks: bool = False,
     trace_name_prefix: str = C.DEFAULT_TRACE_NAME_PREFIX,
     dispatcher: Any = None,
 ) -> NoveumLlamaIndexSpanHandler:
@@ -440,11 +584,21 @@ def setup_llamaindex_tracing(
 
     Args:
         client: Explicit Noveum client. Defaults to the globally initialised one.
-        capture_inputs: Capture query / retrieval query text (default off).
-        capture_outputs: Capture response text and retrieved node content
-            (default off).
-        capture_llm_messages: Capture full LLM prompt/response messages
-            (default off — the most sensitive payload).
+        capture_inputs: Capture query text, retrieval and rerank query text,
+            rerank input nodes, and agent tool arguments (default on).
+        capture_outputs: Capture response text, retrieved node content, query
+            source nodes and reranked output nodes (default on).
+        capture_llm_messages: Capture full LLM prompt/response messages, system
+            prompts and available tool schemas (default on).
+        capture_cost: Estimate LLM cost from the model and token counts
+            (default on).
+        capture_embedding_chunks: Capture the *text* being embedded (default
+            **off**). Indexing a corpus emits an embedding call per batch, so
+            turning this on copies the whole source corpus into the trace
+            store — useful when building evaluation datasets from a small
+            index, expensive on a large one. Counts, vector counts and vector
+            width are recorded either way; the embedding vectors themselves are
+            never attached.
         trace_name_prefix: Prefix used when an operation name cannot be derived.
         dispatcher: Dispatcher to register on. Defaults to the root dispatcher
             (``get_dispatcher()``).
@@ -479,6 +633,8 @@ def setup_llamaindex_tracing(
         capture_inputs=capture_inputs,
         capture_outputs=capture_outputs,
         capture_llm_messages=capture_llm_messages,
+        capture_cost=capture_cost,
+        capture_embedding_chunks=capture_embedding_chunks,
     )
     target = dispatcher if dispatcher is not None else get_dispatcher()
     target.add_span_handler(span_handler)

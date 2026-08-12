@@ -1,9 +1,17 @@
 """
 Utility helpers for the LlamaIndex integration.
 
+Framework-agnostic helpers (serialization, provider derivation, token usage,
+cost) live in :mod:`noveum_trace.integrations._common` and are re-exported here.
+What remains below is specific to LlamaIndex shapes: instrumentation span ids,
+``ChatMessage`` arrays, ``NodeWithScore`` lists and ``ToolMetadata``.
+
 All helpers are zero-impact: every public function absorbs exceptions internally
 and returns a sensible default so a crashing utility can never break the host
 application or the LlamaIndex query pipeline.
+
+Nothing here truncates. Retrieved node text and prompts routinely exceed any
+fixed budget, and a clipped node is not usable for evaluation or replay.
 """
 
 from __future__ import annotations
@@ -12,9 +20,37 @@ import logging
 import re
 from typing import Any, Optional
 
+from noveum_trace.integrations._common import (
+    derive_provider,
+    estimate_cost_safe,
+    extract_usage_tokens,
+    probe,
+    safe_serialize,
+    stringify,
+)
 from noveum_trace.integrations.llamaindex import constants as C
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "classify_operation",
+    "derive_provider",
+    "estimate_cost_safe",
+    "extract_model_name",
+    "extract_node_contents",
+    "extract_node_scores",
+    "extract_query_str",
+    "extract_response_text",
+    "extract_system_prompt",
+    "extract_token_usage",
+    "extract_tool_metadata",
+    "operation_from_span_id",
+    "safe_serialize",
+    "serialize_messages",
+    "serialize_nodes",
+    "stringify",
+    "vector_dimensions",
+]
 
 # ``id_`` values look like ``"RetrieverQueryEngine.query-<uuid4>"``; strip the
 # trailing UUID to recover a readable operation name.
@@ -22,16 +58,7 @@ _UUID_SUFFIX = re.compile(
     r"-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}" r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-_OPENAI_MODEL_PREFIXES = (
-    "gpt",
-    "o1",
-    "o3",
-    "o4",
-    "text-",
-    "ada",
-    "babbage",
-    "davinci",
-)
+_SYSTEM_ROLES = frozenset({"system", "developer"})
 
 
 def operation_from_span_id(id_: str) -> str:
@@ -60,59 +87,12 @@ def classify_operation(operation: str) -> str:
     return C.SPAN_TYPE_OTHER
 
 
-def derive_provider(model: Optional[str]) -> Optional[str]:
-    """Best-effort provider name from a model string."""
-    if not model or not isinstance(model, str):
-        return None
-    lowered = model.lower()
-    if any(lowered.startswith(prefix) for prefix in _OPENAI_MODEL_PREFIXES):
-        return "openai"
-    if lowered.startswith("claude"):
-        return "anthropic"
-    if lowered.startswith("gemini") or lowered.startswith("models/gemini"):
-        return "google"
-    if lowered.startswith(("mistral", "mixtral")):
-        return "mistral"
-    if "/" in lowered:
-        return lowered.split("/", 1)[0]
-    return None
-
-
-def truncate_text(text: Any, max_len: int = 8_192) -> str:
-    """Stringify *text* and truncate to *max_len* characters with an ellipsis."""
-    if not isinstance(text, str):
-        text = str(text)
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "…"
-
-
-def _get(source: Any, *keys: str) -> Any:
-    """Read *keys* from a dict or object, returning the first non-None value."""
-    for key in keys:
-        value = (
-            source.get(key) if isinstance(source, dict) else getattr(source, key, None)
-        )
-        if value is not None:
-            return value
-    return None
-
-
 def extract_model_name(model_dict: Any) -> Optional[str]:
     """Pull the model name out of an event's ``model_dict`` payload."""
     if not model_dict:
         return None
-    value = _get(model_dict, "model", "model_name", "model_id")
+    value = probe(model_dict, "model", "model_name", "model_id")
     return str(value) if value is not None else None
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def extract_token_usage(response: Any) -> dict[str, Optional[int]]:
@@ -121,44 +101,55 @@ def extract_token_usage(response: Any) -> dict[str, Optional[int]]:
 
     Token usage is not a first-class field on LlamaIndex responses; it lives on
     ``response.raw`` (provider-native, e.g. OpenAI ``usage``) or
-    ``response.additional_kwargs``. Probes both. Returns ``None`` values when a
-    count is unavailable and computes ``total`` when possible.
+    ``response.additional_kwargs``. Probes both, then normalises through the
+    shared extractor so cached and reasoning token breakdowns come through too.
     """
-    result: dict[str, Optional[int]] = {
-        "input_tokens": None,
-        "output_tokens": None,
-        "total_tokens": None,
-    }
     if response is None:
-        return result
+        return dict.fromkeys(
+            (
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "cached_input_tokens",
+                "cache_write_input_tokens",
+                "reasoning_tokens",
+            )
+        )
+    merged: dict[str, Optional[int]] = {}
     try:
+        raw = probe(response, "raw")
         sources = [
-            getattr(response, "additional_kwargs", None),
-            getattr(response, "raw", None),
-            _get(getattr(response, "raw", None) or {}, "usage"),
+            probe(response, "additional_kwargs"),
+            raw,
+            probe(raw, "usage") if raw is not None else None,
         ]
         for source in sources:
             if not source:
                 continue
-            if result["input_tokens"] is None:
-                result["input_tokens"] = _coerce_int(
-                    _get(source, "prompt_tokens", "input_tokens")
-                )
-            if result["output_tokens"] is None:
-                result["output_tokens"] = _coerce_int(
-                    _get(source, "completion_tokens", "output_tokens")
-                )
-            if result["total_tokens"] is None:
-                result["total_tokens"] = _coerce_int(_get(source, "total_tokens"))
+            for key, value in extract_usage_tokens(source).items():
+                if merged.get(key) is None and value is not None:
+                    merged[key] = value
+        input_tokens = merged.get("input_tokens")
+        output_tokens = merged.get("output_tokens")
         if (
-            result["total_tokens"] is None
-            and result["input_tokens"] is not None
-            and result["output_tokens"] is not None
+            merged.get("total_tokens") is None
+            and input_tokens is not None
+            and output_tokens is not None
         ):
-            result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+            merged["total_tokens"] = input_tokens + output_tokens
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("extract_token_usage failed: %s", exc)
-    return result
+    return {
+        key: merged.get(key)
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "reasoning_tokens",
+        )
+    }
 
 
 def extract_query_str(query: Any) -> Optional[str]:
@@ -167,8 +158,8 @@ def extract_query_str(query: Any) -> Optional[str]:
         return None
     if isinstance(query, str):
         return query
-    value = _get(query, "query_str")
-    return str(value) if value is not None else str(query)
+    value = probe(query, "query_str")
+    return str(value) if value is not None else stringify(query)
 
 
 def serialize_messages(messages: Any) -> Optional[list[dict[str, Any]]]:
@@ -178,18 +169,42 @@ def serialize_messages(messages: Any) -> Optional[list[dict[str, Any]]]:
     result: list[dict[str, Any]] = []
     try:
         for message in messages:
-            role = _get(message, "role")
-            content = _get(message, "content")
-            result.append(
-                {
-                    "role": str(getattr(role, "value", role)) if role else None,
-                    "content": None if content is None else str(content),
-                }
-            )
+            role = probe(message, "role")
+            content = probe(message, "content")
+            entry: dict[str, Any] = {
+                "role": str(getattr(role, "value", role)) if role else None,
+                "content": None if content is None else stringify(content),
+            }
+            tool_calls = probe(message, "additional_kwargs")
+            calls = probe(tool_calls, "tool_calls") if tool_calls else None
+            if calls:
+                entry["tool_calls"] = safe_serialize(calls)
+            result.append(entry)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("serialize_messages failed: %s", exc)
         return None
     return result or None
+
+
+def extract_system_prompt(messages: Any) -> Optional[str]:
+    """Join the content of every ``system`` / ``developer`` message."""
+    if not messages:
+        return None
+    try:
+        collected: list[str] = []
+        for message in messages:
+            role = probe(message, "role")
+            role_name = str(getattr(role, "value", role) or "").lower()
+            if role_name not in _SYSTEM_ROLES:
+                continue
+            content = probe(message, "content")
+            if content is not None:
+                collected.append(stringify(content))
+        joined = "\n\n".join(part for part in collected if part)
+        return joined or None
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("extract_system_prompt failed: %s", exc)
+        return None
 
 
 def extract_response_text(response: Any) -> Optional[str]:
@@ -201,18 +216,39 @@ def extract_response_text(response: Any) -> Optional[str]:
         if message is not None:
             content = getattr(message, "content", None)
             if content is not None:
-                return str(content)
+                return stringify(content)
         text = getattr(response, "text", None)
         if text is not None:
-            return str(text)
-        return str(response)
+            return stringify(text)
+        return stringify(response)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("extract_response_text failed: %s", exc)
         return None
 
 
+# ---------------------------------------------------------------------------
+# Nodes
+# ---------------------------------------------------------------------------
+
+
+def _node_text(node: Any) -> Optional[str]:
+    inner = getattr(node, "node", node)
+    getter = getattr(inner, "get_content", None)
+    try:
+        text = getter() if callable(getter) else getattr(inner, "text", None)
+    except Exception:  # pragma: no cover - defensive
+        text = getattr(inner, "text", None)
+    return None if text is None else stringify(text)
+
+
 def extract_node_scores(nodes: Any) -> list[Optional[float]]:
-    """Return the similarity scores of a list of ``NodeWithScore`` objects."""
+    """
+    Return the similarity scores of a list of ``NodeWithScore`` objects.
+
+    These are the retriever's own top-k scores — cosine similarity for most
+    vector stores, or the store's native distance metric. The list is ordered
+    best-match first, matching the order the nodes were returned in.
+    """
     scores: list[Optional[float]] = []
     if not nodes:
         return scores
@@ -225,18 +261,90 @@ def extract_node_scores(nodes: Any) -> list[Optional[float]]:
     return scores
 
 
-def extract_node_contents(nodes: Any, max_len: int = 2_048) -> list[str]:
-    """Return truncated text content of a list of ``NodeWithScore`` objects."""
+def serialize_nodes(nodes: Any) -> list[dict[str, Any]]:
+    """
+    Serialise ``NodeWithScore`` objects to ``{id, score, text, metadata}`` entries.
+
+    ``text`` is the node's full chunk content — the actual passage the retriever
+    returned and the synthesizer read, not a summary or a reference. Node
+    ``metadata`` (source file, page, custom tags) is carried alongside so a
+    retrieved chunk can be traced back to its document.
+    """
+    entries: list[dict[str, Any]] = []
+    if not nodes:
+        return entries
+    try:
+        for node in nodes:
+            inner = getattr(node, "node", node)
+            entry: dict[str, Any] = {}
+            node_id = probe(inner, "node_id", "id_", "id")
+            if node_id is not None:
+                entry["id"] = stringify(node_id)
+            score = getattr(node, "score", None)
+            if score is not None:
+                entry["score"] = float(score)
+            text = _node_text(node)
+            if text is not None:
+                entry["text"] = text
+            metadata = probe(inner, "metadata", "extra_info")
+            if metadata:
+                entry["metadata"] = safe_serialize(metadata)
+            entries.append(entry)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("serialize_nodes failed: %s", exc)
+    return entries
+
+
+def extract_node_contents(nodes: Any) -> list[str]:
+    """Return the full text content of a list of ``NodeWithScore`` objects."""
     contents: list[str] = []
     if not nodes:
         return contents
     try:
         for node in nodes:
-            inner = getattr(node, "node", node)
-            getter = getattr(inner, "get_content", None)
-            text = getter() if callable(getter) else getattr(inner, "text", None)
+            text = _node_text(node)
             if text is not None:
-                contents.append(truncate_text(text, max_len))
+                contents.append(text)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("extract_node_contents failed: %s", exc)
     return contents
+
+
+# ---------------------------------------------------------------------------
+# Tools / embeddings
+# ---------------------------------------------------------------------------
+
+
+def extract_tool_metadata(tool: Any) -> dict[str, Any]:
+    """Normalise a LlamaIndex ``ToolMetadata`` to ``{name, description}``."""
+    entry: dict[str, Any] = {}
+    if tool is None:
+        return entry
+    try:
+        name = probe(tool, "name")
+        if name is not None:
+            entry["name"] = stringify(name)
+        description = probe(tool, "description")
+        if description is not None:
+            entry["description"] = stringify(description)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("extract_tool_metadata failed: %s", exc)
+    return entry
+
+
+def vector_dimensions(embeddings: Any) -> Optional[int]:
+    """
+    Return the dimensionality of the first embedding vector, if determinable.
+
+    Only the width is recorded — the vectors themselves are never attached to a
+    span. They are large, and a float array is not something a trace viewer or
+    an evaluation can use.
+    """
+    if not embeddings:
+        return None
+    try:
+        first = embeddings[0]
+        return len(first) if hasattr(first, "__len__") else None
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("vector_dimensions failed: %s", exc)
+        return None

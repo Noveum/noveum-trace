@@ -186,12 +186,21 @@ observer also exposes `capture_text=True` (LLM/TTS text) and
 
 ### LlamaIndex — `setup_llamaindex_tracing(...)`
 
-Privacy-safe defaults — raw payloads are **off** by default: `capture_inputs=False`
-(query / retrieval query text), `capture_outputs=False` (response text and
-retrieved node content), `capture_llm_messages=False` (full LLM prompt/response
-messages). Non-capture default: `trace_name_prefix="llamaindex"`. Model name,
-token usage, node counts and similarity scores, embedding counts, and errors are
-always captured.
+All default `True`, matching the other capture-by-default integrations:
+`capture_inputs` (query / retrieval / rerank query text, rerank input nodes,
+agent tool arguments), `capture_outputs` (response text, retrieved node content,
+query source nodes, reranked output nodes), `capture_llm_messages` (full LLM
+prompt/response messages, system prompts, available tool schemas), and
+`capture_cost`. Non-capture default: `trace_name_prefix="llamaindex"`. Model
+name, token usage, node counts and similarity scores, configured `top_k`,
+embedding counts and vector width, and errors are always captured. Payloads are
+not truncated.
+
+The one exception is `capture_embedding_chunks=False` — the *text* being
+embedded. Indexing a corpus emits an embedding call per batch, so enabling it
+copies the whole source corpus into the trace store; useful for building
+evaluation datasets from a small index, expensive on a large one. Embedding
+vectors themselves are never attached under any setting.
 
 ### LangChain / LangGraph — `NoveumTraceCallbackHandler`
 

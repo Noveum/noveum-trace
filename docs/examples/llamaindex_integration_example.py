@@ -32,9 +32,10 @@ def main() -> None:
         api_key=os.environ.get("NOVEUM_API_KEY"),
     )
 
-    # Capture outputs is opt-in (privacy-safe defaults); enable it so the example
-    # traces include the answer text and retrieved node content.
-    setup_llamaindex_tracing(capture_outputs=True)
+    # Everything is captured by default — query text, retrieved node content and
+    # the synthesized answer. capture_embedding_chunks is the one opt-in: it adds
+    # the text being embedded, which on a large corpus is a lot of data.
+    setup_llamaindex_tracing()
 
     documents = [
         Document(text="Noveum provides AI tracing and observability for LLM apps."),
