@@ -156,8 +156,9 @@ might first look:
   output type, metadata.
 - **Available tools**: names on `agent.tools`; full schemas (with descriptions and
   JSON-Schema parameters) on `llm.available_tools` for Responses-API calls.
-  Chat-Completions `model_config` carries no tool list upstream, so
-  `generation` spans fall back to the enclosing agent's `agent.tools`.
+  Chat-Completions `model_config` carries no tool list upstream, so `generation`
+  spans carry no tool list of their own — read the tool names from the parent
+  `agent` span's `agent.tools`.
 - **System prompt**: `llm.system_prompt` — from the `system`/`developer` messages
   on generation spans, and from `response.instructions` on response spans.
 - **Reasoning / thinking**: `llm.reasoning_tokens` always; the reasoning text

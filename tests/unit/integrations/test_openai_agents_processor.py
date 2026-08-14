@@ -9,6 +9,7 @@ optional ``openai-agents`` dependency installed.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,6 +20,7 @@ _src = Path(__file__).parents[3] / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
+from noveum_trace.integrations._common import coerce_datetime  # noqa: E402
 from noveum_trace.integrations.openai_agents import (  # noqa: E402
     processor as processor_module,
 )
@@ -680,3 +682,46 @@ class TestParentResolution:
         assert proc._noveum_span_ids == {}
         assert proc._trace_span_ids == {}
         assert proc._spans == {}
+
+
+# ---------------------------------------------------------------------------
+# Timestamp coercion
+# ---------------------------------------------------------------------------
+
+
+class TestTimestampCoercion:
+    @pytest.mark.parametrize(
+        "value",
+        ["2026-08-03T12:00:00Z", "2026-08-03T12:00:00z", "2026-08-03T12:00:00+00:00"],
+    )
+    def test_utc_designator_forms_are_equivalent(self, value: str) -> None:
+        # ``datetime.fromisoformat`` only accepts a trailing ``Z`` on 3.11+, so
+        # without normalisation this silently returns None on 3.9/3.10.
+        parsed = coerce_datetime(value)
+        assert parsed == datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+
+    def test_unparseable_string_returns_none(self) -> None:
+        assert coerce_datetime("not-a-timestamp") is None
+        assert coerce_datetime("Z") is None
+
+    def test_z_timestamps_preserve_span_timing(self) -> None:
+        client = _make_client()
+        proc = NoveumTraceProcessor(client=client)
+        proc.on_trace_start(_oai_trace())
+
+        sd = SimpleNamespace(type="agent", name="A")
+        span = _oai_span(
+            "s1",
+            sd,
+            started_at="2026-08-03T12:00:00Z",
+            ended_at="2026-08-03T12:00:01Z",
+        )
+        proc.on_span_start(span)
+        noveum_span = proc._spans["s1"]
+        proc.on_span_end(span)
+
+        start_time = client._trace.create_span.call_args.kwargs["start_time"]
+        assert start_time == datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
+        noveum_span.finish.assert_called_once_with(
+            datetime(2026, 8, 3, 12, 0, 1, tzinfo=timezone.utc)
+        )

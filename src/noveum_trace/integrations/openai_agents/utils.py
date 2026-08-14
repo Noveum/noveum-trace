@@ -280,8 +280,9 @@ def extract_model_config(model_config: Any) -> dict[str, Any]:
     Pull sampling parameters and reasoning effort from a generation's config.
 
     ``model_config`` is ``ModelSettings.to_traceable_dict()`` plus ``base_url``;
-    it carries no tool list, so available tools are read from the enclosing
-    agent span (``agent.tools``) or from ``response.tools``.
+    it carries no tool list, so no tool attributes are emitted here. Tool names
+    live on the enclosing agent span (``agent.tools``) and full schemas on
+    response spans (``llm.available_tools``).
     """
     params: dict[str, Any] = {}
     if not model_config:
