@@ -339,10 +339,14 @@ def vector_dimensions(embeddings: Any) -> Optional[int]:
     Only the width is recorded — the vectors themselves are never attached to a
     span. They are large, and a float array is not something a trace viewer or
     an evaluation can use.
+
+    The emptiness check uses ``len()`` rather than truthiness so that a provider
+    returning a NumPy array does not raise "truth value of an array ... is
+    ambiguous" out of this helper.
     """
-    if not embeddings:
-        return None
     try:
+        if embeddings is None or len(embeddings) == 0:
+            return None
         first = embeddings[0]
         return len(first) if hasattr(first, "__len__") else None
     except Exception as exc:  # pragma: no cover - defensive

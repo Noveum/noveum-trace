@@ -24,10 +24,18 @@ Configuration Options
 ---------------------
 All options passed to ``setup_llamaindex_tracing``:
 
-  capture_inputs        — Capture query / retrieval query text (default: off)
-  capture_outputs       — Capture response text and retrieved node content
-                          (default: off)
-  capture_llm_messages  — Capture full LLM prompt/response messages (default: off)
+  capture_inputs        — Capture query / retrieval / rerank query text, rerank
+                          input nodes, agent tool arguments (default: on)
+  capture_outputs       — Capture LLM response text, query response text,
+                          retrieved node content, query source nodes and
+                          reranked output nodes (default: on)
+  capture_llm_messages  — Capture LLM prompt messages, system prompts and
+                          available tool schemas (default: on). LLM responses
+                          follow capture_outputs, not this flag.
+  capture_cost          — Estimate LLM cost from model and token counts
+                          (default: on)
+  capture_embedding_chunks
+                        — Capture the text being embedded (default: off)
   trace_name_prefix     — Prefix for unnamed operations (default: "llamaindex")
 """
 

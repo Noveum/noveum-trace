@@ -94,10 +94,13 @@ custom tags), which is how a retrieved chunk is traced back to its document.
 
 ### Retrieval scores and top-k
 
-`retrieval.scores` is the ordered list of top-k similarity scores, best match
-first — the distances for the closest hits. `retrieval.top_k` is the configured
-`similarity_top_k`, read off the retriever instance (the retrieval events
-themselves do not carry it).
+`retrieval.scores` is the list of per-node scores exactly as the retriever
+returned them, in the retriever's own order. What a score *means* — cosine
+similarity, inner product, an L2 distance, a fused rank — and whether higher or
+lower is better depends on the retriever and the underlying vector store, so the
+integration records the values verbatim rather than normalizing or re-sorting
+them. `retrieval.top_k` is the configured `similarity_top_k`, read off the
+retriever instance (the retrieval events themselves do not carry it).
 
 The **total number of vectors in the vector store** is not available: LlamaIndex's
 instrumentation reports per-call activity, not index statistics, and no event or
@@ -125,8 +128,8 @@ All options are accepted by `setup_llamaindex_tracing(...)`:
 | Option | Default | Captures |
 | --- | --- | --- |
 | `capture_inputs` | `True` | Query text, retrieval/rerank query text, rerank input nodes, agent tool arguments |
-| `capture_outputs` | `True` | Response text, retrieved node content, query source nodes, reranked output nodes |
-| `capture_llm_messages` | `True` | Full LLM prompt/response messages, system prompts, available tool schemas |
+| `capture_outputs` | `True` | LLM response text (`llm.output`), query response text, retrieved node content, query source nodes, reranked output nodes |
+| `capture_llm_messages` | `True` | LLM prompt messages (`llm.input`), system prompts, available tool schemas |
 | `capture_cost` | `True` | Estimated LLM cost from model + token counts |
 | `capture_embedding_chunks` | `False` | The text being embedded (see below) |
 | `client` | global | Explicit Noveum client instead of the initialized global |

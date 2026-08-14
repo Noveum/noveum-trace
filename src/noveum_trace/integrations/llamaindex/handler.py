@@ -586,10 +586,12 @@ def setup_llamaindex_tracing(
         client: Explicit Noveum client. Defaults to the globally initialised one.
         capture_inputs: Capture query text, retrieval and rerank query text,
             rerank input nodes, and agent tool arguments (default on).
-        capture_outputs: Capture response text, retrieved node content, query
-            source nodes and reranked output nodes (default on).
-        capture_llm_messages: Capture full LLM prompt/response messages, system
-            prompts and available tool schemas (default on).
+        capture_outputs: Capture LLM response text (``llm.output``), query
+            response text, retrieved node content, query source nodes and
+            reranked output nodes (default on).
+        capture_llm_messages: Capture LLM prompt messages (``llm.input``),
+            system prompts and available tool schemas (default on). LLM
+            *responses* are governed by ``capture_outputs``, not this flag.
         capture_cost: Estimate LLM cost from the model and token counts
             (default on).
         capture_embedding_chunks: Capture the *text* being embedded (default

@@ -242,7 +242,7 @@ class TestEventEnrichment:
         assert attrs["llm.input_tokens"] == 12
         assert attrs["llm.output_tokens"] == 7
         assert attrs["llm.total_tokens"] == 19
-        assert "llm.output" not in attrs  # capture_outputs is off by default
+        assert "llm.output" not in attrs  # capture_outputs=False for this handler
 
     def test_capture_outputs_and_messages(self) -> None:
         sh, eh, child = self._setup(capture_outputs=True, capture_llm_messages=True)
@@ -543,3 +543,37 @@ class TestRichCapture:
             instance=retriever,
         )
         assert span.noveum_span.attributes["retrieval.top_k"] == 7
+
+
+# ---------------------------------------------------------------------------
+# Vector dimensions
+# ---------------------------------------------------------------------------
+
+
+class _AmbiguousTruthiness(list):
+    """Stand-in for an array whose ``bool()`` raises, as NumPy's does."""
+
+    def __bool__(self) -> bool:
+        raise ValueError(
+            "The truth value of an array with more than one element is ambiguous"
+        )
+
+
+class TestVectorDimensions:
+    def test_list_of_vectors(self) -> None:
+        assert utils.vector_dimensions([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]) == 3
+
+    def test_missing_or_empty_input(self) -> None:
+        assert utils.vector_dimensions(None) is None
+        assert utils.vector_dimensions([]) is None
+
+    def test_ambiguous_truthiness_does_not_raise(self) -> None:
+        # The emptiness guard must not evaluate bool() on the container: a
+        # provider returning an array type would otherwise raise out of here.
+        embeddings = _AmbiguousTruthiness([[0.1, 0.2], [0.3, 0.4]])
+        assert utils.vector_dimensions(embeddings) == 2
+
+    def test_numpy_array_of_vectors(self) -> None:
+        np = pytest.importorskip("numpy")
+        assert utils.vector_dimensions(np.zeros((4, 8))) == 8
+        assert utils.vector_dimensions(np.array([])) is None

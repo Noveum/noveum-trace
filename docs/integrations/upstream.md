@@ -188,11 +188,12 @@ observer also exposes `capture_text=True` (LLM/TTS text) and
 
 All default `True`, matching the other capture-by-default integrations:
 `capture_inputs` (query / retrieval / rerank query text, rerank input nodes,
-agent tool arguments), `capture_outputs` (response text, retrieved node content,
-query source nodes, reranked output nodes), `capture_llm_messages` (full LLM
-prompt/response messages, system prompts, available tool schemas), and
+agent tool arguments), `capture_outputs` (LLM response text, query response text,
+retrieved node content, query source nodes, reranked output nodes),
+`capture_llm_messages` (LLM prompt messages, system prompts, available tool
+schemas — *not* LLM responses, which follow `capture_outputs`), and
 `capture_cost`. Non-capture default: `trace_name_prefix="llamaindex"`. Model
-name, token usage, node counts and similarity scores, configured `top_k`,
+name, token usage, node counts and retriever-reported scores, configured `top_k`,
 embedding counts and vector width, and errors are always captured. Payloads are
 not truncated.
 
