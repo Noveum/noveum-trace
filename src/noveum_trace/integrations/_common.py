@@ -161,6 +161,10 @@ def coerce_datetime(value: Any) -> Optional[datetime]:
     """
     Convert an ISO-8601 string (or epoch seconds) to a ``datetime``.
 
+    A trailing RFC 3339 ``Z`` is rewritten to ``+00:00`` because
+    ``datetime.fromisoformat`` only accepts the ``Z`` designator on Python 3.11+
+    and this package supports 3.9.
+
     Returns ``None`` when the value is missing or unparseable so callers can
     fall back to "now".
     """
@@ -169,8 +173,9 @@ def coerce_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
+        candidate = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
         try:
-            return datetime.fromisoformat(value)
+            return datetime.fromisoformat(candidate)
         except ValueError:
             return None
     if isinstance(value, (int, float)):

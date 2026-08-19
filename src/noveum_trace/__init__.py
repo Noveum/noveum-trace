@@ -488,6 +488,18 @@ except Exception:
     # LlamaIndex not installed, or unusable on this runtime (e.g. Python 3.9).
     # An optional integration must never break ``import noveum_trace``.
     pass
+try:
+    import agents  # noqa: F401
+
+    from noveum_trace.integrations.openai_agents import (
+        NoveumTraceProcessor,
+        setup_openai_agents_tracing,
+    )
+
+    _integration_exports.extend(["NoveumTraceProcessor", "setup_openai_agents_tracing"])
+except ImportError:
+    # OpenAI Agents SDK not installed
+    pass
 
 # Export public API
 __all__ = [
