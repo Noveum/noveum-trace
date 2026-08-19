@@ -70,3 +70,16 @@ try:
     __all__.extend(["NoveumCrewAIListener", "setup_crewai_tracing"])
 except ImportError:
     pass
+
+# OpenAI Agents SDK integration (requires Python 3.10+ and openai-agents)
+try:
+    import agents  # noqa: F401
+
+    from noveum_trace.integrations.openai_agents import (
+        NoveumTraceProcessor,
+        setup_openai_agents_tracing,
+    )
+
+    __all__.extend(["NoveumTraceProcessor", "setup_openai_agents_tracing"])
+except ImportError:
+    pass

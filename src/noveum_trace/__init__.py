@@ -475,6 +475,19 @@ except ImportError:
     # CrewAI not installed
     pass
 
+try:
+    import agents  # noqa: F401
+
+    from noveum_trace.integrations.openai_agents import (
+        NoveumTraceProcessor,
+        setup_openai_agents_tracing,
+    )
+
+    _integration_exports.extend(["NoveumTraceProcessor", "setup_openai_agents_tracing"])
+except ImportError:
+    # OpenAI Agents SDK not installed
+    pass
+
 # Export public API
 __all__ = [
     # Core functions

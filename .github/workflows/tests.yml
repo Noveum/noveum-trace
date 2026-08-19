@@ -33,6 +33,14 @@ jobs:
           pip install -e ".[dev]"
           pip install livekit livekit-agents
 
+      - name: Install OpenAI Agents SDK (Python 3.10+)
+        # openai-agents requires Python 3.10+. On 3.9 the processor's unit tests
+        # run against the module's fallback base-class stub; on 3.10+ we install
+        # the real package so the tests exercise the actual
+        # agents.tracing.TracingProcessor interface (catches upstream API drift).
+        if: matrix.python-version != '3.9'
+        run: pip install "openai-agents>=0.19.2"
+
       - name: Run unit tests with coverage
         run: |
           python -m pytest tests/unit/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
