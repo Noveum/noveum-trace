@@ -31,11 +31,13 @@ pool -- ``ThreadPoolExecutor(3).map(handler, q.iter_calls())``.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from noveum_trace.core.config import get_config
 from noveum_trace.utils.exceptions import ConfigurationError
@@ -53,6 +55,8 @@ _ACTIVE = frozenset({"in_call", "evaluating"})
 _POLL_SECONDS = 3.0
 _ACTIVE_POLL_SECONDS = 10.0
 _TIMEOUT = 10.0
+# Statuses no amount of polling will get past: bad key, or wrong endpoint.
+_PERMANENT = frozenset({401, 403, 404})
 
 
 class Call:
@@ -61,7 +65,9 @@ class Call:
     def __init__(self, queue: CallQueue, row: dict[str, Any], ready_at: float) -> None:
         self._queue = queue
         self.run_id: str = row["runId"]
-        self.dial_number: Optional[str] = row.get("dialNumber")
+        # iter_calls() rejects a ready row without a usable number, so this is
+        # always a real one by the time a caller sees it.
+        self.dial_number: str = row["dialNumber"]
         self.agent_variables: dict[str, Any] = row.get("agentVariables") or {}
         self.persona: dict[str, Any] = row.get("persona") or {}
         self.scenario: dict[str, Any] = row.get("scenario") or {}
@@ -141,6 +147,11 @@ class CallQueue:
                 "NovaSynth needs an API key — pass api_key= or set NOVEUM_API_KEY."
             )
         self.api_key = api_key
+        parts = urlsplit(base_url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ConfigurationError(
+                f"NovaSynth needs an http(s) endpoint with a host, got {base_url!r}."
+            )
         self.base_url = base_url.rstrip("/")
         self.batch_run_id = batch_run_id
         self.run_ids = list(run_ids)
@@ -153,6 +164,11 @@ class CallQueue:
         self._ready_at: dict[str, float] = {}
         self._calls: dict[str, Call] = {}  # handed to the caller
         self._done: set[str] = set()  # dialled or reported
+        self._unusable: set[str] = set()  # ready but with an undialable number
+        # iter_calls() and every pooled wait_until_finished() share one poll.
+        self._lock = threading.Lock()
+        self._last_poll = 0.0
+        self._rows: list[dict[str, Any]] = []
 
     def __enter__(self) -> CallQueue:
         return self
@@ -170,6 +186,18 @@ class CallQueue:
                 ready_at = self._ready_at.get(run_id)
                 if ready_at is None:
                     continue  # a row for a run outside this batch
+                number = row.get("dialNumber")
+                if not isinstance(number, str) or not number:
+                    # Never hand a caller's dialler a number it cannot dial.
+                    if run_id not in self._unusable:
+                        self._unusable.add(run_id)
+                        _log.warning(
+                            "novasynth: run %s is ready_to_dial with no usable "
+                            "dialNumber (%r) — skipped",
+                            run_id,
+                            number,
+                        )
+                    continue
                 call = Call(self, row, ready_at)
                 self._calls[run_id] = call
                 if call.seconds_remaining <= 0:
@@ -202,10 +230,21 @@ class CallQueue:
         self._report_failed(call, "abandoned", why, None)
 
     def _poll(self) -> list[dict[str, Any]]:
-        """One bulk GET for the whole batch.
+        """One bulk GET for the whole batch, shared by every caller.
 
         Not retried in-method: the next tick of the loop is the retry.
+
+        Serialised and rate-limited because iter_calls() and each pooled
+        wait_until_finished() all land here. Without that, they would issue
+        duplicate GETs for the same batch and a slower response could land
+        last and overwrite a newer terminal status, regressing a finished run.
         """
+        with self._lock:
+            if time.monotonic() - self._last_poll < _POLL_SECONDS:
+                return self._rows  # another caller just polled; reuse it
+            return self._poll_locked()
+
+    def _poll_locked(self) -> list[dict[str, Any]]:
         outstanding = [r for r in self.run_ids if self.statuses[r] not in TERMINAL]
         if not outstanding:
             return []
@@ -221,12 +260,21 @@ class CallQueue:
                 )
             if resp.status_code == 200:
                 rows = resp.json()
+            elif resp.status_code in _PERMANENT:
+                # Polling cannot fix credentials or a wrong endpoint, and the
+                # caller's loop would otherwise spin on it forever.
+                raise ConfigurationError(
+                    f"NovaSynth poll rejected with HTTP {resp.status_code} — "
+                    "check api_key and base_url."
+                )
             else:
                 _log.warning("novasynth poll: HTTP %d", resp.status_code)
+        except ConfigurationError:
+            raise
         except Exception as exc:
             _log.warning("novasynth poll failed: %s", exc)
         if not isinstance(rows, list):
-            return []
+            rows = []
         now = time.monotonic()
         for row in rows:
             run_id = row.get("runId")
@@ -240,6 +288,8 @@ class CallQueue:
             # An unrecognised status is stored as-is and is not terminal, so an
             # older SDK keeps polling a platform state it has never heard of.
             self.statuses[run_id] = status
+        self._last_poll = now
+        self._rows = rows
         return rows
 
     def _report_failed(

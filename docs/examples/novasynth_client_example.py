@@ -18,8 +18,11 @@ from noveum_trace.novasynth import Call, CallQueue
 noveum_trace.init(project="voice-qa", api_key="your-noveum-api-key")
 
 # Run ids come back from whatever created the batch (NovaEval CLI, dashboard,
-# or API). Keep them: they are how you reconcile the batch afterwards.
-RUN_IDS = ["run_a", "run_b", "run_c"]
+# or API). Keep them: they are how you reconcile the batch afterwards. The two
+# blocks below are separate batches — a batch that has already run is terminal,
+# so re-polling its ids would yield nothing.
+SEQUENTIAL_RUN_IDS = ["run_a", "run_b", "run_c"]
+CONCURRENT_RUN_IDS = ["run_d", "run_e", "run_f"]
 
 
 class DialFailed(Exception):
@@ -33,7 +36,7 @@ def place(to: str, variables: dict) -> str:
 
 # --- Sequential: one call at a time ----------------------------------------
 
-with CallQueue(RUN_IDS, batch_run_id="br_01JABCXYZ") as q:
+with CallQueue(SEQUENTIAL_RUN_IDS, batch_run_id="br_01JABCXYZ") as q:
     for call in q.iter_calls():
         # call.agent_variables is the agent-facing half of the profile only.
         # The persona's situational context never leaves the platform — if the
@@ -64,6 +67,9 @@ def handle(call: Call) -> None:
     call.wait_until_finished(provider_call_id=sid)
 
 
-with CallQueue(RUN_IDS) as q, ThreadPoolExecutor(3) as pool:
+with CallQueue(CONCURRENT_RUN_IDS) as q, ThreadPoolExecutor(3) as pool:
     list(pool.map(handle, q.iter_calls()))
     print(q.summary())
+
+# Releases the SDK client and its background batch processor.
+noveum_trace.shutdown()

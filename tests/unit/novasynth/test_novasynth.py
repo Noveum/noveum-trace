@@ -8,6 +8,7 @@ real sleeping — the tests assert on ``clock.sleeps`` rather than wall time.
 from __future__ import annotations
 
 import logging
+import threading
 
 import httpx
 import pytest
@@ -161,6 +162,14 @@ def test_missing_api_key_raises_rather_than_faking_a_batch():
         CallQueue(["a"], api_key="", base_url=BASE)
 
 
+@pytest.mark.parametrize("bad", ["", "   ", "api.noveum.ai/api", "https://", "ftp://x"])
+def test_unusable_base_url_raises_rather_than_looping(bad):
+    # An unusable URL would otherwise make every poll throw, be swallowed, and
+    # leave iter_calls() spinning forever.
+    with pytest.raises(ConfigurationError):
+        CallQueue(["a"], api_key="k", base_url=bad)
+
+
 def test_credentials_fall_back_to_sdk_config(monkeypatch):
     class _Cfg:
         api_key = "from-config"
@@ -240,6 +249,17 @@ def test_poll_backs_off_once_the_call_is_up(monkeypatch, clock):
     assert clock.sleeps == [10.0]
 
 
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_permanent_rejection_stops_the_loop(monkeypatch, clock, status):
+    # Polling cannot fix a bad key or a wrong endpoint, so the loop must fail
+    # loudly instead of spinning on it forever.
+    _patch(monkeypatch, get_resps=[_Resp(status)])
+    q = _queue(["a"])
+    with pytest.raises(ConfigurationError):
+        list(q.iter_calls())
+    assert len(_gets()) == 1  # it did not poll again
+
+
 def test_poll_failure_is_not_fatal(monkeypatch, clock):
     _patch(
         monkeypatch,
@@ -279,6 +299,24 @@ def test_seconds_remaining_uses_the_local_anchor_not_server_wall_time(
     assert call.seconds_remaining == 180.0
     clock.sleep(30)
     assert call.seconds_remaining == 150.0
+
+
+@pytest.mark.parametrize("number", [None, "", 918065481242, {"e164": "+91806"}])
+def test_ready_row_without_a_usable_number_is_never_handed_over(
+    monkeypatch, clock, logs, number
+):
+    # A ready row with a broken dialNumber must not reach the caller's dialler.
+    _patch(
+        monkeypatch,
+        get_resps=[
+            _Resp(200, [_ready("a", number=number)]),
+            _Resp(200, [_row("a", "expired")]),
+        ],
+    )
+    q = _queue(["a"])
+    assert list(q.iter_calls()) == []
+    assert "no usable" in logs.text
+    assert _posts() == []  # nothing to release — we never held a number
 
 
 def test_run_whose_window_closed_is_skipped_and_recorded(monkeypatch, clock, logs):
@@ -381,6 +419,34 @@ def test_a_dialled_run_is_not_abandoned_on_exit(monkeypatch, clock):
         for call in q.iter_calls():
             assert call.wait_until_finished(provider_call_id="CA1") == "completed"
     assert _posts() == []
+
+
+def test_concurrent_polls_are_shared_not_raced(monkeypatch, clock):
+    """iter_calls() and every pooled wait_until_finished() land in _poll().
+
+    Without one shared, rate-limited poll they each issue their own GET, and a
+    slower response landing last can overwrite a newer terminal status.
+    """
+    _patch(
+        monkeypatch,
+        get_resps=[
+            _Resp(200, [_row("a", "completed")]),  # fresh: terminal
+            _Resp(200, [_row("a", "in_call")]),  # stale: would regress it
+        ],
+    )
+    q = _queue(["a"])
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(q._poll())) for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(_gets()) == 1  # one GET for four callers, not four
+    assert q.statuses == {"a": "completed"}  # never regressed
+    assert q.summary() == {"completed": 1}
 
 
 def test_summary_accounts_for_every_run_in_the_batch(monkeypatch, clock):
