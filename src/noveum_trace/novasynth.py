@@ -261,11 +261,16 @@ class CallQueue:
             if resp.status_code == 200:
                 rows = resp.json()
             elif resp.status_code in _PERMANENT:
-                # Polling cannot fix credentials or a wrong endpoint, and the
-                # caller's loop would otherwise spin on it forever.
+                # Polling cannot fix any of these, and the caller's loop would
+                # otherwise spin on them forever.
+                hint = (
+                    "the route may not be deployed yet, or base_url is wrong"
+                    if resp.status_code == 404
+                    else "check api_key"
+                )
                 raise ConfigurationError(
-                    f"NovaSynth poll rejected with HTTP {resp.status_code} — "
-                    "check api_key and base_url."
+                    f"NovaSynth poll rejected with HTTP {resp.status_code} at "
+                    f"{self.base_url}/v1/novasynth/runs/bulk — {hint}."
                 )
             else:
                 _log.warning("novasynth poll: HTTP %d", resp.status_code)
