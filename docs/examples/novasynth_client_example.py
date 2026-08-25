@@ -1,75 +1,87 @@
-"""Client-initiated NovaSynth calls — your dialler calls us.
+"""Client-initiated NovaSynth calls — your outbound bot calls a Noveum number.
 
-In the normal flow NovaSynth dials your voice agent. Here it is reversed: your
-own dialler places the PSTN call and a Noveum-hosted synthetic persona answers.
-A session has to be parked in the LiveKit room before the call arrives (~35s),
-and one number maps to one room, so the platform decides when each run is
-dialable and this loop waits to be told.
+Fill in sections 1 and 2. Section 3 is the loop and needs no changes.
 
-Illustrative only until the platform ships /v1/novasynth/*. The behaviour it
-depends on is covered in tests/unit/novasynth/.
+How it works: each run id you were given is a (persona x scenario) test case.
+This script claims a run, waits for the platform to park a synthetic persona
+on one of your Noveum numbers, then hands that number to YOUR dialler. Your
+bot calls it, talks to the persona, and the platform records and scores the
+conversation. Repeat for every run id, CONCURRENCY at a time.
+
+Requirements:
+    pip install noveum-trace
 """
 
 from concurrent.futures import ThreadPoolExecutor
 
-import noveum_trace
 from noveum_trace.novasynth import Call, CallQueue
 
-noveum_trace.init(project="voice-qa", api_key="your-noveum-api-key")
+# --- 1. Your details --------------------------------------------------------
 
-# Run ids come back from whatever created the batch (NovaEval CLI, dashboard,
-# or API). Keep them: they are how you reconcile the batch afterwards. The two
-# blocks below are separate batches — a batch that has already run is terminal,
-# so re-polling its ids would yield nothing.
-SEQUENTIAL_RUN_IDS = ["run_a", "run_b", "run_c"]
-CONCURRENT_RUN_IDS = ["run_d", "run_e", "run_f"]
-
-
-class DialFailed(Exception):
-    """Whatever your telephony provider raises."""
-
-
-def place(to: str, variables: dict) -> str:
-    """Stand-in for your dialler. Returns the provider's call id."""
-    raise DialFailed("no trunk configured in this example")
+NOVEUM_API_KEY = "nv_..."  # or leave None and set the NOVEUM_API_KEY env var
+ORGANIZATION_SLUG = "your-org-slug"  # shown in the dashboard URL
+RUN_IDS = [
+    # Run ids from the inbound batch you created (dashboard -> batch -> run ids)
+    "run_id_1",
+    "run_id_2",
+]
+# How many calls to run at once. Must not exceed the number of Noveum phone
+# numbers provisioned for you (extra workers just wait for a free number).
+CONCURRENCY = 2
 
 
-# --- Sequential: one call at a time ----------------------------------------
-
-with CallQueue(SEQUENTIAL_RUN_IDS, batch_run_id="br_01JABCXYZ") as q:
-    for call in q.iter_calls():
-        # call.agent_variables is the agent-facing half of the profile only.
-        # The persona's situational context never leaves the platform — if the
-        # agent under test knew it, it would score itself far too well.
-        print(f"dial {call.dial_number} within {call.seconds_remaining:.0f}s")
-        try:
-            sid = place(to=call.dial_number, variables=call.agent_variables)
-        except DialFailed as exc:
-            # Frees the number now instead of at the end of the dial window.
-            call.report_failed(reason=str(exc), code="busy")
-            continue
-        print(call.run_id, "->", call.wait_until_finished(provider_call_id=sid))
-
-    print(q.summary())  # every run id in the batch, counted by last status
+# --- 2. Your dialler --------------------------------------------------------
 
 
-# --- Concurrent: feed the same generator to a pool -------------------------
-# Size the pool to your provisioned numbers (realistically 2-3) — the queue
-# yields runs only as the platform frees a number, so a larger pool just idles.
+def place_call(call: Call) -> None:
+    """Make your outbound bot dial ``call.dial_number``.
+
+    What you get:
+        call.dial_number        E.164 number to dial, e.g. "+918065481242"
+        call.profile            dict of this test's customer profile (name,
+                                phone, account details, situation...) — pass it
+                                to your bot the same way you would for a real
+                                customer
+        call.persona_name       for your logs
+        call.scenario_name      for your logs
+        call.seconds_remaining  dial before this hits 0 (window is ~5 min)
+
+    Rules:
+      * Dial within ``call.seconds_remaining``. Late calls are rejected and
+        the run is marked expired.
+      * Your bot must speak first. The persona answers and then waits for
+        your bot to open the conversation, like a real customer picking up.
+      * Return when the call has ended, or return right away — either is
+        fine, the loop waits for the platform to mark the run finished.
+      * Raise on a dial failure (busy, no route...). The run is skipped and
+        the number is released when its window closes.
+    """
+    raise NotImplementedError("dial call.dial_number with your bot here")
+
+
+# --- 3. The loop (no changes needed) ---------------------------------------
 
 
 def handle(call: Call) -> None:
+    print(
+        f"[{call.run_id}] dial {call.dial_number} "
+        f"({call.persona_name} / {call.scenario_name}, "
+        f"{call.seconds_remaining:.0f}s left)"
+    )
     try:
-        sid = place(to=call.dial_number, variables=call.agent_variables)
-    except DialFailed as exc:
-        call.report_failed(reason=str(exc), code="busy")
+        place_call(call)
+    except Exception as exc:  # noqa: BLE001 — a dial failure must not stop the batch
+        print(f"[{call.run_id}] dial failed: {exc}")
         return
-    call.wait_until_finished(provider_call_id=sid)
+    print(f"[{call.run_id}] finished: {call.wait_until_finished()}")
 
 
-with CallQueue(CONCURRENT_RUN_IDS) as q, ThreadPoolExecutor(3) as pool:
-    list(pool.map(handle, q.iter_calls()))
-    print(q.summary())
-
-# Releases the SDK client and its background batch processor.
-noveum_trace.shutdown()
+if __name__ == "__main__":
+    queue = CallQueue(
+        RUN_IDS,
+        api_key=NOVEUM_API_KEY,
+        organization_slug=ORGANIZATION_SLUG,
+    )
+    with ThreadPoolExecutor(CONCURRENCY) as pool:
+        list(pool.map(handle, queue.iter_calls()))
+    print("summary:", queue.summary())  # e.g. {'completed': 5, 'expired': 1}
