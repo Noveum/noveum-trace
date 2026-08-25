@@ -420,6 +420,34 @@ def test_transient_failures_are_not_fatal(monkeypatch, clock, logs):
     assert "bad JSON" in logs.text
 
 
+def test_wait_gives_up_after_max_wait_seconds(monkeypatch, clock):
+    # A run stuck in a non-terminal status must not poll forever.
+    _patch(
+        monkeypatch,
+        post_resps=[_view("a", "arming")],
+        get_resps=[_ready("a"), _view("a", "in_progress")],
+    )
+    q = _queue(["a"], max_wait_seconds=30.0)
+    call = next(q.iter_calls())
+    with pytest.raises(TimeoutError, match="max_wait_seconds"):
+        call.wait_until_finished()
+    assert clock.sleeps  # it did wait before giving up
+
+
+def test_server_retry_after_is_clamped(monkeypatch, clock):
+    # A bad retryAfterMs (an hour, say) must not park the loop.
+    _patch(
+        monkeypatch,
+        post_resps=[
+            dict(_waiting("no_number_available"), retryAfterMs=3_600_000),
+            _view("a", "arming"),
+        ],
+        get_resps=[_ready("a")],
+    )
+    assert [c.run_id for c in _queue(["a"]).iter_calls()] == ["a"]
+    assert clock.sleeps[0] == 60.0
+
+
 def test_network_error_is_not_fatal(monkeypatch, clock, logs):
     _patch(
         monkeypatch,

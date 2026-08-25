@@ -61,6 +61,8 @@ _ACTIVE = frozenset({"in_progress"})
 
 _POLL_SECONDS = 3.0
 _ACTIVE_POLL_SECONDS = 10.0
+# Ceiling on a server-sent retryAfterMs, so a bad value cannot park the loop.
+_MAX_RETRY_AFTER_SECONDS = 60.0
 _TIMEOUT = 10.0
 # Statuses no amount of polling will get past: bad key, or wrong endpoint.
 _PERMANENT = frozenset({401, 403, 404})
@@ -128,6 +130,10 @@ class CallQueue:
         api_key: Defaults to ``NOVEUM_API_KEY`` via the SDK config.
         base_url: Defaults to ``NOVEUM_ENDPOINT`` via the SDK config.
         organization_slug: Sent as ``?organizationSlug=`` when set.
+        max_wait_seconds: Ceiling on any one blocking wait — arming a run in
+            ``iter_calls()``, or a ``wait_until_finished()``. ``TimeoutError``
+            when exceeded. Default 1800 (30 minutes); raise it if your calls,
+            or your queue for a free number, legitimately run longer.
     """
 
     def __init__(
@@ -138,6 +144,7 @@ class CallQueue:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         organization_slug: Optional[str] = None,
+        max_wait_seconds: float = 1800.0,
     ) -> None:
         if api_key is None or base_url is None:
             config = get_config()
@@ -157,6 +164,7 @@ class CallQueue:
             )
         self.base_url = base_url.rstrip("/")
         self.batch_run_id = batch_run_id
+        self.max_wait_seconds = max_wait_seconds
         self.run_ids = list(run_ids)
         # Seeded with every run id up front, and never added to, so summary()
         # accounts for the whole batch even if a run is never reached.
@@ -204,12 +212,13 @@ class CallQueue:
         the run was reset to dormant -- so it is claimed again after the pause
         the platform asked for. Any other non-terminal status is polled.
         """
+        deadline = time.monotonic() + self.max_wait_seconds
         while True:
             view = self._claim(run_id)
             while view.get("status") not in (READY, _WAITING) and (
                 view.get("status") not in TERMINAL
             ):
-                time.sleep(self._retry_after(view))
+                self._pause(run_id, deadline, self._retry_after(view))
                 view = self._get(run_id)
             if view.get("status") != _WAITING:
                 return view
@@ -218,24 +227,38 @@ class CallQueue:
                 run_id,
                 view.get("reason") or "waiting",
             )
-            time.sleep(self._retry_after(view))
+            self._pause(run_id, deadline, self._retry_after(view))
 
     def _wait(self, run_id: str, until: frozenset[str]) -> dict[str, Any]:
         """Poll one run until its status is in ``until``; return the view."""
+        deadline = time.monotonic() + self.max_wait_seconds
         while True:
             view = self._get(run_id)
             status = view.get("status")
             if status in until:
                 return view
-            time.sleep(
+            self._pause(
+                run_id,
+                deadline,
                 _ACTIVE_POLL_SECONDS if status in _ACTIVE else self._retry_after(view),
             )
+
+    def _pause(self, run_id: str, deadline: float, seconds: float) -> None:
+        """Sleep, but never past ``deadline`` — a run stuck in a non-terminal
+        status (or a dead network) must not poll forever."""
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"NovaSynth run {run_id} still not done after "
+                f"{self.max_wait_seconds:.0f}s — pass a larger max_wait_seconds= "
+                "to CallQueue if this is legitimate."
+            )
+        time.sleep(min(seconds, deadline - time.monotonic()))
 
     @staticmethod
     def _retry_after(view: dict[str, Any]) -> float:
         retry_ms = view.get("retryAfterMs")
         if isinstance(retry_ms, (int, float)) and retry_ms > 0:
-            return retry_ms / 1000.0
+            return min(retry_ms / 1000.0, _MAX_RETRY_AFTER_SECONDS)
         return _POLL_SECONDS
 
     def _claim(self, run_id: str) -> dict[str, Any]:
@@ -260,9 +283,11 @@ class CallQueue:
         and an empty dict (no ``status``) is what a failed request returns.
         """
         url = f"{self.base_url}/v1/novasynth/inbound{path}"
-        try:
-            import httpx  # lazy, so the import stays monkeypatchable in tests
+        # Lazy import so tests can monkeypatch it; outside the try so a missing
+        # httpx raises instead of being swallowed and retried forever.
+        import httpx
 
+        try:
             with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
                 if method == "POST":
                     resp = client.post(

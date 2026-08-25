@@ -12,7 +12,7 @@ Requirements:
     pip install noveum-trace
 """
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from noveum_trace.novasynth import Call, CallQueue
 
@@ -83,5 +83,15 @@ if __name__ == "__main__":
         organization_slug=ORGANIZATION_SLUG,
     )
     with ThreadPoolExecutor(CONCURRENCY) as pool:
-        list(pool.map(handle, queue.iter_calls()))
+        in_flight = set()
+        for call in queue.iter_calls():
+            in_flight.add(pool.submit(handle, call))
+            if len(in_flight) == CONCURRENCY:
+                # Claim the next run only once a worker is free — a run claimed
+                # early burns its dial window waiting for a worker.
+                done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()  # surface errors handle() did not catch
+        for future in wait(in_flight).done:
+            future.result()
     print("summary:", queue.summary())  # e.g. {'completed': 5, 'expired': 1}
