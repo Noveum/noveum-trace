@@ -91,6 +91,7 @@ def to_otel_span_id(span_id: Optional[str]) -> Optional[str]:
 # Cost / ttft / tokens-per-second have no OTel standard and are intentionally omitted
 # (they remain available under their original llm.* keys).
 _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("gen_ai.system", ("llm.provider",)),
     ("gen_ai.request.model", ("llm.model",)),
     ("gen_ai.response.model", ("llm.response_model",)),
     ("gen_ai.provider.name", ("llm.provider",)),
@@ -104,6 +105,14 @@ _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("llm.output_tokens", "llm.completion_tokens", "llm.usage.output_tokens"),
     ),
     ("gen_ai.request.temperature", ("llm.temperature", "llm.input.temperature")),
+    (
+        "gen_ai.request.presence_penalty",
+        ("llm.presence_penalty", "llm.input.presence_penalty"),
+    ),
+    (
+        "gen_ai.request.frequency_penalty",
+        ("llm.frequency_penalty", "llm.input.frequency_penalty"),
+    ),
     ("gen_ai.request.max_tokens", ("llm.max_tokens",)),
     ("gen_ai.request.top_p", ("llm.top_p",)),
     ("gen_ai.input.messages", ("llm.input.messages", "llm.chat_ctx", "llm.input")),
@@ -135,6 +144,20 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
         found, value = _first_present(attrs, "llm.finish_reason")
         if found:
             result["gen_ai.response.finish_reasons"] = (
+                value if isinstance(value, list) else [value]
+            )
+
+    # stop_sequences is an array in OTel; wrap a scalar source value.
+    if "gen_ai.request.stop_sequences" not in attrs:
+        found, value = _first_present(
+            attrs,
+            "llm.stop",
+            "llm.stop_sequences",
+            "llm.input.stop",
+            "llm.input.stop_sequences",
+        )
+        if found:
+            result["gen_ai.request.stop_sequences"] = (
                 value if isinstance(value, list) else [value]
             )
 

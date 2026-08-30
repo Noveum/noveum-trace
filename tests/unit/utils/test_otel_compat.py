@@ -43,6 +43,7 @@ class TestGenAiCrosswalk:
             "llm.temperature": 0.7,
         }
         result = otel_compat.derive_gen_ai_attributes(attrs)
+        assert result["gen_ai.system"] == "anthropic"
         assert result["gen_ai.request.model"] == "claude-sonnet-4"
         assert result["gen_ai.provider.name"] == "anthropic"
         assert result["gen_ai.operation.name"] == "chat"
@@ -54,6 +55,40 @@ class TestGenAiCrosswalk:
         attrs = {"llm.model": "m"}
         otel_compat.derive_gen_ai_attributes(attrs)
         assert "gen_ai.request.model" not in attrs
+
+    def test_system_and_penalties_mapping(self):
+        attrs = {
+            "llm.provider": "openai",
+            "llm.presence_penalty": 0.5,
+            "llm.frequency_penalty": 0.2,
+        }
+        result = otel_compat.derive_gen_ai_attributes(attrs)
+        assert result["gen_ai.system"] == "openai"
+        assert result["gen_ai.request.presence_penalty"] == 0.5
+        assert result["gen_ai.request.frequency_penalty"] == 0.2
+
+    def test_penalties_input_prefixed_fallback(self):
+        attrs = {
+            "llm.input.presence_penalty": 0.3,
+            "llm.input.frequency_penalty": 0.1,
+        }
+        result = otel_compat.derive_gen_ai_attributes(attrs)
+        assert result["gen_ai.request.presence_penalty"] == 0.3
+        assert result["gen_ai.request.frequency_penalty"] == 0.1
+
+    def test_stop_sequences_wrapped_in_array(self):
+        result = otel_compat.derive_gen_ai_attributes({"llm.stop": "STOP"})
+        assert result["gen_ai.request.stop_sequences"] == ["STOP"]
+
+    def test_stop_sequences_list_passthrough(self):
+        result = otel_compat.derive_gen_ai_attributes(
+            {"llm.stop_sequences": ["\n\n", "END"]}
+        )
+        assert result["gen_ai.request.stop_sequences"] == ["\n\n", "END"]
+
+    def test_stop_sequences_input_prefixed(self):
+        result = otel_compat.derive_gen_ai_attributes({"llm.input.stop": ["END"]})
+        assert result["gen_ai.request.stop_sequences"] == ["END"]
 
     def test_finish_reason_wrapped_in_array(self):
         result = otel_compat.derive_gen_ai_attributes({"llm.finish_reason": "stop"})
@@ -74,14 +109,24 @@ class TestGenAiCrosswalk:
             "llm.model": None,
             "llm.top_p": {},
             "llm.finish_reason": "<Mock object>",
+            "llm.stop": None,
         }
         result = otel_compat.derive_gen_ai_attributes(attrs)
         assert result == {}
 
     def test_does_not_overwrite_existing_gen_ai_key(self):
-        attrs = {"llm.model": "legacy", "gen_ai.request.model": "explicit"}
+        attrs = {
+            "llm.model": "legacy",
+            "gen_ai.request.model": "explicit",
+            "llm.provider": "legacy_provider",
+            "gen_ai.system": "explicit_system",
+            "llm.stop": "legacy_stop",
+            "gen_ai.request.stop_sequences": ["explicit_stop"],
+        }
         result = otel_compat.derive_gen_ai_attributes(attrs)
         assert "gen_ai.request.model" not in result
+        assert "gen_ai.system" not in result
+        assert "gen_ai.request.stop_sequences" not in result
 
 
 class TestSpanKind:
