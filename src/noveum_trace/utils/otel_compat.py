@@ -128,8 +128,16 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
     """
     Derive ``gen_ai.*`` attributes from existing ``llm.*`` attributes.
 
-    Returns only the new keys to merge in; never overwrites a ``gen_ai.*`` key that is
-    already present. Does not mutate ``attrs``.
+    Maps legacy and internal LLM attributes to standard OpenTelemetry GenAI
+    semantic conventions (v1.28.0+). Ensures finish reasons and stop sequences
+    are properly normalized to arrays.
+
+    Args:
+        attrs: Dictionary of span attributes.
+
+    Returns:
+        Dictionary of derived ``gen_ai.*`` attributes to merge in. Never
+        overwrites existing ``gen_ai.*`` keys and does not mutate the input dictionary.
     """
     result: dict[str, Any] = {}
     for target, sources in _GEN_AI_CROSSWALK:
