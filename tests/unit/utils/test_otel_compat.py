@@ -85,6 +85,22 @@ class TestGenAiCrosswalk:
         assert result["gen_ai.system"] == "gemini"
         assert result["gen_ai.provider.name"] == "google"
 
+    def test_system_aws_and_bedrock_normalize_to_aws_bedrock(self) -> None:
+        """Verify that provider 'aws' and 'bedrock' normalize to 'aws.bedrock' for gen_ai.system."""
+        res_aws = otel_compat.derive_gen_ai_attributes({"llm.provider": "aws"})
+        assert res_aws["gen_ai.system"] == "aws.bedrock"
+        assert res_aws["gen_ai.provider.name"] == "aws"
+
+        res_bedrock = otel_compat.derive_gen_ai_attributes({"llm.provider": "bedrock"})
+        assert res_bedrock["gen_ai.system"] == "aws.bedrock"
+        assert res_bedrock["gen_ai.provider.name"] == "bedrock"
+
+    def test_system_azure_normalizes_to_azure_openai(self) -> None:
+        """Verify that provider 'azure' normalizes to 'azure.openai' for gen_ai.system."""
+        result = otel_compat.derive_gen_ai_attributes({"llm.provider": "azure"})
+        assert result["gen_ai.system"] == "azure.openai"
+        assert result["gen_ai.provider.name"] == "azure"
+
     def test_penalties_input_prefixed_fallback(self) -> None:
         """Verify fallback to llm.input.* keys for penalties."""
         attrs = {

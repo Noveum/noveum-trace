@@ -127,6 +127,7 @@ _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
 _SYSTEM_NORMALIZATION: dict[str, str] = {
     "google": "gemini",
     "bedrock": "aws.bedrock",
+    "aws": "aws.bedrock",
     "azure": "azure.openai",
 }
 
