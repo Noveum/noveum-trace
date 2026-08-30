@@ -123,6 +123,13 @@ _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gen_ai.response.id", ("llm.request_id",)),
 )
 
+# Map provider aliases to standard OpenTelemetry gen_ai.system identifiers.
+_SYSTEM_NORMALIZATION: dict[str, str] = {
+    "google": "gemini",
+    "bedrock": "aws.bedrock",
+    "azure": "azure.openai",
+}
+
 
 def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
     """
@@ -130,7 +137,8 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
 
     Maps legacy and internal LLM attributes to standard OpenTelemetry GenAI
     semantic conventions (v1.28.0+). Ensures finish reasons and stop sequences
-    are properly normalized to arrays.
+    are properly normalized to arrays, and normalizes known provider names to
+    standard OTel system identifiers (e.g. ``google`` -> ``gemini``).
 
     Args:
         attrs: Dictionary of span attributes.
@@ -145,6 +153,8 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
             continue
         found, value = _first_present(attrs, *sources)
         if found:
+            if target == "gen_ai.system" and isinstance(value, str):
+                value = _SYSTEM_NORMALIZATION.get(value.lower(), value)
             result[target] = value
 
     # finish_reasons is an array in OTel; wrap a scalar source value.

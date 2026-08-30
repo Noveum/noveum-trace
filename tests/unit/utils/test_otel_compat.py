@@ -79,6 +79,12 @@ class TestGenAiCrosswalk:
         assert result["gen_ai.request.presence_penalty"] == 0.5
         assert result["gen_ai.request.frequency_penalty"] == 0.2
 
+    def test_system_google_normalizes_to_gemini(self) -> None:
+        """Verify that provider 'google' is normalized to 'gemini' for gen_ai.system."""
+        result = otel_compat.derive_gen_ai_attributes({"llm.provider": "google"})
+        assert result["gen_ai.system"] == "gemini"
+        assert result["gen_ai.provider.name"] == "google"
+
     def test_penalties_input_prefixed_fallback(self) -> None:
         """Verify fallback to llm.input.* keys for penalties."""
         attrs = {
