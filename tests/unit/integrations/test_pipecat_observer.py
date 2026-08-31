@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -112,6 +113,20 @@ def test_observer_init_defaults() -> None:
     assert obs._using_external_turn_tracking is False
 
 
+def test_llm_marker_frame_is_registered_when_capability_exists(monkeypatch) -> None:
+    from pipecat.frames import frames as ff
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    class LLMMarkerFrame:
+        pass
+
+    monkeypatch.setattr(ff, "LLMMarkerFrame", LLMMarkerFrame, raising=False)
+    obs = NoveumTraceObserver(record_audio=False)
+
+    assert obs._frame_handlers[LLMMarkerFrame] == obs._handle_llm_marker
+
+
 def test_get_client_uses_noveum_get_client() -> None:
     pytest.importorskip("pipecat.observers.base_observer")
 
@@ -208,6 +223,65 @@ async def test_finish_conversation_resets_llm_text_buffer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_conversation_uploads_supported_ok_status() -> None:
+    from noveum_trace.core.span import SpanStatus
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    trace.attributes = {}
+    obs._trace = trace
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation(cancelled=True)
+
+    assert trace.attributes["pipecat_span_status"] == "cancelled"
+    trace.set_status.assert_called_once_with(SpanStatus.OK)
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_rollup_uses_canonical_llm_usage() -> None:
+    from types import SimpleNamespace
+
+    from pipecat.frames.frames import MetricsFrame
+    from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = MagicMock()
+    trace.attributes = {}
+    obs._trace = trace
+    source = SimpleNamespace(name="llm")
+    obs.register_processor_role(source, "llm")
+    span = MagicMock()
+    span.attributes = {}
+    span.is_finished.return_value = False
+    obs._llm_operations.start(source, span=span, processor_name="llm")
+
+    for prompt, completion in ((10, 20), (10, 20), (12, 22)):
+        item = LLMUsageMetricsData(
+            processor="llm",
+            model="gpt-4o-mini",
+            value=LLMTokenUsage(
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=prompt + completion,
+            ),
+        )
+        await obs._handle_metrics(
+            SimpleNamespace(frame=MetricsFrame(data=[item]), source=source)
+        )
+
+    with patch.object(obs, "_get_client", return_value=None):
+        await obs._finish_conversation()
+
+    summary = trace.set_attributes.call_args.args[0]
+    assert summary["conversation.total_input_tokens"] == 12
+    assert summary["conversation.total_output_tokens"] == 22
+
+
+@pytest.mark.asyncio
 async def test_create_child_span_returns_none_without_trace() -> None:
     pytest.importorskip("pipecat.observers.base_observer")
 
@@ -238,6 +312,50 @@ async def test_on_push_frame_dedup_same_frame_id(pipecat_frames) -> None:
     else:
         # No id on frame — handler may run twice
         assert obs._frame_handlers[pipecat_frames.LLMTextFrame].call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_llm_input_waits_for_final_llm_destination(pipecat_frames) -> None:
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    intermediary = SimpleNamespace(name="PromptFilter")
+    llm_a = SimpleNamespace(name="OpenAILLMService")
+    llm_b = SimpleNamespace(name="OpenAILLMService")
+    obs.register_processor_role(llm_a, "llm")
+    obs.register_processor_role(llm_b, "llm")
+
+    frame_a = pipecat_frames.LLMMessagesUpdateFrame(
+        messages=[{"role": "user", "content": "for-a"}]
+    )
+    await obs.on_push_frame(
+        SimpleNamespace(frame=frame_a, source=object(), destination=intermediary)
+    )
+
+    assert obs._pending_llm_context == {}
+    assert obs._llm_operations.pending_input_for(llm_a) is None
+
+    await obs.on_push_frame(
+        SimpleNamespace(frame=frame_a, source=intermediary, destination=llm_a)
+    )
+    # Seeing the same route again is idempotent.
+    await obs.on_push_frame(
+        SimpleNamespace(frame=frame_a, source=intermediary, destination=llm_a)
+    )
+
+    frame_b = pipecat_frames.LLMMessagesUpdateFrame(
+        messages=[{"role": "user", "content": "for-b"}]
+    )
+    await obs.on_push_frame(
+        SimpleNamespace(frame=frame_b, source=object(), destination=llm_b)
+    )
+
+    pending_a = obs._llm_operations.pending_input_for(llm_a)
+    pending_b = obs._llm_operations.pending_input_for(llm_b)
+    assert pending_a is not None and "for-a" in pending_a["messages"]
+    assert pending_a is not None and "for-b" not in pending_a["messages"]
+    assert pending_b is not None and "for-b" in pending_b["messages"]
+    assert pending_b is not None and "for-a" not in pending_b["messages"]
 
 
 @pytest.mark.asyncio
@@ -520,6 +638,104 @@ async def test_attach_to_task_registers_on_pipeline_finished() -> None:
     assert (
         "on_pipeline_finished" in registered
     ), "attach_to_task should register an on_pipeline_finished handler"
+
+
+@pytest.mark.asyncio
+async def test_on_pipeline_finished_drains_proxy_queue_before_finalizing() -> None:
+    """Queued metrics/frames are handled before conversation state is settled."""
+    pytest.importorskip("pipecat.observers.base_observer")
+    pytest.importorskip("pipecat.frames.frames")
+
+    from pipecat.frames.frames import EndFrame
+
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    events: list[str] = []
+    registered: dict[str, object] = {}
+
+    class FakeQueue:
+        async def join(self) -> None:
+            events.append("drain")
+
+    proxy = SimpleNamespace(observer=obs, queue=FakeQueue())
+
+    class FakeTask:
+        turn_tracking_observer = None
+        _user_bot_latency_observer = None
+        _observer = SimpleNamespace(_proxies={obs: proxy})
+
+        def event_handler(self, event_name: str):
+            def decorator(fn):
+                registered[event_name] = fn
+                return fn
+
+            return decorator
+
+    async def mock_finish(cancelled: bool = False) -> None:
+        events.append("finish")
+
+    obs._finish_conversation = mock_finish  # type: ignore[method-assign]
+    task = FakeTask()
+    await obs.attach_to_task(task)
+
+    handler = registered["on_pipeline_finished"]
+    await handler(task, EndFrame())  # type: ignore[operator]
+
+    assert events == ["drain", "finish"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_queue_drain_is_bounded_when_join_never_completes() -> None:
+    """A stuck/crashed observer proxy cannot block pipeline finalization forever."""
+    pytest.importorskip("pipecat.observers.base_observer")
+
+    from noveum_trace.integrations.pipecat import pipecat_observer
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    join_started = asyncio.Event()
+
+    class StuckQueue:
+        async def join(self) -> None:
+            join_started.set()
+            await asyncio.Event().wait()
+
+    proxy = SimpleNamespace(observer=obs, queue=StuckQueue())
+    task = SimpleNamespace(_observer=SimpleNamespace(_proxies={obs: proxy}))
+
+    with patch.object(pipecat_observer, "_OBSERVER_PROXY_DRAIN_TIMEOUT_SECS", 0.001):
+        await obs._await_task_observer_proxy_queue(task)
+
+    assert join_started.is_set()
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_is_single_flight() -> None:
+    """Proxy and safety terminal paths cannot run teardown concurrently."""
+    from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
+
+    obs = NoveumTraceObserver(record_audio=False)
+    obs._trace = object()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def finish_once(cancelled: bool = False) -> None:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        obs._trace = None
+
+    obs._finish_conversation_once = finish_once  # type: ignore[method-assign]
+    first = asyncio.create_task(obs._finish_conversation())
+    await started.wait()
+    second = asyncio.create_task(obs._finish_conversation(cancelled=True))
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio

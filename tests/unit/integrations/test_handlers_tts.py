@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -56,16 +57,22 @@ async def test_tts_text_and_stopped(ff) -> None:
     tts_span.trace_id = "t"
     tts_span.span_id = "s"
     obs._active_tts_span = tts_span
-    obs._tts_source_processor = MagicMock()
+    source = SimpleNamespace(name="tts")
+    obs._tts_source_processor = source
 
     await obs._handle_tts_text(
-        MagicMock(frame=ff.TTSTextFrame(text="hi", aggregated_by="sentence"))
+        SimpleNamespace(
+            frame=ff.TTSTextFrame(text="hi", aggregated_by="sentence"),
+            source=source,
+        )
     )
     with patch(
         "noveum_trace.integrations.pipecat._handlers_tts.upload_audio_frames",
         return_value=True,
     ):
-        await obs._handle_tts_stopped(MagicMock())
+        await obs._handle_tts_stopped(
+            SimpleNamespace(frame=ff.TTSStoppedFrame(), source=source)
+        )
 
     assert tts_span.attributes.get("tts.input_text") == "hi"
     tts_span.finish.assert_called_once()
@@ -80,3 +87,44 @@ async def test_tts_audio_ignores_wrong_source(ff) -> None:
     frame = ff.TTSAudioRawFrame(audio=b"\x00\x00", sample_rate=16000, num_channels=1)
     await obs._handle_tts_audio(MagicMock(frame=frame, source=other))
     assert obs._tts_audio_buffer == []
+
+
+@pytest.mark.asyncio
+async def test_late_stop_for_old_context_does_not_finish_new_tts(ff) -> None:
+    obs = _obs()
+    source = SimpleNamespace(name="tts")
+    span = MagicMock()
+    span.attributes = {}
+    span.is_finished.return_value = False
+    obs._active_tts_span = span
+    obs._tts_source_processor = source
+    obs._tts_context_id = "new-context"
+
+    await obs._handle_tts_stopped(
+        SimpleNamespace(
+            frame=ff.TTSStoppedFrame(context_id="old-context"), source=source
+        )
+    )
+
+    assert obs._active_tts_span is span
+    span.finish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_late_contextless_stop_uses_frame_generation(ff) -> None:
+    obs = _obs()
+    source = SimpleNamespace(name="tts")
+    span = MagicMock()
+    span.attributes = {}
+    span.is_finished.return_value = False
+    obs._active_tts_span = span
+    obs._tts_source_processor = source
+    obs._tts_context_id = None
+    obs._tts_start_frame_id = 200
+    old_stop = ff.TTSStoppedFrame()
+    old_stop.id = 100
+
+    await obs._handle_tts_stopped(SimpleNamespace(frame=old_stop, source=source))
+
+    assert obs._active_tts_span is span
+    span.finish.assert_not_called()

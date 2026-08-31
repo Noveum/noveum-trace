@@ -39,7 +39,8 @@ Trace cleanup runs on ``EndFrame`` / ``CancelFrame`` via two complementary paths
 1. **Safety net (primary):** ``attach_to_task`` registers a ``on_pipeline_finished``
    event handler on the ``PipelineTask``. This fires inline in the main pipeline
    coroutine — before ``_cancel_tasks()`` kills the ``TaskObserver`` proxy tasks —
-   so ``_finish_conversation`` is guaranteed to run regardless of proxy queue depth.
+   and gives this observer's proxy queue a bounded opportunity to drain before
+   ``_finish_conversation`` settles metrics and exports the trace.
 
 2. **Proxy path (secondary):** ``on_push_frame`` still handles ``EndFrame`` /
    ``CancelFrame`` as before. ``_finish_conversation`` is idempotent (no-op when
@@ -50,7 +51,8 @@ Background: Pipecat's ``TaskObserver`` delivers ``FramePushed`` events to each
 observer via a per-observer ``asyncio.Queue`` consumed by a dedicated asyncio task.
 When ``task.cancel()`` races with a backlogged proxy queue, ``_cancel_tasks()`` can
 kill the proxy task before it drains to the terminal-frame notification, causing the
-trace to be silently lost. The ``on_pipeline_finished`` handler bypasses this queue.
+trace to be silently lost. The ``on_pipeline_finished`` handler waits briefly for
+queued observer work, then performs cleanup itself if the proxy path did not.
 
 Internal structure
 ------------------
@@ -74,10 +76,15 @@ from collections import deque
 from collections.abc import Iterator
 from typing import Any, Optional
 
+from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.pipecat._handlers_llm import _LLMHandlersMixin
 from noveum_trace.integrations.pipecat._handlers_metrics import _MetricsHandlerMixin
 from noveum_trace.integrations.pipecat._handlers_stt import _STTHandlersMixin
 from noveum_trace.integrations.pipecat._handlers_tts import _TTSHandlersMixin
+from noveum_trace.integrations.pipecat._processor_registry import (
+    PROCESSOR_ROLE_LLM,
+    ProcessorRegistry,
+)
 from noveum_trace.integrations.pipecat._turn_manager import _TurnManagerMixin
 from noveum_trace.integrations.pipecat.pipecat_constants import (
     DEFAULT_TURN_END_TIMEOUT_SECS,
@@ -86,6 +93,8 @@ from noveum_trace.integrations.pipecat.pipecat_constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+_OBSERVER_PROXY_DRAIN_TIMEOUT_SECS = 5.0
 
 try:
     from pipecat.observers.base_observer import BaseObserver
@@ -162,6 +171,7 @@ class NoveumTraceObserver(
         # Conversation-level state                                            #
         # ------------------------------------------------------------------ #
         self._trace: Any = None
+        self._conversation_finish_lock = asyncio.Lock()
 
         # Turn state
         self._current_turn_span: Any = None
@@ -170,6 +180,18 @@ class NoveumTraceObserver(
         # MetricsFrame with TurnMetricsData can arrive before _current_turn_span exists;
         # merge here and flush onto the next turn span in _start_new_turn.
         self._pending_turn_eou_metrics: dict[str, Any] = {}
+
+        # Exact processor identity and per-processor LLM invocation state.  These
+        # registries are the production source of truth; the scalar LLM fields below
+        # remain only as temporary compatibility aliases for older direct-handler
+        # users and tests.
+        from noveum_trace.integrations.pipecat._llm_operation_registry import (
+            LLMOperationRegistry,
+        )
+
+        self._processor_registry = ProcessorRegistry()
+        self._llm_operations = LLMOperationRegistry()
+        self._metric_fingerprints: dict[str, set[str]] = {}
 
         # Active operation spans
         self._active_llm_span: Any = None
@@ -182,15 +204,9 @@ class NoveumTraceObserver(
         # span 2 open); filtered out of span 2's llm.function_calls to avoid double-counting.
         self._pre_span_function_call_ids: set[str] = set()
 
-        # Backrefs to the most-recently-closed LLM/TTS span.
-        #
-        # Pipecat emits MetricsFrame AFTER LLMFullResponseEndFrame / TTSStoppedFrame,
-        # so by the time token counts and character counts arrive the active span is
-        # already None.  _last_llm_span is also used by _handle_function_call_start to
-        # write function-call data to span 1 when the frame arrives after it has closed.
-        # Both refs are set when the respective span closes and cleared when the next
-        # span of the same type opens.
-        self._last_llm_span: Any = None  # backref to most-recently-closed LLM span
+        # Compatibility aliases. LLM production routing uses _llm_operations;
+        # the TTS recent span remains the single-operation late-metric target.
+        self._last_llm_span: Any = None
         self._last_tts_span: Any = None  # backref to most-recently-closed TTS span
 
         # Text buffers
@@ -200,6 +216,11 @@ class NoveumTraceObserver(
 
         # LLM context stash (filled by LLMContextFrame, flushed on LLMFullResponseStartFrame)
         self._pending_llm_context: dict[str, Any] = {}
+        # Source-less context/control frames are broadcast defaults. Each exact LLM
+        # processor consumes each generation once; one processor must not steal the
+        # defaults from another processor in a fan-out pipeline.
+        self._global_llm_context_generation: int = 0
+        self._global_llm_context_consumed: dict[int, int] = {}
 
         # LLM thought accumulation (flattened onto the LLM span as attribute lists)
         self._llm_thought_buffer: list[str] = []
@@ -214,6 +235,9 @@ class NoveumTraceObserver(
         # when they come from this exact processor so that downstream resamplers /
         # aggregators that re-emit TTSAudioRawFrame with new IDs are ignored.
         self._tts_source_processor: Any = None
+        self._last_tts_source_processor: Any = None
+        self._tts_context_id: Optional[str] = None
+        self._tts_start_frame_id: Optional[int] = None
 
         # Set of tasks we have registered the on_pipeline_finished safety-net on.
         # Used as a dedup guard so repeated attach_to_task() calls on the same
@@ -239,6 +263,8 @@ class NoveumTraceObserver(
         # Source processor that first sent UserAudioRawFrame; used to filter
         # re-emitted frames from downstream processors (same logic as TTS).
         self._stt_source_processor: Any = None
+        self._stt_metric_processor: Any = None
+        self._stt_start_frame_id: Optional[int] = None
         # Monotonic time at VADUserStartedSpeaking (STT path) for latency attrs
         self._vad_speech_start_time: Optional[float] = None
         # Pairs of interim text + confidence per utterance (JSON on final span)
@@ -269,6 +295,14 @@ class NoveumTraceObserver(
         # Frame deduplication (mirrors TurnTrackingObserver's own guard)
         self._processed_frame_ids: set[int] = set()
         self._frame_id_history: deque[int] = deque(maxlen=MAX_FRAME_DEDUP_HISTORY)
+        # LLM input/control frames are observed at every processor hop. They must be
+        # handled once per final LLM destination, rather than once globally at the
+        # first intermediate processor that forwards them.
+        self._processed_llm_input_routes: set[tuple[int, int]] = set()
+        self._llm_input_route_history: deque[tuple[int, int]] = deque(
+            maxlen=MAX_FRAME_DEDUP_HISTORY
+        )
+        self._llm_input_frame_types: set[type] = set()
 
         # ------------------------------------------------------------------ #
         # Frame dispatch table                                                #
@@ -297,6 +331,71 @@ class NoveumTraceObserver(
     # ---------------------------------------------------------------------- #
     # External observer wiring (public API)                                  #
     # ---------------------------------------------------------------------- #
+
+    async def _await_task_observer_proxy_queue(self, task: Any) -> None:
+        """Give this observer's Pipecat proxy queue a bounded chance to drain.
+
+        Pipecat 0.0.108 and 1.x currently keep the per-observer queues on the
+        task's private ``_observer._proxies`` mapping.  Since those are private
+        compatibility surfaces, every lookup is capability-guarded and missing
+        or changed internals simply skip the drain.
+        """
+        task_observer = getattr(task, "_observer", None)
+        proxies = getattr(task_observer, "_proxies", None)
+        if proxies is None:
+            logger.debug(
+                "TaskObserver proxy mapping unavailable; skipping observer queue drain"
+            )
+            return
+
+        proxy = None
+        get_proxy = getattr(proxies, "get", None)
+        if callable(get_proxy):
+            try:
+                proxy = get_proxy(self)
+            except Exception as e:
+                logger.debug("Could not look up observer proxy directly: %s", e)
+
+        # The supported versions key the mapping by observer identity.  Retain
+        # a guarded value scan for compatible proxy containers that expose the
+        # observer only on the proxy record.
+        if proxy is None:
+            values = getattr(proxies, "values", None)
+            if callable(values):
+                try:
+                    proxy = next(
+                        (
+                            candidate
+                            for candidate in values()
+                            if getattr(candidate, "observer", None) is self
+                        ),
+                        None,
+                    )
+                except Exception as e:
+                    logger.debug("Could not inspect TaskObserver proxies: %s", e)
+
+        queue = getattr(proxy, "queue", None)
+        join = getattr(queue, "join", None)
+        if not callable(join):
+            logger.debug(
+                "Observer proxy queue unavailable; skipping observer queue drain"
+            )
+            return
+
+        try:
+            await asyncio.wait_for(join(), timeout=_OBSERVER_PROXY_DRAIN_TIMEOUT_SECS)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Timed out after %.1fs draining the Pipecat observer proxy queue; "
+                "continuing bounded conversation finalization",
+                _OBSERVER_PROXY_DRAIN_TIMEOUT_SECS,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not drain the Pipecat observer proxy queue; "
+                "continuing conversation finalization: %s",
+                e,
+            )
 
     async def attach_to_task(self, task: Any) -> None:
         """
@@ -361,10 +460,11 @@ class NoveumTraceObserver(
                         )
                         logger.debug(
                             "on_pipeline_finished fired (frame=%s, cancelled=%s) — "
-                            "ensuring trace cleanup via safety net",
+                            "draining queued observer work before trace cleanup",
                             type(frame).__name__,
                             is_cancel,
                         )
+                        await observer_ref._await_task_observer_proxy_queue(task_ref)
                         await observer_ref._finish_conversation(cancelled=is_cancel)
 
                     self._registered_pipeline_tasks.add(task)
@@ -386,6 +486,15 @@ class NoveumTraceObserver(
         # Auto-detect AudioBufferProcessor for full-conversation recording
         if self._record_audio:
             await self._attach_audio_buffer_from_pipeline(task)
+
+        pipeline = getattr(task, "_pipeline", None) or getattr(task, "pipeline", None)
+        if pipeline is not None:
+            for processor in self._iter_nested_processors(pipeline):
+                self._processor_registry.register(processor)
+
+    def register_processor_role(self, processor: Any, role: str) -> None:
+        """Explicitly classify a custom metrics-capable Pipecat processor."""
+        self._processor_registry.set_explicit_role(processor, role)
 
     def _iter_nested_processors(self, node: Any) -> Iterator[Any]:
         """Depth-first walk of Pipecat compound processors (Pipeline inside Pipeline)."""
@@ -571,6 +680,12 @@ class NoveumTraceObserver(
                 if cls is not None:
                     self._frame_handlers[cls] = handler
 
+            def _reg_llm_input(name: str, handler: Any) -> None:
+                cls = getattr(_ff, name, None)
+                if cls is not None:
+                    self._frame_handlers[cls] = handler
+                    self._llm_input_frame_types.add(cls)
+
             # ---------------------------------------------------------------- #
             # Core pipeline lifecycle                                           #
             # ---------------------------------------------------------------- #
@@ -593,7 +708,7 @@ class NoveumTraceObserver(
             # ---------------------------------------------------------------- #
             # LLM — context stash (precedes LLMFullResponseStartFrame)         #
             # ---------------------------------------------------------------- #
-            _reg("LLMContextFrame", self._handle_llm_context)
+            _reg_llm_input("LLMContextFrame", self._handle_llm_context)
             # OpenAILLMContextFrame lives in openai_llm_context, not frames.py
             try:
                 from pipecat.processors.aggregators.openai_llm_context import (
@@ -601,15 +716,16 @@ class NoveumTraceObserver(
                 )
 
                 self._frame_handlers[_OAILLMFrame] = self._handle_llm_context
+                self._llm_input_frame_types.add(_OAILLMFrame)
             except ImportError:
                 pass
 
             # Legacy / explicit message + tool frames (Path B — no LLMContextFrame)
-            _reg("LLMMessagesFrame", self._handle_llm_messages_replace)
-            _reg("LLMMessagesUpdateFrame", self._handle_llm_messages_replace)
-            _reg("LLMMessagesAppendFrame", self._handle_llm_messages_append)
-            _reg("LLMSetToolsFrame", self._handle_llm_set_tools)
-            _reg("LLMSetToolChoiceFrame", self._handle_llm_set_tool_choice)
+            _reg_llm_input("LLMMessagesFrame", self._handle_llm_messages_replace)
+            _reg_llm_input("LLMMessagesUpdateFrame", self._handle_llm_messages_replace)
+            _reg_llm_input("LLMMessagesAppendFrame", self._handle_llm_messages_append)
+            _reg_llm_input("LLMSetToolsFrame", self._handle_llm_set_tools)
+            _reg_llm_input("LLMSetToolChoiceFrame", self._handle_llm_set_tool_choice)
             _reg("LLMContextSummaryRequestFrame", self._handle_llm_summary_request)
 
             # ---------------------------------------------------------------- #
@@ -617,6 +733,8 @@ class NoveumTraceObserver(
             # ---------------------------------------------------------------- #
             _reg("LLMFullResponseStartFrame", self._handle_llm_response_start)
             _reg("LLMTextFrame", self._handle_llm_text)
+            # Pipecat 1.x sideband completion markers.  Absent on 0.0.108.
+            _reg("LLMMarkerFrame", self._handle_llm_marker)
             _reg("LLMFullResponseEndFrame", self._handle_llm_response_end)
 
             # Vision subclasses — route to same LLM handlers (fixes silent drop)
@@ -757,6 +875,34 @@ class NoveumTraceObserver(
                         return
 
             fid = getattr(frame, "id", None) if frame is not None else None
+            if frame is not None and type(frame) in self._llm_input_frame_types:
+                destination = getattr(data, "destination", None)
+                if destination is None:
+                    return
+                destination_record = self._processor_registry.register(destination)
+                if not destination_record.has_role(PROCESSOR_ROLE_LLM):
+                    # This is an intermediate hop. The same frame will be observed
+                    # again when it is pushed into its actual LLM destination.
+                    return
+
+                if fid is not None:
+                    route_key = (fid, id(destination))
+                    if route_key in self._processed_llm_input_routes:
+                        return
+                    self._processed_llm_input_routes.add(route_key)
+                    self._llm_input_route_history.append(route_key)
+                    if len(self._processed_llm_input_routes) > len(
+                        self._llm_input_route_history
+                    ):
+                        self._processed_llm_input_routes = set(
+                            self._llm_input_route_history
+                        )
+
+                handler = self._frame_handlers.get(type(frame))
+                if handler:
+                    await handler(data)
+                return
+
             if fid is not None and fid in self._processed_frame_ids:
                 logger.debug(
                     "Dedup: dropping duplicate frame id=%s type=%s",
@@ -850,11 +996,33 @@ class NoveumTraceObserver(
             logger.warning("Failed to create span '%s': %s", name, e, exc_info=True)
             return None
 
+    def _finish_managed_span(self, span: Any) -> None:
+        """Finish a child through Trace when it owns the span.
+
+        This keeps ``active_spans`` and native ``error_count`` accurate. Direct
+        spans used by compatibility callers and tests retain the safe fallback.
+        """
+        trace = self._trace
+        active_spans = getattr(trace, "active_spans", None)
+        span_id = getattr(span, "span_id", None)
+        if isinstance(active_spans, dict) and span_id in active_spans:
+            trace.finish_span(span_id)
+            return
+        if getattr(span, "is_finished", lambda: False)() is not True:
+            span.finish()
+
     # ---------------------------------------------------------------------- #
     # Conversation finish                                                     #
     # ---------------------------------------------------------------------- #
 
     async def _finish_conversation(self, cancelled: bool = False) -> None:
+        """Run conversation teardown once when terminal paths race."""
+        async with self._conversation_finish_lock:
+            if self._trace is None:
+                return
+            await self._finish_conversation_once(cancelled=cancelled)
+
+    async def _finish_conversation_once(self, cancelled: bool = False) -> None:
         """
         End all active spans, finish the trace, and flush the client.
 
@@ -874,11 +1042,6 @@ class NoveumTraceObserver(
 
         await self._cancel_turn_end_timer()
 
-        # Discard any partial thought accumulated so far
-        self._llm_thought_buffer.clear()
-        self._llm_thoughts_list.clear()
-        self._llm_thought_signatures_list.clear()
-
         # Close any in-flight STT span
         if self._active_stt_span and not self._active_stt_span.is_finished():
             self._active_stt_span.attributes["pipecat_span_status"] = (
@@ -892,16 +1055,28 @@ class NoveumTraceObserver(
         self._stt_first_text_latency_recorded = False
         self._stt_audio_buffer.clear()
 
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
-            if not span.is_finished():
-                span.attributes["pipecat_span_status"] = (
-                    "cancelled" if cancelled else "ok"
-                )
-                span.finish()
+        for operation in list(self._llm_operations.active_operations):
+            self._finalize_llm_operation(
+                operation,
+                complete=False,
+                termination_reason=(
+                    "conversation_cancelled" if cancelled else "conversation_ended"
+                ),
+                terminal_status="cancelled" if cancelled else "incomplete",
+            )
+        self._finalize_tts_operation(
+            complete=False,
+            termination_reason=(
+                "conversation_cancelled" if cancelled else "conversation_ended"
+            ),
+            terminal_status="cancelled" if cancelled else "incomplete",
+        )
+        self._llm_operations.settle_all()
         self._active_llm_span = None
         self._active_tts_span = None
         self._last_llm_span = None
         self._last_tts_span = None
+        self._last_tts_source_processor = None
 
         self._pending_function_calls.clear()
         self._function_call_results.clear()
@@ -919,18 +1094,37 @@ class NoveumTraceObserver(
         await self._await_audio_buffer_pending_handlers()
         await self._upload_full_conversation_audio()
 
-        # Annotate trace with conversation summary
+        # Annotate trace with conversation summary. Token/cost totals are derived
+        # from one canonical usage snapshot per settled LLM operation.
         summary: dict[str, Any] = {}
-        if self._metrics_accumulator.get("total_input_tokens"):
-            summary["conversation.total_input_tokens"] = self._metrics_accumulator[
-                "total_input_tokens"
-            ]
-        if self._metrics_accumulator.get("total_output_tokens"):
-            summary["conversation.total_output_tokens"] = self._metrics_accumulator[
-                "total_output_tokens"
-            ]
-        if self._metrics_accumulator.get("total_cost"):
-            summary["conversation.total_cost"] = self._metrics_accumulator["total_cost"]
+        usage_totals = self._llm_operations.sum_metric_fields(
+            "llm_usage", ("prompt_tokens", "completion_tokens")
+        )
+        total_input_tokens = int(usage_totals["prompt_tokens"])
+        total_output_tokens = int(usage_totals["completion_tokens"])
+        if total_input_tokens:
+            summary["conversation.total_input_tokens"] = total_input_tokens
+        if total_output_tokens:
+            summary["conversation.total_output_tokens"] = total_output_tokens
+        total_cost = 0.0
+        from noveum_trace.integrations.pipecat.pipecat_utils import calculate_llm_cost
+
+        for accounting in self._llm_operations.ledger:
+            usage = accounting.metric("llm_usage")
+            if (
+                usage is None
+                or not isinstance(usage.value, dict)
+                or not accounting.model
+            ):
+                continue
+            cost = calculate_llm_cost(
+                accounting.model,
+                int(usage.value.get("prompt_tokens", 0) or 0),
+                int(usage.value.get("completion_tokens", 0) or 0),
+            )
+            total_cost += float(cost.get("total", 0.0) or 0.0)
+        if total_cost:
+            summary["conversation.total_cost"] = total_cost
         if self._metrics_accumulator.get("turn_count"):
             summary["conversation.turn_count"] = self._metrics_accumulator["turn_count"]
         if self._transcription_buffer:
@@ -941,9 +1135,11 @@ class NoveumTraceObserver(
         if summary:
             self._trace.set_attributes(summary)
 
-        self._trace.attributes["pipecat_span_status"] = (
-            "cancelled" if cancelled else "ok"
-        )
+        if self._trace.attributes.get("pipecat_span_status") != "error":
+            self._trace.attributes["pipecat_span_status"] = (
+                "cancelled" if cancelled else "ok"
+            )
+            self._trace.set_status(SpanStatus.OK)
 
         trace = self._trace
         self._trace = None
@@ -977,7 +1173,18 @@ class NoveumTraceObserver(
         self._current_turn_number = 0
         self._processed_frame_ids.clear()
         self._frame_id_history.clear()
+        self._processed_llm_input_routes.clear()
+        self._llm_input_route_history.clear()
         self._pending_llm_context.clear()
+        self._global_llm_context_generation = 0
+        self._global_llm_context_consumed.clear()
+        self._llm_operations.clear()
+        self._processor_registry.clear()
+        self._metric_fingerprints.clear()
+        self._stt_metric_processor = None
+        self._tts_context_id = None
+        self._stt_start_frame_id = None
+        self._tts_start_frame_id = None
         # Reset stored ABP so a new PipelineTask can attach the correct processor.
         self._audio_buffer_processor = None
         self._abp_is_recording = False

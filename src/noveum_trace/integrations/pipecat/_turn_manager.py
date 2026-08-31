@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from noveum_trace.core.span import SpanEvent
+from noveum_trace.core.span import SpanEvent, SpanStatus
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
 from noveum_trace.integrations.pipecat.pipecat_constants import (
     MAX_TEXT_BUFFER_LENGTH,
@@ -174,18 +174,36 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         """``ErrorFrame``: propagate error status to active spans and trace."""
         frame = data.frame
         error_msg = str(getattr(frame, "error", "Unknown error"))
+        source = getattr(data, "source", None)
 
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
-            span.attributes["pipecat_span_status"] = "error"
-            span.attributes["pipecat_span_status_message"] = error_msg
+        llm_operation = self._resolve_llm_operation(data, include_metrics_pending=True)
+        if llm_operation is not None:
+            llm_operation.error = {"message": error_msg}
+            if llm_operation.phase == "metrics_pending":
+                llm_operation.terminal_status = "error"
+            llm_operation.span.attributes["pipecat_span_status"] = "error"
+            llm_operation.span.attributes["pipecat_span_status_message"] = error_msg
+            self._mark_span_native_error(llm_operation.span, error_msg)
+
+        tts_span = None
+        if source is not None and source is self._tts_source_processor:
+            tts_span = self._active_tts_span
+        elif source is not None and source is self._last_tts_source_processor:
+            tts_span = self._last_tts_span
+        elif source is None:
+            tts_span = self._active_tts_span
+        if tts_span is not None:
+            tts_span.attributes["pipecat_span_status"] = "error"
+            tts_span.attributes["pipecat_span_status_message"] = error_msg
+            self._mark_span_native_error(tts_span, error_msg)
 
         if self._current_turn_span:
-
             self._current_turn_span.attributes["pipecat_span_status"] = "error"
 
             self._current_turn_span.attributes["pipecat_span_status_message"] = (
                 error_msg
             )
+            self._mark_span_native_error(self._current_turn_span, error_msg)
             try:
                 self._current_turn_span.events.append(
                     SpanEvent(
@@ -198,10 +216,28 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
                 pass
 
         if self._trace:
-
             self._trace.attributes["pipecat_span_status"] = "error"
 
             self._trace.attributes["pipecat_span_status_message"] = error_msg
+            self._trace.set_status(SpanStatus.ERROR, error_msg)
+
+    def _mark_span_native_error(self, span: Any, message: str) -> None:
+        """Set native error state even when a late error follows logical finish."""
+        was_error = getattr(span, "status", None) == SpanStatus.ERROR
+        is_finished = getattr(span, "is_finished", lambda: False)() is True
+        if is_finished:
+            # Span.set_status intentionally ignores finished spans. Metrics-pending
+            # operations are still mutable until trace export, so upgrade directly.
+            span.status = SpanStatus.ERROR
+            span.status_message = message
+            if (
+                not was_error
+                and self._trace is not None
+                and isinstance(getattr(self._trace, "error_count", None), int)
+            ):
+                self._trace.error_count += 1
+        elif hasattr(span, "set_status"):
+            span.set_status(SpanStatus.ERROR, message)
 
     # ---------------------------------------------------------------------- #
     # Session / mute event handlers                                          #
@@ -401,7 +437,6 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
             await self._end_current_turn(was_interrupted=False)
 
         if turn_number is not None:
-
             self._current_turn_number = turn_number
         else:
             self._current_turn_number += 1
@@ -484,43 +519,42 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
             )
 
         if self._transcription_buffer:
-
             user_input = " ".join(self._transcription_buffer)
             if len(user_input) > MAX_TEXT_BUFFER_LENGTH:
                 user_input = user_input[:MAX_TEXT_BUFFER_LENGTH]
             span.attributes["turn.user_input"] = user_input
 
-        span.attributes["pipecat_span_status"] = "ok"
-        span.finish()
+        if span.attributes.get("pipecat_span_status") != "error":
+            span.attributes["pipecat_span_status"] = "ok"
+        else:
+            self._mark_span_native_error(
+                span,
+                str(
+                    span.attributes.get("pipecat_span_status_message", "Pipecat error")
+                ),
+            )
+        self._finish_managed_span(span)
 
         logger.debug("Ended turn %s", self._current_turn_number)
 
     async def _handle_interruption_internal(
-        self, interrupted_by_user: bool = True  # noqa: ARG002
+        self,
+        interrupted_by_user: bool = True,  # noqa: ARG002
     ) -> None:
-        """Cancel active LLM/TTS/STT spans and buffers; mark turn as interrupted."""
-        # Discard any partial thought accumulated so far
-        self._llm_thought_buffer.clear()
-        self._llm_thoughts_list.clear()
-        self._llm_thought_signatures_list.clear()
+        """Finalize partial LLM/TTS output and mark the turn interrupted."""
+        for operation in list(self._llm_operations.active_operations):
+            self._finalize_llm_operation(
+                operation,
+                complete=False,
+                termination_reason="user_interruption",
+                terminal_status="cancelled",
+            )
 
-        if self._active_llm_span:
-            llm_span = self._active_llm_span
-            llm_span.attributes["pipecat_span_status"] = "cancelled"
-            llm_span.finish()
-            self._active_llm_span = None
-            # Backref — the LLM API may still bill tokens for an interrupted call,
-            # so allow MetricsFrame to reach this span.
-            self._last_llm_span = llm_span
-
-        if self._active_tts_span:
-            tts_span = self._active_tts_span
-            tts_span.attributes["pipecat_span_status"] = "cancelled"
-            tts_span.finish()
-            self._active_tts_span = None
-            self._tts_source_processor = None
-            # Backref — same reasoning as above for TTS character billing.
-            self._last_tts_span = tts_span
+        self._finalize_tts_operation(
+            complete=False,
+            termination_reason="user_interruption",
+            terminal_status="cancelled",
+        )
 
         # STT span and audio buffer are intentionally left untouched here.
         # Interruptions are triggered by the user starting to speak, so there is
@@ -529,12 +563,10 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         # _handle_vad_stt_start / _handle_transcription own the STT lifecycle.
 
         if self._current_turn_span:
-
             self._current_turn_span.attributes["turn.was_interrupted"] = True
 
+        # Legacy compatibility buffers are not operation state.
         self._llm_text_buffer.clear()
-        self._tts_text_buffer.clear()
-        self._tts_audio_buffer.clear()
         self._pending_function_calls.clear()
         self._function_call_results.clear()
 
@@ -556,7 +588,6 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
     async def _deferred_turn_end(self) -> None:
         """Sleep for the configured timeout, then close the turn if still open."""
         try:
-
             await asyncio.sleep(self._turn_end_timeout_secs)
 
             if self._current_turn_span is not None and not self._is_bot_speaking:

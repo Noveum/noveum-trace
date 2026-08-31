@@ -15,9 +15,8 @@ Handles:
   - LLMThoughtTextFrame                      — accumulate thought text chunks
   - LLMThoughtEndFrame                       — append completed thought to llm.thoughts list
   - FunctionCallsStartedFrame                — debug log (no span / no event)
-  - FunctionCallInProgressFrame              — stash call dict in _pending_function_calls
-  - FunctionCallResultFrame                  — move to _function_call_results list
-  - FunctionCallCancelFrame                  — move to _function_call_results with cancelled=True
+  - FunctionCallInProgressFrame              — attach call to its owning LLM operation
+  - FunctionCallResultFrame / CancelFrame    — attach terminal tool state to its owner
   - LLMContextSummaryResultFrame             — write summary to turn/trace
 
 Thought blocks and function calls are stored as flat attribute lists on the
@@ -31,9 +30,16 @@ pipecat.llm span rather than as child spans:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
+from noveum_trace.core.span import SpanStatus
+from noveum_trace.integrations.pipecat._llm_operation_registry import (
+    LLMOperationAlreadyActiveError,
+    LLMOperationRecord,
+)
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
+from noveum_trace.integrations.pipecat._processor_registry import PROCESSOR_ROLE_LLM
 from noveum_trace.integrations.pipecat.pipecat_constants import (
     MAX_TEXT_BUFFER_LENGTH,
     SPAN_LLM,
@@ -70,24 +76,86 @@ _LLM_SETTINGS_MAP: tuple[tuple[str, str], ...] = (
 class _LLMHandlersMixin(_PipecatObserverMixinBase):
     """Handler methods for LLM response, thought, function-call, and summarization frames."""
 
-    # State attributes declared in NoveumTraceObserver.__init__:
-    #   _trace, _capture_text, _capture_function_calls,
-    #   _llm_text_buffer, _active_llm_span, _current_turn_span,
-    #   _pending_function_calls, _function_call_results,
-    #   _using_external_turn_tracking, _pending_llm_context,
-    #   _llm_thought_buffer, _llm_thoughts_list, _llm_thought_signatures_list
+    # Per-invocation content and correlation live in _llm_operations. Scalar
+    # _active/_last LLM span fields are compatibility aliases only.
     # Helpers: _create_child_span(), _start_new_turn()
 
     # ---------------------------------------------------------------------- #
     # Context frame (stash input + tools)                                     #
     # ---------------------------------------------------------------------- #
 
-    def _merge_pending_llm(self, updates: dict[str, Any]) -> None:
-        """Merge non-empty stash keys into ``_pending_llm_context``."""
+    def _llm_source(self, data: Any) -> Any:
+        """Return and register the exact processor that emitted an LLM frame."""
+        source = getattr(data, "source", None)
+        if source is not None:
+            self._processor_registry.set_explicit_role(source, PROCESSOR_ROLE_LLM)
+            self._llm_operations.register_processor(
+                source, self._processor_registry.get(source).name
+            )
+        return source
+
+    def _llm_destination(self, data: Any) -> Any:
+        """Return the destination LLM for a context/control frame, when known."""
+        destination = getattr(data, "destination", None)
+        if destination is None:
+            return None
+        record = self._processor_registry.register(destination)
+        if not record.has_role(PROCESSOR_ROLE_LLM):
+            return None
+        self._llm_operations.register_processor(destination, record.name)
+        return destination
+
+    def _resolve_llm_operation(
+        self, data: Any, *, include_metrics_pending: bool = False
+    ) -> Any:
+        """Resolve only the emitting processor's operation.
+
+        The source-less single-operation fallback exists for old direct-handler
+        callers. Normal ``FramePushed`` events always carry an exact source object.
+        """
+        source = getattr(data, "source", None)
+        if source is not None:
+            operation = (
+                self._llm_operations.get_metrics_target(source)
+                if include_metrics_pending
+                else self._llm_operations.get_active(source)
+            )
+            if operation is not None:
+                frame_id = getattr(getattr(data, "frame", None), "id", None)
+                if (
+                    operation.phase == "active"
+                    and operation.settled_predecessor_at_start
+                    and isinstance(frame_id, int)
+                    and isinstance(operation.start_frame_id, int)
+                    and frame_id < operation.start_frame_id
+                ):
+                    return None
+                return operation
+            return None
+        candidates = list(self._llm_operations.active_operations)
+        if include_metrics_pending:
+            candidates.extend(self._llm_operations.metrics_pending_operations)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def _record_unmatched_llm_frame(self, data: Any) -> None:
+        target = self._current_turn_span or self._trace
+        if target is None:
+            return
+        frame_name = type(getattr(data, "frame", None)).__name__
+        key = f"pipecat.unmatched_llm_frames.{frame_name}"
+        target.attributes[key] = int(target.attributes.get(key, 0)) + 1
+
+    def _merge_pending_llm(
+        self, updates: dict[str, Any], destination: Any = None
+    ) -> None:
+        """Merge context into one destination or the explicit global fallback."""
         if not updates:
             return
-
-        merge_llm_pending_stash(self._pending_llm_context, updates)
+        if destination is not None:
+            self._llm_operations.merge_pending_input(destination, updates)
+        else:
+            merge_llm_pending_stash(self._pending_llm_context, updates)
+            self._global_llm_context_generation += 1
 
     async def _handle_llm_context(self, data: Any) -> None:
         """
@@ -102,7 +170,7 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             return
         try:
             extracted = extract_llm_context_data(context)
-            self._merge_pending_llm(extracted)
+            self._merge_pending_llm(extracted, self._llm_destination(data))
         except Exception as e:  # pylint: disable=broad-except
             logger.debug("Failed to handle LLM context frame: %s", e)
 
@@ -111,8 +179,10 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         frame = data.frame
         messages = getattr(frame, "messages", None)
         dumped = json_dumps_messages(messages)
-        if dumped:
-            self._merge_pending_llm({"messages": dumped})
+        if messages is not None and dumped is None:
+            dumped = "[]"
+        if dumped is not None:
+            self._merge_pending_llm({"messages": dumped}, self._llm_destination(data))
 
     async def _handle_llm_messages_append(self, data: Any) -> None:
         """``LLMMessagesAppendFrame``: append to stashed messages JSON."""
@@ -120,19 +190,26 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         new_msgs = getattr(frame, "messages", None)
         if not new_msgs:
             return
-        prev = self._pending_llm_context.get("messages")
+        destination = self._llm_destination(data)
+        pending = (
+            self._llm_operations.pending_input_for(destination)
+            if destination is not None
+            else self._pending_llm_context
+        ) or {}
+        prev = pending.get("messages")
         merged = merge_appended_messages_json(prev, new_msgs)
         if merged:
-
-            self._pending_llm_context["messages"] = merged
+            self._merge_pending_llm({"messages": merged}, destination)
 
     async def _handle_llm_set_tools(self, data: Any) -> None:
         """``LLMSetToolsFrame``: stash tool definitions JSON."""
         frame = data.frame
         tools = getattr(frame, "tools", None)
         dumped = serialize_tools_field(tools)
-        if dumped:
-            self._merge_pending_llm({"tools": dumped})
+        if tools is not None and dumped is None:
+            dumped = "[]"
+        if dumped is not None:
+            self._merge_pending_llm({"tools": dumped}, self._llm_destination(data))
 
     async def _handle_llm_set_tool_choice(self, data: Any) -> None:
         """``LLMSetToolChoiceFrame``: stash tool choice for ``llm.tool_choice``."""
@@ -140,7 +217,9 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         choice = getattr(frame, "tool_choice", None)
         dumped = serialize_tool_choice_field(choice)
         if dumped:
-            self._merge_pending_llm({"tool_choice": dumped})
+            self._merge_pending_llm(
+                {"tool_choice": dumped}, self._llm_destination(data)
+            )
 
     async def _handle_llm_summary_request(self, data: Any) -> None:
         """
@@ -213,14 +292,13 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         if self._current_turn_span is None and not self._using_external_turn_tracking:
             await self._start_new_turn()
 
-        self._llm_text_buffer.clear()
-        # A new LLM span is opening — the stale backref is no longer valid.
-        self._last_llm_span = None
-
         attributes: dict[str, Any] = {}
 
         # Extract all available settings from the source processor
-        source = getattr(data, "source", None)
+        source = self._llm_source(data)
+        if source is None:
+            self._record_unmatched_llm_frame(data)
+            return
         if source:
             settings = extract_service_settings(source)
             for settings_key, attr_key in _LLM_SETTINGS_MAP:
@@ -228,24 +306,77 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 if val is not None:
                     attributes[attr_key] = val
 
-        # Flush stashed context data (Path A + Path B frames)
-        pending = self._pending_llm_context
-        if pending:
-            if pending.get("messages"):
-                attributes["llm.input"] = pending["messages"]
-            if pending.get("tools"):
-                attributes["llm.tools"] = pending["tools"]
-            if pending.get("tool_choice"):
-                attributes["llm.tool_choice"] = pending["tool_choice"]
-            self._pending_llm_context = {}
-
-        self._active_llm_span = (
-            self._create_child_span(  # pylint: disable=assignment-from-no-return
-                SPAN_LLM,
-                parent_span=self._current_turn_span,
-                attributes=attributes,
+        existing = self._llm_operations.get_active(source)
+        if existing is not None:
+            logger.warning(
+                "Unsupported overlapping LLM responses from processor %s; "
+                "finalizing %s as incomplete",
+                existing.processor_name,
+                existing.operation_id,
             )
+            self._finalize_llm_operation(
+                existing,
+                complete=False,
+                termination_reason="same_source_overlap",
+                terminal_status="cancelled",
+            )
+
+        span = self._create_child_span(
+            SPAN_LLM,
+            parent_span=self._current_turn_span,
+            attributes=attributes,
         )
+        if span is None:
+            return
+
+        record = self._processor_registry.get(source)
+        try:
+            operation = self._llm_operations.start(
+                source,
+                span=span,
+                parent_span=self._current_turn_span,
+                processor_name=record.name if record else type(source).__name__,
+                model=attributes.get("llm.model"),
+                started_at=time.monotonic(),
+                start_frame_id=getattr(data.frame, "id", None),
+            )
+        except LLMOperationAlreadyActiveError:
+            # Defensive guard: the explicit finalizer above should have removed it.
+            span.attributes["pipecat_span_status"] = "error"
+            span.attributes["pipecat_span_status_message"] = (
+                "same processor already had an active LLM operation"
+            )
+            span.set_status(
+                SpanStatus.ERROR,
+                "same processor already had an active LLM operation",
+            )
+            self._finish_managed_span(span)
+            return
+
+        pending: dict[str, Any] = {}
+        source_key = id(source)
+        consumed_generation = self._global_llm_context_consumed.get(source_key, 0)
+        if (
+            self._pending_llm_context
+            and consumed_generation < self._global_llm_context_generation
+        ):
+            pending.update(self._pending_llm_context)
+            self._global_llm_context_consumed[source_key] = (
+                self._global_llm_context_generation
+            )
+        if operation.pending_input_was_set and operation.pending_input is not None:
+            pending.update(operation.pending_input)
+        if "messages" in pending:
+            span.attributes["llm.input"] = pending["messages"]
+        if "tools" in pending:
+            span.attributes["llm.tools"] = pending["tools"]
+        if "tool_choice" in pending:
+            span.attributes["llm.tool_choice"] = pending["tool_choice"]
+        span.attributes["llm.operation_id"] = operation.operation_id
+
+        # Compatibility aliases only; handlers resolve through _llm_operations.
+        self._active_llm_span = span
+        self._last_llm_span = None
 
     async def _handle_llm_text(self, data: Any) -> None:
         """
@@ -256,17 +387,22 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         """
         if not self._capture_text:
             return
+        operation = self._resolve_llm_operation(data)
+        if operation is None:
+            self._record_unmatched_llm_frame(data)
+            return
         frame = data.frame
         text = getattr(frame, "text", None)
         if text:
+            operation.output_chunks.append(str(text))
+            while (
+                sum(len(chunk) for chunk in operation.output_chunks)
+                > MAX_TEXT_BUFFER_LENGTH
+                and len(operation.output_chunks) > 1
+            ):
+                operation.output_chunks.pop(0)
 
-            self._llm_text_buffer.append(str(text))
-
-            if sum(len(t) for t in self._llm_text_buffer) > MAX_TEXT_BUFFER_LENGTH:
-
-                self._llm_text_buffer = self._llm_text_buffer[-100:]
-
-    async def _handle_llm_response_end(self, _data: Any) -> None:
+    async def _handle_llm_response_end(self, data: Any) -> None:
         """
         ``LLMFullResponseEndFrame``: finish the active ``pipecat.llm`` span.
 
@@ -277,74 +413,107 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         - ``llm.function_calls`` — list of function-call dicts (name/tool_call_id/arguments)
         - ``llm.function_call_results`` — list of result/cancel dicts
         """
-        # Defensive: flush any unclosed thought block into the list
-        if self._llm_thought_buffer:
-
-            thought_text = "".join(self._llm_thought_buffer)
-
-            self._llm_thoughts_list.append(thought_text)
-            self._llm_thought_signatures_list.append("")
-        self._llm_thought_buffer.clear()
-
-        span = self._active_llm_span
-        if not span:
-            self._llm_thoughts_list.clear()
-
-            self._llm_thought_signatures_list.clear()
-            self._pending_function_calls.clear()
-            self._function_call_results.clear()
-
-            self._pre_span_function_call_ids.clear()
-            self._llm_text_buffer.clear()
+        operation = self._resolve_llm_operation(data)
+        if operation is None:
             return
-        self._active_llm_span = None
-        # Keep a backref so MetricsFrame data (token counts, processing time) arriving
-        # after this span closes can still be attached to the right span, and so that
-        # FunctionCallInProgressFrame arriving between span 1 and span 2 can be written
-        # directly to span 1.  Cleared when the next LLM span opens.
-        self._last_llm_span = span
+        self._finalize_llm_operation(
+            operation,
+            complete=True,
+            termination_reason="response_end",
+            terminal_status="ok",
+        )
 
-        if self._capture_text and self._llm_text_buffer:
-            span.attributes["llm.output"] = "".join(self._llm_text_buffer)
-        self._llm_text_buffer.clear()
+    def _finalize_llm_operation(
+        self,
+        operation: LLMOperationRecord,
+        *,
+        complete: bool,
+        termination_reason: str,
+        terminal_status: str,
+    ) -> None:
+        """Flush one LLM operation and finish its span exactly once."""
+        if operation.phase != "active":
+            return
+        operation.finish_open_thought()
 
-        # Write thought attribute lists
-        if self._llm_thoughts_list:
-            span.attributes["llm.thoughts"] = list(self._llm_thoughts_list)
+        existing_status = operation.span.attributes.get("pipecat_span_status")
+        if operation.error or existing_status == "error":
+            terminal_status = "error"
+
+        completed = self._llm_operations.complete(
+            operation.source_processor,
+            logical_end_at=time.monotonic(),
+            output_complete=complete,
+            termination_reason=termination_reason,
+            terminal_status=terminal_status,
+        )
+        if completed is None:
+            return
+
+        span = completed.span
+        if self._capture_text and completed.output_chunks:
+            span.attributes["llm.output"] = completed.output_text
+        if completed.thoughts:
+            span.attributes["llm.thoughts"] = list(completed.thoughts)
             span.attributes["llm.thought_signatures"] = list(
-                self._llm_thought_signatures_list
+                completed.thought_signatures
             )
-        self._llm_thoughts_list.clear()
-        self._llm_thought_signatures_list.clear()
+        if completed.requested_function_calls:
+            span.attributes["llm.function_calls"] = list(
+                completed.requested_function_calls.values()
+            )
+        if completed.function_call_results:
+            span.attributes["llm.function_call_results"] = list(
+                completed.function_call_results
+            )
+        if completed.markers:
+            span.attributes["llm.markers"] = list(completed.markers)
 
-        # Write function-call attribute lists.
-        # Exclude pre-span IDs — those were already written directly to the previous
-        # span's attributes in _handle_function_call_start.
+        span.attributes["llm.output.complete"] = complete
+        span.attributes["llm.termination_reason"] = termination_reason
+        span.attributes["pipecat_span_status"] = terminal_status
+        if hasattr(span, "set_status"):
+            if terminal_status == "error":
+                span.set_status(SpanStatus.ERROR)
+            elif terminal_status == "cancelled":
+                span.set_status(SpanStatus.OK)
+        if getattr(span, "is_finished", lambda: False)() is not True:
+            self._finish_managed_span(span)
 
-        if self._pending_function_calls or self._function_call_results:
-            all_calls = [
-                v
-                for k, v in self._pending_function_calls.items()
-                if k not in self._pre_span_function_call_ids
-            ]
-            if all_calls:
-                span.attributes["llm.function_calls"] = all_calls
-            if self._function_call_results:
-                span.attributes["llm.function_call_results"] = list(
-                    self._function_call_results
-                )
-        self._pending_function_calls.clear()
-        self._function_call_results.clear()
-        self._pre_span_function_call_ids.clear()
-
-        span.attributes["pipecat_span_status"] = "ok"
-        span.finish()
+        if self._active_llm_span is span:
+            self._active_llm_span = None
+        self._last_llm_span = span
 
     # ---------------------------------------------------------------------- #
     # LLM thought accumulation (flattened onto the LLM span)                 #
     # ---------------------------------------------------------------------- #
 
-    async def _handle_llm_thought_start(self, _data: Any) -> None:
+    async def _handle_llm_marker(self, data: Any) -> None:
+        """Capture a Pipecat 1.x sideband marker without treating it as speech."""
+        frame = data.frame
+        marker = getattr(frame, "marker", None)
+        if marker is None:
+            return
+        marker_data = {
+            "marker": str(marker),
+            "append_to_context_immediately": bool(
+                getattr(frame, "append_to_context_immediately", True)
+            ),
+        }
+        operation = self._resolve_llm_operation(data)
+        if operation is not None:
+            if len(operation.markers) < 100:
+                operation.markers.append(marker_data)
+            return
+
+        target = self._current_turn_span
+        if target is not None:
+            markers = list(target.attributes.get("llm.markers", []))
+            if len(markers) < 100:
+                markers.append(marker_data)
+                target.attributes["llm.markers"] = markers
+
+    async def _handle_llm_thought_start(self, data: Any) -> None:
         """
         ``LLMThoughtStartFrame``: begin a new thought block.
 
@@ -352,60 +521,106 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         accumulate cleanly. No child span is created; the completed thought is
         appended to ``llm.thoughts`` on the parent ``pipecat.llm`` span.
         """
-        self._llm_thought_buffer.clear()
+        operation = self._resolve_llm_operation(data)
+        if operation is not None:
+            operation.thought_chunks.clear()
 
     async def _handle_llm_thought_text(self, data: Any) -> None:
         """``LLMThoughtTextFrame``: accumulate thought text chunks."""
         if not self._capture_text:
             return
+        operation = self._resolve_llm_operation(data)
+        if operation is None:
+            self._record_unmatched_llm_frame(data)
+            return
         frame = data.frame
         text = getattr(frame, "text", None)
         if text:
-            self._llm_thought_buffer.append(str(text))
+            operation.thought_chunks.append(str(text))
 
     async def _handle_llm_thought_end(self, data: Any) -> None:
         """
         ``LLMThoughtEndFrame``: complete the current thought block.
 
-        Appends accumulated text to ``_llm_thoughts_list`` and the frame's
-        ``signature`` (used by Anthropic extended thinking) to
-        ``_llm_thought_signatures_list``. Both lists are written to the
-        ``pipecat.llm`` span as ``llm.thoughts`` / ``llm.thought_signatures``
-        when ``LLMFullResponseEndFrame`` fires.
+        Appends accumulated text and the optional signature to the owning
+        operation. Both lists are flushed when that operation is finalized.
         """
-        thought_text = "".join(self._llm_thought_buffer)
-        self._llm_thought_buffer.clear()
-
         if not self._capture_text:
             return
-
+        operation = self._resolve_llm_operation(data)
+        if operation is None:
+            self._record_unmatched_llm_frame(data)
+            return
         frame = data.frame
         sig = getattr(frame, "signature", None)
-
-        self._llm_thoughts_list.append(thought_text)
-        self._llm_thought_signatures_list.append(str(sig) if sig is not None else "")
+        operation.finish_open_thought(str(sig) if sig is not None else "")
 
     # ---------------------------------------------------------------------- #
     # Function call handlers                                                  #
     # ---------------------------------------------------------------------- #
 
-    async def _handle_function_calls_started(self, data: Any) -> None:
-        """
-        ``FunctionCallsStartedFrame``: log the batch start at debug level.
+    def _operation_for_tool_frame(self, data: Any, tool_call_id: str = "") -> Any:
+        operation = self._resolve_llm_operation(data, include_metrics_pending=True)
+        if operation is not None:
+            return operation
+        if tool_call_id:
+            candidates = [
+                candidate
+                for candidate in (
+                    *self._llm_operations.active_operations,
+                    *self._llm_operations.metrics_pending_operations,
+                )
+                if tool_call_id in candidate.requested_function_calls
+            ]
+            if len(candidates) == 1:
+                return candidates[0]
+        return None
 
-        Individual calls are tracked via ``FunctionCallInProgressFrame``; this
-        frame is informational only.
-        """
+    @staticmethod
+    def _write_function_state(operation: LLMOperationRecord) -> None:
+        """Late-enrich a finished span with operation-owned tool state."""
+        if operation.requested_function_calls:
+            operation.span.attributes["llm.function_calls"] = list(
+                operation.requested_function_calls.values()
+            )
+        if operation.function_call_results:
+            operation.span.attributes["llm.function_call_results"] = list(
+                operation.function_call_results
+            )
+
+    async def _handle_function_calls_started(self, data: Any) -> None:
+        """Capture the ordered model-requested function-call batch."""
         if not self._capture_function_calls:
             return
         frame = data.frame
         func_calls = getattr(frame, "function_calls", None) or []
-        names = [getattr(fc, "function_name", "") for fc in func_calls]
-        logger.debug("Function calls started: %s", names)
+        operation = self._operation_for_tool_frame(data)
+        if operation is None:
+            self._record_unmatched_llm_frame(data)
+            return
+        for request_order, function_call in enumerate(func_calls):
+            call_data = extract_function_call_data(function_call)
+            original_id = call_data.get("tool_call_id", "")
+            tool_call_id = original_id or (
+                f"{operation.operation_id}:tool-{request_order + 1}"
+            )
+            call_dict: dict[str, Any] = {
+                "tool_call_id": tool_call_id,
+                "request_order": request_order,
+            }
+            if call_data.get("function_name"):
+                call_dict["name"] = call_data["function_name"]
+            if call_data.get("arguments") is not None:
+                call_dict["arguments"] = call_data["arguments"]
+            if not original_id:
+                call_dict["original_tool_call_id"] = ""
+            operation.requested_function_calls.setdefault(tool_call_id, call_dict)
+        if operation.phase == "metrics_pending":
+            self._write_function_state(operation)
 
     async def _handle_function_call_start(self, data: Any) -> None:
         """
-        ``FunctionCallInProgressFrame``: stash call details in ``_pending_function_calls``.
+        ``FunctionCallInProgressFrame``: attach call details to the owning operation.
 
         Dict keys: ``name``, ``tool_call_id``, ``arguments``.
         Written to ``llm.function_calls`` on the ``pipecat.llm`` span when
@@ -416,18 +631,21 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
 
         frame = data.frame
         fc_data = extract_function_call_data(frame)
-        # tool_call_id is a required typed field on FunctionCallInProgressFrame;
-        # fall back to "" so the result handler (which also uses "") can still match.
-        tool_call_id = fc_data.get("tool_call_id", "")
+        original_tool_call_id = fc_data.get("tool_call_id", "")
+        operation = self._operation_for_tool_frame(data, original_tool_call_id)
+        if operation is None:
+            self._record_unmatched_llm_frame(data)
+            return
+        tool_call_id = original_tool_call_id or (
+            f"{operation.operation_id}:tool-{len(operation.requested_function_calls) + 1}"
+        )
 
-        # Deduplicate: pipecat pushes FunctionCallInProgressFrame both upstream and
-        # downstream so the observer sees it twice with the same tool_call_id.
-
-        if tool_call_id in self._pending_function_calls:
-            logger.debug(
-                "FunctionCallInProgressFrame with duplicate tool_call_id=%r; skipping",
-                tool_call_id,
-            )
+        if tool_call_id in operation.requested_function_calls:
+            existing = operation.requested_function_calls[tool_call_id]
+            if fc_data.get("function_name"):
+                existing["name"] = fc_data["function_name"]
+            if fc_data.get("arguments") is not None:
+                existing["arguments"] = fc_data["arguments"]
             return
 
         call_dict: dict[str, Any] = {"tool_call_id": tool_call_id}
@@ -435,24 +653,15 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             call_dict["name"] = fc_data["function_name"]
         if fc_data.get("arguments"):
             call_dict["arguments"] = fc_data["arguments"]
-
-        self._pending_function_calls[tool_call_id] = call_dict
-
-        # If span 1 has already closed but function-call frames arrive before span 2
-        # opens, write the call directly to span 1 via the backref so it is not lost.
-
-        if self._active_llm_span is None and self._last_llm_span is not None:
-            existing = list(
-                self._last_llm_span.attributes.get("llm.function_calls", [])
-            )
-            existing.append(call_dict)
-
-            self._last_llm_span.attributes["llm.function_calls"] = existing
-            self._pre_span_function_call_ids.add(tool_call_id)
+        if not original_tool_call_id:
+            call_dict["original_tool_call_id"] = ""
+        operation.requested_function_calls[tool_call_id] = call_dict
+        if operation.phase == "metrics_pending":
+            self._write_function_state(operation)
 
     async def _handle_function_call_result(self, data: Any) -> None:
         """
-        ``FunctionCallResultFrame``: move pending call to ``_function_call_results``.
+        ``FunctionCallResultFrame``: attach a result to the owning operation.
 
         Result dict keys: ``name``, ``tool_call_id``, ``arguments``,
         ``result``, ``run_llm`` (when present).
@@ -465,12 +674,10 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         frame = data.frame
         fc_data = extract_function_call_data(frame)
         tool_call_id = fc_data.get("tool_call_id", "")
-
-        # Use None sentinel so we can distinguish "not found" from an empty call dict.
-        # Pipecat pushes FunctionCallResultFrame both upstream and downstream; the
-        # observer sees it twice.  The second time the id is no longer in pending, so
-        # call_dict is None and we silently drop the duplicate.
-        call_dict = self._pending_function_calls.pop(tool_call_id, None)
+        operation = self._operation_for_tool_frame(data, tool_call_id)
+        if operation is None:
+            return
+        call_dict = operation.requested_function_calls.get(tool_call_id)
         if call_dict is None:
             logger.debug(
                 "FunctionCallResultFrame with no matching pending call "
@@ -485,7 +692,10 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         if "run_llm" in fc_data:
             result_dict["run_llm"] = fc_data["run_llm"]
 
-        self._function_call_results.append(result_dict)
+        if result_dict not in operation.function_call_results:
+            operation.function_call_results.append(result_dict)
+        if operation.phase == "metrics_pending":
+            self._write_function_state(operation)
 
     async def _handle_function_call_cancel(self, data: Any) -> None:
         """
@@ -499,9 +709,15 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
 
         frame = data.frame
         tool_call_id = getattr(frame, "tool_call_id", "")
-        call_dict = self._pending_function_calls.pop(tool_call_id, {})
+        operation = self._operation_for_tool_frame(data, tool_call_id)
+        if operation is None:
+            return
+        call_dict = operation.requested_function_calls.get(tool_call_id, {})
         result_dict: dict[str, Any] = {**call_dict, "cancelled": True}
-        self._function_call_results.append(result_dict)
+        if result_dict not in operation.function_call_results:
+            operation.function_call_results.append(result_dict)
+        if operation.phase == "metrics_pending":
+            self._write_function_state(operation)
 
     # ---------------------------------------------------------------------- #
     # Context summarization                                                   #

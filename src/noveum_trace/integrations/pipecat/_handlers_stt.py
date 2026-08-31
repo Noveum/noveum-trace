@@ -152,6 +152,9 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
         )
         if span:
             self._active_stt_span = span
+            self._stt_metric_processor = None
+            frame_id = getattr(data.frame, "id", None)
+            self._stt_start_frame_id = frame_id if isinstance(frame_id, int) else None
 
             self._vad_speech_start_time = asyncio.get_running_loop().time()
             self._stt_interim_results.clear()
@@ -298,6 +301,7 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
                 span.attributes[key] = val
 
         self._active_stt_span = None
+        self._stt_metric_processor = None
         # Reset source pin so next utterance re-pins on its first audio frame
         self._stt_source_processor = None
 
