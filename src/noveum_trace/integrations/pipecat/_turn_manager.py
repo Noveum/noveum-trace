@@ -29,9 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Accessed via the outer module's sentinel at import time
 try:
-    from pipecat.observers.base_observer import (  # noqa: F401
-        BaseObserver as _PipecatBaseObserver,
-    )
+    from pipecat.observers.base_observer import BaseObserver as _PipecatBaseObserver  # noqa: F401
 
     _PIPECAT_AVAILABLE = True
 except ImportError:

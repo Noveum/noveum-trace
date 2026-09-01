@@ -60,10 +60,7 @@ from noveum_trace.integrations.crewai.crewai_utils import (
 from noveum_trace.integrations.crewai.crewai_utils import (
     resolve_agent_id as _resolve_agent_id,
 )
-from noveum_trace.integrations.crewai.crewai_utils import (
-    safe_getattr,
-    safe_json_dumps,
-)
+from noveum_trace.integrations.crewai.crewai_utils import safe_getattr, safe_json_dumps
 
 logger = logging.getLogger(__name__)
 

@@ -32,10 +32,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from livekit.agents.stt import STT as BaseSTT
-    from livekit.agents.stt import (
-        SpeechEvent,
-        SpeechEventType,
-    )
+    from livekit.agents.stt import SpeechEvent, SpeechEventType
     from livekit.agents.utils import AudioBuffer
 
     LIVEKIT_AVAILABLE = True
