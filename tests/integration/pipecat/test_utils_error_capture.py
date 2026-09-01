@@ -267,6 +267,7 @@ def _error_observer() -> tuple[NoveumTraceObserver, Trace, object, object, objec
     obs._current_turn_span = turn
     obs._active_llm_span = llm
     obs._active_tts_span = tts
+    obs._llm_operations.start(object(), span=llm)
     return obs, trace, turn, llm, tts
 
 
@@ -325,6 +326,28 @@ async def test_uc8_handle_error_records_trace_level_event() -> None:
     # ...and it reaches the export payload, not just the in-memory object.
     serialized = trace.to_dict()["events"]
     assert any(e["name"] == "pipecat.error" for e in serialized)
+
+
+async def test_late_error_is_attributed_by_exact_llm_source() -> None:
+    """A late error for call A must not mark an active call B."""
+    trace = Trace(name="pipecat.conversation")
+    first = trace.create_span(name="pipecat.llm")
+    second = trace.create_span(name="pipecat.llm")
+    source_a, source_b = object(), object()
+    observer = NoveumTraceObserver(capture_errors=True, record_audio=False)
+    observer._trace = trace
+    operation_a = observer._llm_operations.start(source_a, span=first)
+    observer._llm_operations.complete(source_a)
+    observer._llm_operations.start(source_b, span=second)
+    first.finish()
+
+    await observer._handle_error(
+        types.SimpleNamespace(frame=_error_frame("late failure"), source=source_a)
+    )
+
+    assert operation_a.terminal_status == "error"
+    assert first.attributes["pipecat_span_status"] == "error"
+    assert "pipecat_span_status" not in second.attributes
 
 
 # --------------------------------------------------------------------------- #

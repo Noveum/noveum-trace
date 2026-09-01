@@ -53,6 +53,7 @@ from typing import Any
 
 from noveum_trace.core.span import SpanEvent
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
+from noveum_trace.integrations.pipecat._processor_registry import PROCESSOR_ROLE_STT
 from noveum_trace.integrations.pipecat.pipecat_constants import SPAN_STT
 from noveum_trace.integrations.pipecat.pipecat_utils import (
     derive_provider,
@@ -154,6 +155,14 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
         )
         if span:
             self._active_stt_span = span
+            self._last_stt_span = None
+            self._last_stt_metric_processor = None
+            # The first metric-producing STT processor observed for this
+            # utterance owns its native metrics. Reset ownership at every VAD
+            # boundary so a later STT service cannot inherit the prior one.
+            self._stt_metric_processor = None
+            frame_id = getattr(data.frame, "id", None)
+            self._stt_start_frame_id = frame_id if isinstance(frame_id, int) else None
 
             self._vad_speech_start_time = asyncio.get_running_loop().time()
             self._stt_interim_results.clear()
@@ -281,6 +290,7 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
 
         source = getattr(data, "source", None)
         if source:
+            self._processor_registry.set_explicit_role(source, PROCESSOR_ROLE_STT)
             settings = extract_service_settings(source)
             if settings.get("model"):
                 attributes["stt.model"] = settings["model"]
@@ -303,7 +313,11 @@ class _STTHandlersMixin(_PipecatObserverMixinBase):
             for key, val in attributes.items():
                 span.attributes[key] = val
 
+        self._last_stt_span = span
+        self._last_stt_metric_processor = self._stt_metric_processor or source
         self._active_stt_span = None
+        self._stt_metric_processor = None
+        self._stt_start_frame_id = None
         # Reset source pin so next utterance re-pins on its first audio frame
         self._stt_source_processor = None
 

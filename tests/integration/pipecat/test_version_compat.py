@@ -52,6 +52,7 @@ _VERSION_SPECIFIC = {
     "LLMUsageMetricsFrame": "_handle_llm_usage_metrics",
     "SystemLogFrame": "_handle_system_log",
     "StartInterruptionFrame": "_handle_interruption",
+    "LLMMarkerFrame": "_handle_llm_marker",
 }
 
 # Handlers that are DEAD on both supported lines (the frames they would dispatch
@@ -96,6 +97,7 @@ def test_vc1_dispatch_table_builds_with_absent_version_frames() -> None:
         "EndFrame",
         "TranscriptionFrame",
         "LLMFullResponseStartFrame",
+        "AggregatedTextFrame",
         "TTSStartedFrame",
         "MetricsFrame",
     ):
@@ -194,7 +196,9 @@ async def test_vc3_llm_messages_frame_replace_path_old() -> None:
     msgs = [{"role": "user", "content": "hi"}]
     frame = ff.LLMMessagesFrame(messages=msgs)  # type: ignore[attr-defined]
     await obs._handle_llm_messages_replace(types.SimpleNamespace(frame=frame))
-    await obs._handle_llm_response_start(types.SimpleNamespace(frame=None, source=None))
+    await obs._handle_llm_response_start(
+        types.SimpleNamespace(frame=None, source=object())
+    )
 
     span = obs._active_llm_span
     assert json.loads(span.attributes["llm.input"]) == msgs
@@ -219,7 +223,9 @@ async def test_vc3_replace_path_via_update_frame_new() -> None:
     await obs._handle_llm_messages_replace(types.SimpleNamespace(frame=update_frame))
     assert obs._pending_llm_context.get("messages") == json.dumps(msgs)
 
-    await obs._handle_llm_response_start(types.SimpleNamespace(frame=None, source=None))
+    await obs._handle_llm_response_start(
+        types.SimpleNamespace(frame=None, source=object())
+    )
     span = obs._active_llm_span
     assert json.loads(span.attributes["llm.input"]) == msgs
 
@@ -264,6 +270,7 @@ async def test_vc4_interruption_via_interruption_frame_new() -> None:
     tts = trace.create_span(name="pipecat.tts", parent_span_id=turn.span_id)
     obs._active_llm_span = llm
     obs._active_tts_span = tts
+    obs._llm_operations.start(object(), span=llm)
 
     await obs._handle_interruption(types.SimpleNamespace(frame=ff.InterruptionFrame()))
 
@@ -272,6 +279,44 @@ async def test_vc4_interruption_via_interruption_frame_new() -> None:
     assert tts.attributes["pipecat_span_status"] == "cancelled" and tts.is_finished()
     assert obs._active_llm_span is None
     assert obs._active_tts_span is None
+
+
+def test_vc_llm_marker_frame_registered_when_available() -> None:
+    """Pipecat 1.x markers are capability-registered; older lines stay import-safe."""
+    observer = NoveumTraceObserver(record_audio=False)
+    marker_frame = getattr(ff, "LLMMarkerFrame", None)
+    if marker_frame is None:
+        assert "LLMMarkerFrame" not in _registered_frame_type_names(observer)
+    else:
+        assert observer._frame_handlers[marker_frame].__name__ == "_handle_llm_marker"
+
+
+@pytest.mark.asyncio
+async def test_vc_llm_marker_is_attached_to_owning_operation() -> None:
+    observer = NoveumTraceObserver(record_audio=False)
+    trace = Trace(name="pipecat.conversation")
+    span = trace.create_span(name="pipecat.llm")
+    source = object()
+    observer._trace = trace
+    operation = observer._llm_operations.start(source, span=span)
+
+    frame = types.SimpleNamespace(
+        marker="provider-boundary", append_to_context_immediately=False
+    )
+    await observer._handle_llm_marker(types.SimpleNamespace(frame=frame, source=source))
+    observer._finalize_llm_operation(
+        operation,
+        complete=True,
+        termination_reason="response_end",
+        terminal_status="ok",
+    )
+
+    assert span.attributes["llm.markers"] == [
+        {
+            "marker": "provider-boundary",
+            "append_to_context_immediately": False,
+        }
+    ]
 
 
 # --------------------------------------------------------------------------- #

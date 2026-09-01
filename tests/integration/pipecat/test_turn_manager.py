@@ -69,10 +69,12 @@ async def test_handle_error_marks_spans() -> None:
     obs._active_llm_span = llm
     obs._active_tts_span = tts
     obs._current_turn_span = turn
+    llm_source = object()
+    obs._llm_operations.start(llm_source, span=llm)
 
     err = MagicMock()
     err.error = "boom"
-    data = MagicMock(frame=err)
+    data = MagicMock(frame=err, source=llm_source)
     await obs._handle_error(data)
 
     # Custom attribute (unchanged behaviour)
@@ -114,14 +116,17 @@ async def test_handle_interruption_internal_clears_llm_tts() -> None:
     llm = MagicMock()
     llm.attributes = {}
     llm.finish = MagicMock()
+    llm.is_finished.return_value = False
     tts = MagicMock()
     tts.attributes = {}
     tts.finish = MagicMock()
+    tts.is_finished.return_value = False
     turn = MagicMock()
     turn.attributes = {}
     obs._active_llm_span = llm
     obs._active_tts_span = tts
     obs._current_turn_span = turn
+    obs._llm_operations.start(object(), span=llm)
 
     await obs._handle_interruption_internal(interrupted_by_user=True)
 
@@ -129,6 +134,12 @@ async def test_handle_interruption_internal_clears_llm_tts() -> None:
     assert obs._active_tts_span is None
     llm.finish.assert_called_once()
     tts.finish.assert_called_once()
+    assert llm.attributes["llm.output.complete"] is False
+    assert llm.attributes["llm.termination_reason"] == "user_interruption"
+    assert llm.attributes["pipecat_span_status"] == "cancelled"
+    assert tts.attributes["tts.output.complete"] is False
+    assert tts.attributes["tts.termination_reason"] == "user_interruption"
+    assert tts.attributes["pipecat_span_status"] == "cancelled"
 
 
 @pytest.mark.asyncio

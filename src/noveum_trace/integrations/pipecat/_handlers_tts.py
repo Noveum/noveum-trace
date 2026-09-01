@@ -2,8 +2,10 @@
 TTS frame handler mixin for NoveumTraceObserver.
 
 Handles:
-  - TTSStartedFrame    — open pipecat.tts span
-  - TTSTextFrame       — accumulate TTS input text
+  - LLMTextFrame at TTS input — open pipecat.tts span for text aggregation
+  - AggregatedTextFrame — capture the context-bearing request boundary
+  - TTSStartedFrame    — record synthesis/audio-start milestone (fallback opener)
+  - TTSTextFrame       — accumulate spoken/progress text
   - TTSAudioRawFrame   — buffer raw PCM for audio upload (opt-in)
   - TTSStoppedFrame    — finish span, optionally upload audio
 """
@@ -13,9 +15,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
+from noveum_trace.core.span import SpanStatus
 from noveum_trace.integrations.pipecat._observer_state import _PipecatObserverMixinBase
+from noveum_trace.integrations.pipecat._processor_registry import PROCESSOR_ROLE_TTS
 from noveum_trace.integrations.pipecat.pipecat_constants import SPAN_TTS
 from noveum_trace.integrations.pipecat.pipecat_utils import (
     calculate_audio_duration_ms,
@@ -64,75 +69,246 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
 
     # State attributes declared in NoveumTraceObserver.__init__:
     #   _trace, _capture_text, _record_audio,
-    #   _tts_text_buffer, _tts_audio_buffer, _tts_source_processor,
+    #   _tts_request_text_buffer, _tts_text_buffer, _tts_audio_buffer,
+    #   _tts_source_processor,
     #   _active_tts_span, _current_turn_span
     # Helpers: _create_child_span(), _get_client()
 
-    async def _handle_tts_started(self, data: Any) -> None:
-        """
-        ``TTSStartedFrame``: open a ``pipecat.tts`` child span.
+    @staticmethod
+    def _tts_frame_context_id(data: Any) -> str | None:
+        frame = getattr(data, "frame", None)
+        context_id = getattr(frame, "context_id", None)
+        return str(context_id) if context_id is not None else None
 
-        Attributes set: ``tts.voice`` / ``tts.model`` (from the source processor's
-        settings) and ``tts.started_at`` (the TTSStartedFrame arrival time, i.e. the
-        span's own start).
-        """
-        if not self._trace:
+    def _tts_operation_matches(self, data: Any) -> bool:
+        """Return whether ``data`` belongs to the currently observed TTS op."""
+        # TODO: If a real provider fails because one TTS processor emits overlapping
+        # context_id values, replace the scalar TTS operation state with records keyed
+        # by (processor identity, context_id). Keep the current simpler lifecycle until
+        # that behavior is reproduced in an actual trace.
+        source = getattr(data, "source", None)
+        context_id = self._tts_frame_context_id(data)
+        source_matches = (
+            source is None
+            or self._tts_source_processor is None
+            or source is self._tts_source_processor
+        )
+        context_matches = (
+            context_id is None
+            or self._tts_context_id is None
+            or context_id == self._tts_context_id
+        )
+        return source_matches and context_matches
+
+    @staticmethod
+    def _set_tts_service_attributes(span: Any, source: Any) -> None:
+        if span is None or source is None:
             return
+        settings = extract_service_settings(source)
+        for settings_key, attribute_key in (
+            ("voice", "tts.voice"),
+            ("model", "tts.model"),
+            ("language", "tts.language"),
+        ):
+            value = settings.get(settings_key)
+            if value is not None:
+                span.attributes[attribute_key] = value
+        provider = derive_provider(source, settings.get("model"))
+        if provider:
+            span.attributes["tts.provider"] = provider
 
+    def _open_tts_operation(
+        self,
+        data: Any,
+        *,
+        request_boundary: bool,
+        source_processor: Any = None,
+        milestone: str | None = None,
+    ) -> Any:
+        """Open one TTS span at request time, with TTSStarted as fallback."""
+        if not self._trace:
+            return None
+
+        self._tts_request_text_buffer.clear()
         self._tts_text_buffer.clear()
         self._tts_text_interim_buffer.clear()
         self._tts_audio_buffer.clear()
-        # A new TTS span is opening — the stale backref is no longer valid.
         self._last_tts_span = None
+        self._last_tts_source_processor = None
+
+        source = (
+            source_processor
+            if source_processor is not None
+            else getattr(data, "source", None)
+        )
+        self._tts_source_processor = source
+        if source is not None:
+            self._processor_registry.set_explicit_role(source, PROCESSOR_ROLE_TTS)
+        self._tts_context_id = self._tts_frame_context_id(data)
+        frame_id = getattr(getattr(data, "frame", None), "id", None)
+        self._tts_request_frame_id = (
+            frame_id if request_boundary and isinstance(frame_id, int) else None
+        )
+        self._tts_start_frame_id = (
+            frame_id if not request_boundary and isinstance(frame_id, int) else None
+        )
 
         attributes: dict[str, Any] = {}
-        source = getattr(data, "source", None)
-        # Pin the TTS source processor so _handle_tts_audio only buffers frames
-        # from this processor.  Downstream resamplers / aggregators that re-emit
-        # TTSAudioRawFrame with fresh IDs are silently ignored.
-        self._tts_source_processor = source
-        logger.debug(
-            "TTS started: pinned source processor %s",
-            type(source).__name__ if source else None,
-        )
-        if source:
-            settings = extract_service_settings(source)
-            if settings.get("voice"):
-                attributes["tts.voice"] = settings["voice"]
-            if settings.get("model"):
-                attributes["tts.model"] = settings["model"]
-            # D6: extract_service_settings already resolves language; the STT
-            # handler copies it but this one used to drop it.
-            if settings.get("language"):
-                attributes["tts.language"] = settings["language"]
-            provider = derive_provider(source, settings.get("model"))
-            if provider:
-                attributes["tts.provider"] = provider
-
-        self._active_tts_span = self._create_child_span(
+        if self._tts_context_id is not None:
+            attributes["tts.context_id"] = self._tts_context_id
+        span = self._create_child_span(
             SPAN_TTS,
             parent_span=self._current_turn_span,
             attributes=attributes,
         )
-        # Explicit start timestamp from the TTSStartedFrame (== the span's start).
-        if self._active_tts_span is not None:
-            self._active_tts_span.attributes["tts.started_at"] = (
-                self._active_tts_span.start_time.isoformat()
+        self._active_tts_span = span
+        self._set_tts_service_attributes(span, source)
+        if span is not None:
+            milestone_name = milestone or (
+                "tts.requested_at" if request_boundary else "tts.started_at"
             )
+            span.attributes[milestone_name] = span.start_time.isoformat()
+        return span
+
+    async def _handle_tts_input_text(self, data: Any, tts_processor: Any) -> None:
+        """Open the TTS operation when its text-aggregation phase begins."""
+        if not self._trace or tts_processor is None:
+            return
+        if bool(getattr(getattr(data, "frame", None), "skip_tts", False)):
+            return
+        if (
+            self._active_tts_span is not None
+            and self._tts_source_processor is not None
+            and self._tts_source_processor is not tts_processor
+        ):
+            await self._finalize_tts_operation(
+                complete=False,
+                termination_reason="overlapping_request",
+                terminal_status="cancelled",
+            )
+        if self._active_tts_span is None:
+            self._open_tts_operation(
+                data,
+                request_boundary=True,
+                source_processor=tts_processor,
+                milestone="tts.aggregation_started_at",
+            )
+
+    async def _handle_tts_request(self, data: Any) -> None:
+        """Open/reuse a TTS span at Pipecat's context-bearing request frame."""
+        if not self._trace:
+            return
+        if self._active_tts_span is not None and not self._tts_operation_matches(data):
+            await self._finalize_tts_operation(
+                complete=False,
+                termination_reason="overlapping_request",
+                terminal_status="cancelled",
+            )
+        span = self._active_tts_span
+        if span is None:
+            span = self._open_tts_operation(data, request_boundary=True)
+        if span is None:
+            return
+
+        source = getattr(data, "source", None)
+        if self._tts_source_processor is None and source is not None:
+            self._tts_source_processor = source
+            self._processor_registry.set_explicit_role(source, PROCESSOR_ROLE_TTS)
+            self._set_tts_service_attributes(span, source)
+        context_id = self._tts_frame_context_id(data)
+        if self._tts_context_id is None and context_id is not None:
+            self._tts_context_id = context_id
+            span.attributes["tts.context_id"] = context_id
+        frame_id = getattr(getattr(data, "frame", None), "id", None)
+        if self._tts_request_frame_id is None and isinstance(frame_id, int):
+            self._tts_request_frame_id = frame_id
+        span.attributes.setdefault(
+            "tts.requested_at", datetime.now(timezone.utc).isoformat()
+        )
+
+        if self._capture_text:
+            frame = data.frame
+            text = getattr(frame, "text", None)
+            if text:
+                self._tts_request_text_buffer.append(
+                    (
+                        str(text),
+                        bool(getattr(frame, "includes_inter_frame_spaces", False)),
+                    )
+                )
+
+    async def _handle_tts_started(self, data: Any) -> None:
+        """Record audio-context start; open a fallback span when needed."""
+        if not self._trace:
+            return
+        if self._active_tts_span is not None and not self._tts_operation_matches(data):
+            await self._finalize_tts_operation(
+                complete=False,
+                termination_reason="overlapping_start",
+                terminal_status="cancelled",
+            )
+        span = self._active_tts_span
+        if span is None:
+            span = self._open_tts_operation(data, request_boundary=False)
+        if span is None:
+            return
+
+        source = getattr(data, "source", None)
+        if self._tts_source_processor is None and source is not None:
+            self._tts_source_processor = source
+            self._processor_registry.set_explicit_role(source, PROCESSOR_ROLE_TTS)
+            self._set_tts_service_attributes(span, source)
+        context_id = self._tts_frame_context_id(data)
+        if self._tts_context_id is None and context_id is not None:
+            self._tts_context_id = context_id
+            span.attributes["tts.context_id"] = context_id
+        frame_id = getattr(getattr(data, "frame", None), "id", None)
+        if isinstance(frame_id, int):
+            self._tts_start_frame_id = frame_id
+        logger.debug(
+            "TTS started: pinned source processor %s",
+            type(source).__name__ if source else None,
+        )
+        span.attributes.setdefault(
+            "tts.started_at", datetime.now(timezone.utc).isoformat()
+        )
 
     async def _handle_tts_text(self, data: Any) -> None:
         """
-        ``TTSTextFrame``: accumulate TTS input text chunks.
+        ``TTSTextFrame``: accumulate spoken/progress text chunks.
 
         Pipecat emits two flavours of ``TTSTextFrame`` distinguished by
         ``aggregated_by``: sentence-level *final* text and interim word/token
         *streamed* text. The same speech can arrive as both, so concatenating
         them together double-counts. We bucket them separately (by
-        ``aggregated_by``) and emit separate attributes — ``tts.input_text``
-        (final) and ``tts.input_text_interim`` (interim) — keeping each frame's
-        ``includes_inter_frame_spaces`` so spacing can be reconstructed.
+        ``aggregated_by``), independently from request-side AggregatedTextFrame,
+        and keep each frame's ``includes_inter_frame_spaces`` so spacing can be
+        reconstructed.
         """
         if not self._capture_text:
+            return
+        source = getattr(data, "source", None)
+        if (
+            source is not None
+            and self._tts_source_processor is not None
+            and source is not self._tts_source_processor
+        ):
+            return
+        frame = getattr(data, "frame", None)
+        context_id = getattr(frame, "context_id", None)
+        if (
+            context_id is not None
+            and self._tts_context_id is not None
+            and str(context_id) != self._tts_context_id
+        ):
+            return
+        text_frame_id = getattr(data.frame, "id", None)
+        operation_frame_id = self._tts_request_frame_id or self._tts_start_frame_id
+        if (
+            isinstance(text_frame_id, int)
+            and isinstance(operation_frame_id, int)
+            and text_frame_id < operation_frame_id
+        ):
             return
         frame = data.frame
         text = getattr(frame, "text", None)
@@ -159,6 +335,14 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
             )
             return
 
+        context_id = getattr(_data.frame, "context_id", None)
+        if (
+            context_id is not None
+            and self._tts_context_id is not None
+            and str(context_id) != self._tts_context_id
+        ):
+            return
+
         self._tts_audio_buffer.append(_data.frame)
 
     def _flush_tts_text(self, span: Any) -> None:
@@ -167,20 +351,42 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
         Shared by ``_handle_tts_stopped`` and the finalizer force-close (D8) so
         partial text survives an abnormal close (error / hung provider) where no
         ``TTSStoppedFrame`` ever arrives. Each attribute reflects ONLY its own frame
-        type (sentence-aggregated → ``tts.input_text``, word/token → interim), each
-        spacing-reconstructed from ``includes_inter_frame_spaces``.
+        type (request aggregate → ``tts.input_text``, sentence playback text →
+        ``tts.spoken_text``, word/token → interim), each spacing-reconstructed from
+        ``includes_inter_frame_spaces``.
         """
         if span is None:
             return
         if self._capture_text:
-            if self._tts_text_buffer:
-                span.attributes["tts.input_text"] = _concatenate_tts_text(
-                    self._tts_text_buffer
-                )
+            request_text = (
+                _concatenate_tts_text(self._tts_request_text_buffer)
+                if self._tts_request_text_buffer
+                else ""
+            )
+            final_text = (
+                _concatenate_tts_text(self._tts_text_buffer)
+                if self._tts_text_buffer
+                else ""
+            )
+            if request_text:
+                span.attributes["tts.input_text"] = request_text
+                span.attributes["tts.input_characters"] = len(request_text)
+                # Backward-compatible canonical count: unlike Pipecat's usage
+                # deltas, this is the complete text represented by this span.
+                span.attributes["tts.characters"] = len(request_text)
+                if final_text:
+                    span.attributes["tts.spoken_text"] = final_text
+            elif final_text:
+                # Compatibility fallback for providers/versions that do not emit
+                # the earlier AggregatedTextFrame request boundary.
+                span.attributes["tts.input_text"] = final_text
+                span.attributes.setdefault("tts.input_characters", len(final_text))
+                span.attributes.setdefault("tts.characters", len(final_text))
             if self._tts_text_interim_buffer:
                 span.attributes["tts.input_text_interim"] = _concatenate_tts_text(
                     self._tts_text_interim_buffer
                 )
+        self._tts_request_text_buffer.clear()
         self._tts_text_buffer.clear()
         self._tts_text_interim_buffer.clear()
 
@@ -189,8 +395,8 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
         ``TTSStoppedFrame``: finish the active ``pipecat.tts`` span.
 
         Attributes set:
-          - ``tts.input_text`` — final sentence-aggregated text (only when
-            sentence-level frames were emitted; absent otherwise)
+          - ``tts.input_text`` — complete request-side aggregated text, with a
+            sentence TTSTextFrame compatibility fallback
           - ``tts.input_text_interim`` — interim word/token-streamed text (only
             when such frames were emitted; absent otherwise)
           - ``tts.audio_uuid`` — UUID of the uploaded WAV (if ``record_audio=True``)
@@ -199,74 +405,125 @@ class _TTSHandlersMixin(_PipecatObserverMixinBase):
             a standalone attribute — it does NOT alter the span's wall-clock timing.
           - ``tts.stopped_at`` — the TTSStoppedFrame time (== the span's end).
         """
-        span = self._active_tts_span
-        if not span:
+        if self._active_tts_span is None:
             return
+        source = getattr(data, "source", None)
+        if (
+            source is not None
+            and self._tts_source_processor is not None
+            and source is not self._tts_source_processor
+        ):
+            return
+        frame = getattr(data, "frame", None)
+        context_id = getattr(frame, "context_id", None)
+        if (
+            context_id is not None
+            and self._tts_context_id is not None
+            and str(context_id) != self._tts_context_id
+        ):
+            return
+        stop_frame_id = getattr(frame, "id", None)
+        operation_frame_id = self._tts_request_frame_id or self._tts_start_frame_id
+        if (
+            isinstance(stop_frame_id, int)
+            and isinstance(operation_frame_id, int)
+            and stop_frame_id < operation_frame_id
+        ):
+            return
+        await self._finalize_tts_operation(
+            complete=True,
+            termination_reason="tts_stopped",
+            terminal_status="ok",
+        )
+
+    async def _finalize_tts_operation(
+        self,
+        *,
+        complete: bool,
+        termination_reason: str,
+        terminal_status: str,
+    ) -> Any:
+        """Flush and finish the active TTS operation exactly once."""
+        span = self._active_tts_span
+        if span is None:
+            return None
+
+        source = self._tts_source_processor
+        frames = list(self._tts_audio_buffer)
+        audio_ms = calculate_audio_duration_ms(frames)
+
+        # Detach the operation before awaiting its sink/upload. Competing terminal
+        # paths then see no active operation and cannot finish or upload it twice.
         self._active_tts_span = None
         self._tts_source_processor = None
-        # Keep a backref so MetricsFrame data (TTS character counts, TTFB) arriving
-        # after this span closes can still be attached to the right span.
-        # Cleared when the next TTS span opens.
+        self._tts_context_id = None
+        self._tts_request_frame_id = None
+        self._tts_start_frame_id = None
         self._last_tts_span = span
+        self._last_tts_source_processor = source
 
-        # Audio playback length, computed before the buffer may be cleared on a
-        # successful upload. Recorded as its own attribute only — the span's
-        # start_time / duration_ms remain true wall-clock (per TRACE_DESIGN §6).
-        audio_ms = calculate_audio_duration_ms(self._tts_audio_buffer)
+        self._flush_tts_text(span)
 
-        try:
-            self._flush_tts_text(span)
+        if span.attributes.get("pipecat_span_status") == "error":
+            terminal_status = "error"
 
-            if audio_ms and audio_ms > 0:
-                span.attributes["tts.audio_duration_ms"] = audio_ms
+        span.attributes["tts.output.complete"] = complete
+        span.attributes["tts.termination_reason"] = termination_reason
+        if audio_ms and audio_ms > 0:
+            span.attributes["tts.audio_duration_ms"] = audio_ms
 
-            tts_status = "ok"
-            if self._record_audio and self._tts_audio_buffer:
-                audio_uuid = str(uuid.uuid4())
-                # Shallow copy: conversation teardown (a different task) clears
-                # the instance buffer, which must not race the encoder thread
-                # iterating it across the awaits below.
-                frames = list(self._tts_audio_buffer)
-                upload_ok = False
-                try:
-                    if self._audio_sink is not None:
-                        upload_ok = await self._sink_segment_audio(
-                            frames,
-                            audio_uuid,
-                            "tts",
-                            span.trace_id,
-                            span.span_id,
-                        )
-                    else:
-                        # WAV encoding is CPU-bound and blocks the event loop; run
-                        # it off the loop thread, matching
-                        # _handlers_stt._handle_transcription.
-                        upload_ok = await asyncio.to_thread(
-                            upload_audio_frames,
-                            frames,
-                            audio_uuid,
-                            "tts",
-                            span.trace_id,
-                            span.span_id,
-                            self._get_client(),
-                        )
-                except Exception as e:  # pylint: disable=broad-except
-                    logger.warning(
-                        "Failed to upload TTS audio %s: %s",
+        if self._record_audio:
+            span.attributes["tts.audio.complete"] = complete
+            span.attributes["tts.audio.present"] = bool(frames)
+
+        if self._record_audio and frames:
+            audio_uuid = str(uuid.uuid4())
+            upload_ok = False
+            try:
+                if self._audio_sink is not None:
+                    upload_ok = await self._sink_segment_audio(
+                        frames,
                         audio_uuid,
-                        e,
-                        exc_info=True,
+                        "tts",
+                        span.trace_id,
+                        span.span_id,
                     )
-                    upload_ok = False
-                if upload_ok:
-                    span.attributes["tts.audio_uuid"] = audio_uuid
-                    self._tts_audio_buffer.clear()
                 else:
-                    tts_status = "upload_failed"
+                    upload_ok = await asyncio.to_thread(
+                        upload_audio_frames,
+                        frames,
+                        audio_uuid,
+                        "tts",
+                        span.trace_id,
+                        span.span_id,
+                        self._get_client(),
+                    )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "Failed to upload TTS audio %s: %s",
+                    audio_uuid,
+                    exc,
+                    exc_info=True,
+                )
+            span.attributes["tts.audio.upload_status"] = "ok" if upload_ok else "failed"
+            if upload_ok:
+                span.attributes["tts.audio_uuid"] = audio_uuid
+                self._tts_audio_buffer.clear()
+            elif terminal_status == "ok":
+                terminal_status = "upload_failed"
+        else:
+            self._tts_audio_buffer.clear()
 
-            span.attributes["pipecat_span_status"] = tts_status
-        finally:
-            span.finish()
-            # Explicit stop timestamp from the TTSStoppedFrame (== the span's end).
-            if span.end_time is not None:
-                span.attributes["tts.stopped_at"] = span.end_time.isoformat()
+        span.attributes["pipecat_span_status"] = terminal_status
+        if hasattr(span, "set_status"):
+            if terminal_status == "error":
+                span.set_status(SpanStatus.ERROR)
+            elif terminal_status == "cancelled":
+                # The ingestion API accepts ok/error/unset only. Preserve the
+                # richer cancellation outcome in pipecat_span_status.
+                span.set_status(SpanStatus.OK)
+
+        self._finish_managed_span(span)
+        if span.end_time is not None:
+            span.attributes["tts.stopped_at"] = span.end_time.isoformat()
+        return span

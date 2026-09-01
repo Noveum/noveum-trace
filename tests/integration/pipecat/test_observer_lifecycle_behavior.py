@@ -166,11 +166,22 @@ async def test_finish_conversation_writes_summary_and_resets_for_reuse() -> None
     trace = Trace(name="pipecat.conversation")
     obs._trace = trace
     obs._metrics_accumulator = {
-        "total_input_tokens": 100,
-        "total_output_tokens": 50,
-        "total_cost": 0.003,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cost": 0.0,
         "turn_count": 2,
     }
+    llm_source = object()
+    llm_span = trace.create_span(name="pipecat.llm")
+    operation = obs._llm_operations.start(
+        llm_source, span=llm_span, model="gpt-4o-mini"
+    )
+    obs._llm_operations.complete(llm_source)
+    obs._llm_operations.record_metric(
+        operation,
+        family="llm_usage",
+        value={"prompt_tokens": 100, "completion_tokens": 50},
+    )
     obs._transcription_buffer = ["hello", "world"]
     obs._current_turn_number = 5  # nonzero so the reset assertion is non-vacuous
     obs._processed_frame_ids = {1, 2, 3}
@@ -183,7 +194,7 @@ async def test_finish_conversation_writes_summary_and_resets_for_reuse() -> None
     # Summary written onto the real trace, with ok status.
     assert trace.attributes["conversation.total_input_tokens"] == 100
     assert trace.attributes["conversation.total_output_tokens"] == 50
-    assert trace.attributes["conversation.total_cost"] == 0.003
+    assert trace.attributes["conversation.total_cost"] > 0
     assert trace.attributes["conversation.turn_count"] == 2
     assert trace.attributes["conversation.last_user_input"] == "hello world"
     assert trace.attributes["pipecat_span_status"] == "ok"
@@ -207,6 +218,43 @@ async def test_finish_conversation_writes_summary_and_resets_for_reuse() -> None
     assert obs._processed_frame_ids == set()
     assert obs._audio_buffer_processor is None
     assert obs._session_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_finish_conversation_prices_gemini_reasoning_like_child_span() -> None:
+    from noveum_trace.integrations.pipecat.pipecat_utils import calculate_llm_cost
+
+    obs = NoveumTraceObserver(record_audio=False)
+    trace = Trace(name="pipecat.conversation")
+    obs._trace = trace
+    source = types.SimpleNamespace(name="GoogleLLMService")
+    span = trace.create_span(name="pipecat.llm")
+    operation = obs._llm_operations.start(
+        source,
+        span=span,
+        processor_name="GoogleLLMService",
+        model="gemini-2.5-flash",
+    )
+    obs._llm_operations.complete(source)
+    obs._llm_operations.record_metric(
+        operation,
+        family="llm_usage",
+        value={
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 33,
+            "reasoning_tokens": 3,
+        },
+    )
+
+    client = MagicMock()
+    with patch.object(obs, "_get_client", return_value=client):
+        await obs._finish_conversation()
+
+    expected = calculate_llm_cost("gemini-2.5-flash", 10, 23)
+    assert trace.attributes["conversation.total_cost"] == pytest.approx(
+        expected["total"]
+    )
 
     # Second conversation on the SAME observer proves reuse.
     trace2 = Trace(name="pipecat.conversation")
@@ -232,6 +280,8 @@ async def test_finish_conversation_cancelled_preserves_prior_error() -> None:
     tts = trace.create_span(name="pipecat.tts")
     obs._active_llm_span = llm
     obs._active_tts_span = tts
+    llm_source = object()
+    obs._llm_operations.start(llm_source, span=llm)
 
     client = MagicMock()
     with patch.object(obs, "_get_client", return_value=client):
@@ -242,6 +292,9 @@ async def test_finish_conversation_cancelled_preserves_prior_error() -> None:
     assert llm.attributes["pipecat_span_status"] == "error"  # preserved
     assert llm.is_finished()
     assert trace.attributes["pipecat_span_status"] == "cancelled"
+    from noveum_trace.core.span import SpanStatus
+
+    assert trace.status is SpanStatus.OK
 
 
 # --------------------------------------------------------------------------- #

@@ -45,6 +45,102 @@ def test_extract_metrics_data_ttfb() -> None:
     assert "LLM" in out["ttfb_processor"]
 
 
+def test_normalize_metrics_data_preserves_every_item_and_identity() -> None:
+    pytest.importorskip("pipecat.metrics.metrics")
+    from pipecat.frames.frames import MetricsFrame
+    from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import normalize_metrics_data
+
+    frame = MetricsFrame(
+        data=[
+            TTFBMetricsData(processor="stt-a", model="nova", value=0.1),
+            TTFBMetricsData(processor="llm-b", model="gpt", value=0.2),
+            ProcessingMetricsData(processor="tts-c", model="sonic", value=0.3),
+        ]
+    )
+    records = normalize_metrics_data(frame)
+
+    assert len(records) == 3
+    assert [record.family for record in records] == ["ttfb", "ttfb", "processing"]
+    assert [record.value for record in records] == pytest.approx([0.1, 0.2, 0.3])
+    assert [record.unit for record in records] == ["seconds", "seconds", "seconds"]
+    assert [record.processor for record in records] == ["stt-a", "llm-b", "tts-c"]
+    assert [record.model for record in records] == ["nova", "gpt", "sonic"]
+
+
+def test_normalize_metrics_data_preserves_zero_values() -> None:
+    pytest.importorskip("pipecat.metrics.metrics")
+    from pipecat.frames.frames import MetricsFrame
+    from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import (
+        extract_metrics_data,
+        normalize_metrics_data,
+    )
+
+    frame = MetricsFrame(
+        data=[
+            TTFBMetricsData(processor="llm", value=0.0),
+            ProcessingMetricsData(processor="llm", value=0.0),
+        ]
+    )
+    assert [record.value for record in normalize_metrics_data(frame)] == [0.0, 0.0]
+    assert extract_metrics_data(frame)["ttfb_seconds"] == 0.0
+    assert extract_metrics_data(frame)["processing_seconds"] == 0.0
+
+
+def test_normalize_metrics_data_keeps_structured_usage_per_item() -> None:
+    pytest.importorskip("pipecat.metrics.metrics")
+    from pipecat.frames.frames import MetricsFrame
+    from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import normalize_metrics_data
+
+    frame = MetricsFrame(
+        data=[
+            LLMUsageMetricsData(
+                processor="llm-a",
+                model="model-a",
+                value=LLMTokenUsage(
+                    prompt_tokens=1, completion_tokens=2, total_tokens=3
+                ),
+            ),
+            LLMUsageMetricsData(
+                processor="llm-b",
+                model="model-b",
+                value=LLMTokenUsage(
+                    prompt_tokens=4, completion_tokens=5, total_tokens=9
+                ),
+            ),
+        ]
+    )
+    records = normalize_metrics_data(frame)
+    assert [record.value for record in records] == [
+        {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9},
+    ]
+    assert [record.processor for record in records] == ["llm-a", "llm-b"]
+
+
+def test_normalize_metrics_data_preserves_unknown_items() -> None:
+    from noveum_trace.integrations.pipecat.pipecat_utils import normalize_metrics_data
+
+    class _FutureMetricsData:
+        processor = "future-processor"
+        model = "future-model"
+        value = 0
+
+    frame = MagicMock()
+    frame.data = [_FutureMetricsData()]
+    [record] = normalize_metrics_data(frame)
+    assert record.native_class == "_FutureMetricsData"
+    assert record.family == "unknown"
+    assert record.value == 0
+    assert record.processor == "future-processor"
+    assert record.model == "future-model"
+
+
 def test_upload_audio_frames_uses_passed_client() -> None:
     pytest.importorskip("pipecat.frames.frames")
     from pipecat.frames.frames import AudioRawFrame
@@ -445,11 +541,51 @@ def test_llm_token_usage_model_dump() -> None:
             "prompt_tokens": 1,
             "completion_tokens": 2,
             "reasoning_tokens": 5,
+            "input_audio_tokens": 6,
+            "output_audio_tokens": 7,
+            "cache_read_input_audio_tokens": 8,
         }
     )
     out = _llm_token_usage_to_dict(u)
     assert out["total_tokens"] == 3
     assert out["reasoning_tokens"] == 5
+    assert out["input_audio_tokens"] == 6
+    assert out["output_audio_tokens"] == 7
+    assert out["cache_read_input_audio_tokens"] == 8
+
+
+def test_normalize_optional_ttfa_and_stt_usage(monkeypatch) -> None:
+    pytest.importorskip("pipecat.metrics.metrics")
+    from pipecat.metrics import metrics
+
+    from noveum_trace.integrations.pipecat.pipecat_utils import (
+        normalize_metrics_data,
+    )
+
+    class _TTFA:
+        processor = "voice"
+        model = "model"
+        ttfa = 0.4
+        ttfb = 0.25
+        leading_silence = 0.15
+
+    class _STTUsage:
+        processor = "speech"
+        model = None
+        value = types.SimpleNamespace(audio_seconds=1.5)
+
+    monkeypatch.setattr(metrics, "TTFAMetricsData", _TTFA, raising=False)
+    monkeypatch.setattr(metrics, "STTUsageMetricsData", _STTUsage, raising=False)
+    records = normalize_metrics_data(types.SimpleNamespace(data=[_TTFA(), _STTUsage()]))
+
+    assert records[0].family == "ttfa"
+    assert records[0].value == {
+        "ttfa": 0.4,
+        "ttfb": 0.25,
+        "leading_silence": 0.15,
+    }
+    assert records[1].family == "stt_usage"
+    assert records[1].value == {"audio_seconds": 1.5}
 
 
 def test_llm_token_usage_computes_total() -> None:
