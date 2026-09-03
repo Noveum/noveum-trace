@@ -21,13 +21,15 @@ released package.
 |-----------|-----------|---------------|---------------|-----------------|
 | LangChain | `noveum_trace.integrations.langchain` (also re-exported at package root) | `langchain` | `NoveumTraceCallbackHandler` | Community-maintained observability integration (callback handler). No upstream PR yet. |
 | LangGraph | `noveum_trace.integrations.langchain` (same handler) | `langchain` (no separate `langgraph` extra) | `NoveumTraceCallbackHandler` (optionally `use_langchain_assigned_parent=True`) | Community-maintained observability integration (callback handler). No upstream PR yet. |
+| LlamaIndex | `noveum_trace.integrations.llamaindex` (also re-exported at package root) | `llamaindex` | `setup_llamaindex_tracing()` | Community-maintained observability integration (instrumentation span + event handlers). Candidate for upstream docs/listing. |
 | LiveKit | `noveum_trace.integrations.livekit` | `livekit` | `setup_livekit_tracing(session)` | Community-maintained observability integration. Candidate for upstream docs/listing. |
 | Pipecat | `noveum_trace.integrations.pipecat` | `pipecat` (add `pipecat-otel` for OTEL span export) | `NoveumPipecatTracer` (two-call: `observe_pipeline` + `register_task_handlers`) | Community-maintained observability integration (observer). Candidate for upstream docs/listing. |
 | CrewAI | `noveum_trace.integrations.crewai` | `crewai` | `setup_crewai_tracing()` (or `NoveumCrewAIListener`) | Community-maintained observability integration (listener). Candidate for upstream docs/listing. |
 | OpenAI Agents SDK | `noveum_trace.integrations.openai_agents` (also re-exported at package root) | `openai-agents` | `setup_openai_agents_tracing()` (or `NoveumTraceProcessor`) | Community-maintained observability integration (external trace processor). Candidate for upstream docs/listing. |
 | OpenTelemetry alignment | `noveum_trace.integrations.pipecat.custom_spans` | `pipecat-otel` | Plain OTEL spans folded into the Pipecat trace via `capture_custom_spans=True` (registers an OTEL `SpanProcessor`) | Bridge only — there is no standalone OTEL exporter. Do not describe a general-purpose OpenTelemetry backend. |
 
-**Not yet supported — do not claim support in any listing:** LlamaIndex,
+
+
 AutoGen, Vercel AI SDK, and LiteLLM have no dedicated integration
 module in `src/noveum_trace/integrations/`. Direct OpenAI/Anthropic calls can be
 traced with the core context managers (`trace_llm_call`), but that is not a
@@ -47,6 +49,7 @@ and the upstream framework's own floor.
 | Core SDK / direct OpenAI + Anthropic | 3.9+ | `openai>=1.0.0`, `anthropic>=0.3.0` |
 | LangChain | 3.10+ | `langchain-core>=0.1.0` (+ `Pillow>=9.0.0`) |
 | LangGraph | 3.10+ | `langchain-core>=0.1.0` (shares the `langchain` extra) |
+| LlamaIndex | 3.10+ | `llama-index-core>=0.11,<1.0; python_version>='3.10'` |
 | LiveKit | 3.10+ | `livekit>=1.0.19,<2`, `livekit-agents>=1.0.0` |
 | CrewAI | 3.10+ | `crewai>=0.177.0; python_version>='3.10'` |
 | OpenAI Agents SDK | 3.10+ | `openai-agents>=0.19.2; python_version>='3.10'` |
@@ -133,6 +136,25 @@ noveum_trace.init(api_key="...", project="voice-agent")
 setup_livekit_tracing(session)  # record=True captures full conversation audio
 ```
 
+### LlamaIndex — `setup_llamaindex_tracing`
+
+```python
+import noveum_trace
+from noveum_trace.integrations.llamaindex import setup_llamaindex_tracing
+
+noveum_trace.init(api_key="...", project="my-rag-app")
+
+setup_llamaindex_tracing()  # registers span + event handlers on the root dispatcher
+# ... build and query your index as usual ...
+```
+
+Registers span + event handlers on LlamaIndex's instrumentation dispatcher
+(`llama_index.core.instrumentation`), mapping query engines, retrievers,
+synthesizers, LLM, and embedding calls onto Noveum traces/spans.
+`setup_llamaindex_tracing()` raises if `noveum_trace.init()` has not run and no
+explicit `client=` is given. For a short-lived process, call
+`noveum_trace.flush()` then `noveum_trace.shutdown()` before exit.
+
 ### LangChain / LangGraph — `NoveumTraceCallbackHandler`
 
 ```python
@@ -204,6 +226,25 @@ no event handlers, no audio upload), pass `enabled=False`.
 observer also exposes `capture_text=True` (LLM/TTS text) and
 `capture_function_calls=True` (tool calls). Set `record_audio` /
 `record_raw_input_audio` / `capture_text` to `False` to reduce what is stored.
+
+### LlamaIndex — `setup_llamaindex_tracing(...)`
+
+All default `True`, matching the other capture-by-default integrations:
+`capture_inputs` (query / retrieval / rerank query text, rerank input nodes,
+agent tool arguments), `capture_outputs` (LLM response text, query response text,
+retrieved node content, query source nodes, reranked output nodes),
+`capture_llm_messages` (LLM prompt messages, system prompts, available tool
+schemas — *not* LLM responses, which follow `capture_outputs`), and
+`capture_cost`. Non-capture default: `trace_name_prefix="llamaindex"`. Model
+name, token usage, node counts and retriever-reported scores, configured `top_k`,
+embedding counts and vector width, and errors are always captured. Payloads are
+not truncated.
+
+The one exception is `capture_embedding_chunks=False` — the *text* being
+embedded. Indexing a corpus emits an embedding call per batch, so enabling it
+copies the whole source corpus into the trace store; useful for building
+evaluation datasets from a small index, expensive on a large one. Embedding
+vectors themselves are never attached under any setting.
 
 ### LangChain / LangGraph — `NoveumTraceCallbackHandler`
 

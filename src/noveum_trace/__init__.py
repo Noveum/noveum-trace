@@ -476,6 +476,19 @@ except ImportError:
     pass
 
 try:
+    from noveum_trace.integrations.llamaindex import (
+        NoveumLlamaIndexSpanHandler,
+        setup_llamaindex_tracing,
+    )
+
+    _integration_exports.extend(
+        ["NoveumLlamaIndexSpanHandler", "setup_llamaindex_tracing"]
+    )
+except Exception:
+    # LlamaIndex not installed, or unusable on this runtime (e.g. Python 3.9).
+    # An optional integration must never break ``import noveum_trace``.
+    pass
+try:
     import agents  # noqa: F401
 
     from noveum_trace.integrations.openai_agents import (

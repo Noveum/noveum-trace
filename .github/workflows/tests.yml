@@ -33,6 +33,12 @@ jobs:
           pip install -e ".[dev]"
           pip install livekit livekit-agents
 
+      - name: Install llama-index-core (Python 3.10+)
+        # llama-index-core requires Python 3.10+ (its transitive `banks` dep uses
+        # 3.10 union syntax). On 3.9 the LlamaIndex handler tests skip via
+        # importorskip; on 3.10+ they run against the real package.
+        if: matrix.python-version != '3.9'
+        run: pip install "llama-index-core>=0.11,<1.0"
       - name: Install OpenAI Agents SDK (Python 3.10+)
         # openai-agents requires Python 3.10+. On 3.9 the processor's unit tests
         # run against the module's fallback base-class stub; on 3.10+ we install

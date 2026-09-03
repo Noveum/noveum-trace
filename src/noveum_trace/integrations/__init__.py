@@ -71,6 +71,21 @@ try:
 except ImportError:
     pass
 
+# LlamaIndex integration (requires llama-index-core, Python 3.10+).
+# Catch any exception, not just ImportError: llama-index-core's import chain can
+# raise other errors on unsupported runtimes (e.g. a transitive `banks` TypeError
+# on Python 3.9), and an optional integration must never break ``import
+# noveum_trace``.
+try:
+    from noveum_trace.integrations.llamaindex import (
+        NoveumLlamaIndexSpanHandler,
+        setup_llamaindex_tracing,
+    )
+
+    __all__.extend(["NoveumLlamaIndexSpanHandler", "setup_llamaindex_tracing"])
+except Exception:
+    pass
+
 # OpenAI Agents SDK integration (requires Python 3.10+ and openai-agents)
 try:
     import agents  # noqa: F401
