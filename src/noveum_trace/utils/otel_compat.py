@@ -91,6 +91,7 @@ def to_otel_span_id(span_id: Optional[str]) -> Optional[str]:
 # Cost / ttft / tokens-per-second have no OTel standard and are intentionally omitted
 # (they remain available under their original llm.* keys).
 _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("gen_ai.system", ("llm.provider",)),
     ("gen_ai.request.model", ("llm.model",)),
     ("gen_ai.response.model", ("llm.response_model",)),
     ("gen_ai.provider.name", ("llm.provider",)),
@@ -104,6 +105,14 @@ _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("llm.output_tokens", "llm.completion_tokens", "llm.usage.output_tokens"),
     ),
     ("gen_ai.request.temperature", ("llm.temperature", "llm.input.temperature")),
+    (
+        "gen_ai.request.presence_penalty",
+        ("llm.presence_penalty", "llm.input.presence_penalty"),
+    ),
+    (
+        "gen_ai.request.frequency_penalty",
+        ("llm.frequency_penalty", "llm.input.frequency_penalty"),
+    ),
     ("gen_ai.request.max_tokens", ("llm.max_tokens",)),
     ("gen_ai.request.top_p", ("llm.top_p",)),
     ("gen_ai.input.messages", ("llm.input.messages", "llm.chat_ctx", "llm.input")),
@@ -114,13 +123,30 @@ _GEN_AI_CROSSWALK: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gen_ai.response.id", ("llm.request_id",)),
 )
 
+# Map provider aliases to standard OpenTelemetry gen_ai.system identifiers.
+_SYSTEM_NORMALIZATION: dict[str, str] = {
+    "google": "gemini",
+    "bedrock": "aws.bedrock",
+    "aws": "aws.bedrock",
+    "azure": "azure.openai",
+}
+
 
 def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
     """
     Derive ``gen_ai.*`` attributes from existing ``llm.*`` attributes.
 
-    Returns only the new keys to merge in; never overwrites a ``gen_ai.*`` key that is
-    already present. Does not mutate ``attrs``.
+    Maps legacy and internal LLM attributes to standard OpenTelemetry GenAI
+    semantic conventions (v1.28.0+). Ensures finish reasons and stop sequences
+    are properly normalized to arrays, and normalizes known provider names to
+    standard OTel system identifiers (e.g. ``google`` -> ``gemini``).
+
+    Args:
+        attrs: Dictionary of span attributes.
+
+    Returns:
+        Dictionary of derived ``gen_ai.*`` attributes to merge in. Never
+        overwrites existing ``gen_ai.*`` keys and does not mutate the input dictionary.
     """
     result: dict[str, Any] = {}
     for target, sources in _GEN_AI_CROSSWALK:
@@ -128,6 +154,8 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
             continue
         found, value = _first_present(attrs, *sources)
         if found:
+            if target == "gen_ai.system" and isinstance(value, str):
+                value = _SYSTEM_NORMALIZATION.get(value.lower(), value)
             result[target] = value
 
     # finish_reasons is an array in OTel; wrap a scalar source value.
@@ -135,6 +163,20 @@ def derive_gen_ai_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
         found, value = _first_present(attrs, "llm.finish_reason")
         if found:
             result["gen_ai.response.finish_reasons"] = (
+                value if isinstance(value, list) else [value]
+            )
+
+    # stop_sequences is an array in OTel; wrap a scalar source value.
+    if "gen_ai.request.stop_sequences" not in attrs:
+        found, value = _first_present(
+            attrs,
+            "llm.stop",
+            "llm.stop_sequences",
+            "llm.input.stop",
+            "llm.input.stop_sequences",
+        )
+        if found:
+            result["gen_ai.request.stop_sequences"] = (
                 value if isinstance(value, list) else [value]
             )
 
