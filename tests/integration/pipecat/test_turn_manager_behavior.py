@@ -169,7 +169,6 @@ async def test_interruption_internal_cancels_and_clears() -> None:
     obs._tts_text_interim_buffer = [("z", False)]
     obs._tts_audio_buffer = [object()]
     obs._pending_function_calls = {"a": {}}
-    obs._pending_thought_signatures = ["stale"]
     obs._function_call_owner = {"a": object()}
     obs._resolved_function_call_ids = {"a"}
 
@@ -194,7 +193,6 @@ async def test_interruption_internal_cancels_and_clears() -> None:
     assert obs._tts_text_interim_buffer == []  # interim buffer cleared too (was #13)
     assert obs._tts_audio_buffer == []
     assert obs._pending_function_calls == {}
-    assert obs._pending_thought_signatures == []
     assert obs._function_call_owner == {}
     assert obs._resolved_function_call_ids == set()
 

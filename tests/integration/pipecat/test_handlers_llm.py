@@ -269,3 +269,115 @@ async def test_downstream_google_signature_dispatches_from_llm_source(ff) -> Non
     await obs._handle_llm_response_end(SimpleNamespace(source=source))
 
     assert span.attributes["llm.thought_signatures"] == ["SIG-real"]
+
+
+@pytest.mark.asyncio
+async def test_sourceless_signature_with_concurrent_operations_is_dropped(ff) -> None:
+    """A signature that resolves to no single operation has no correlation key.
+
+    It must be discarded rather than handed to whichever operation ends next.
+    """
+    from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
+
+    obs = _obs()
+    source_a, span_a = await _start_llm(
+        obs, ff, SimpleNamespace(name="llm-a", _settings=None)
+    )
+    source_b, span_b = await _start_llm(
+        obs, ff, SimpleNamespace(name="llm-b", _settings=None)
+    )
+    signature = LLMSpecificMessage(
+        llm="google", message={"type": "thought_signature", "signature": "SIG-x"}
+    )
+    await obs._handle_llm_messages_append(
+        SimpleNamespace(
+            frame=ff.LLMMessagesAppendFrame(messages=[signature]),
+            source=None,
+            destination=None,
+        )
+    )
+    await obs._handle_llm_response_end(SimpleNamespace(source=source_a))
+    await obs._handle_llm_response_end(SimpleNamespace(source=source_b))
+
+    assert "llm.thought_signatures" not in span_a.attributes
+    assert "llm.thought_signatures" not in span_b.attributes
+
+
+@pytest.mark.asyncio
+async def test_idless_in_progress_resolves_against_started_batch(ff) -> None:
+    """ID-less FunctionCallInProgressFrame must reuse the batch's minted IDs.
+
+    Regression: the in-progress path minted ``tool-<len(dict)+1>`` which, after a
+    FunctionCallsStartedFrame had recorded N ID-less calls, produced a phantom
+    N+1th entry instead of enriching ``tool-1``.
+    """
+    obs = _obs()
+    source, _span = await _start_llm(obs, ff)
+    started = ff.FunctionCallsStartedFrame(
+        function_calls=[
+            SimpleNamespace(function_name="a", tool_call_id="", arguments={}),
+            SimpleNamespace(function_name="b", tool_call_id="", arguments={}),
+        ]
+    )
+    await obs._handle_function_calls_started(
+        SimpleNamespace(frame=started, source=source)
+    )
+    operation = obs._llm_operations.get_active(source)
+    batch_ids = list(operation.requested_function_calls)
+    assert batch_ids == [
+        f"{operation.operation_id}:tool-1",
+        f"{operation.operation_id}:tool-2",
+    ]
+
+    async def _in_progress(name: str, arguments: dict) -> None:
+        await obs._handle_function_call_start(
+            SimpleNamespace(
+                frame=ff.FunctionCallInProgressFrame(
+                    function_name=name, tool_call_id="", arguments=arguments
+                ),
+                source=source,
+            )
+        )
+
+    await _in_progress("a", {"x": 1})
+    # Positional resolution: no phantom third entry, tool-1 got enriched.
+    assert list(operation.requested_function_calls) == batch_ids
+    enriched = operation.requested_function_calls[batch_ids[0]]
+    assert enriched["arguments"] == '{"x": 1}'
+
+    await _in_progress("b", {})
+    assert list(operation.requested_function_calls) == batch_ids
+
+    # Batch exhausted: mint a fresh ID that cannot collide with the batch.
+    await _in_progress("c", {})
+    assert list(operation.requested_function_calls) == batch_ids + [
+        f"{operation.operation_id}:tool-3"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_idless_result_and_cancel_are_recorded_uncorrelated(ff) -> None:
+    """A result/cancel with no tool_call_id is kept, built from the frame alone."""
+    obs = _obs()
+    source, _span = await _start_llm(obs, ff)
+    await obs._handle_function_call_result(
+        SimpleNamespace(
+            frame=ff.FunctionCallResultFrame(
+                function_name="f", tool_call_id="", arguments={}, result={"ok": True}
+            ),
+            source=source,
+        )
+    )
+    await obs._handle_function_call_cancel(
+        SimpleNamespace(
+            frame=ff.FunctionCallCancelFrame(function_name="g", tool_call_id=""),
+            source=source,
+        )
+    )
+    operation = obs._llm_operations.get_active(source)
+    result, cancelled = operation.function_call_results
+    assert result["tool_call_id"] == ""
+    assert result["name"] == "f"
+    assert json.loads(result["result"]) == {"ok": True}
+    assert "cancelled" not in result
+    assert cancelled == {"tool_call_id": "", "name": "g", "cancelled": True}

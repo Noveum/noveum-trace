@@ -59,10 +59,14 @@ class _MetricsHandlerMixin(_PipecatObserverMixinBase):
         )
         if len(processors) != 1:
             reason = "multiple_matches" if len(processors) > 1 else "zero_matches"
+            # Diagnostic enumeration only: nothing is attributed here, so it must
+            # not claim STT metric ownership for the utterance as a side effect.
             operation_candidates = [
                 target
                 for processor in processors
-                for target in self._metric_operation_targets(processor)
+                for target in self._metric_operation_targets(
+                    processor, claim_stt_owner=False
+                )
                 if required_role is None or target[0] == required_role
             ]
             self._emit_unattributed_metric_span(
@@ -116,8 +120,14 @@ class _MetricsHandlerMixin(_PipecatObserverMixinBase):
             and metric_frame_id < start_frame_id
         )
 
-    def _metric_operation_targets(self, processor: Any) -> list[tuple[str, Any]]:
-        """Return active-or-metrics-pending operations for one exact processor."""
+    def _metric_operation_targets(
+        self, processor: Any, *, claim_stt_owner: bool = True
+    ) -> list[tuple[str, Any]]:
+        """Return active-or-metrics-pending operations for one exact processor.
+
+        ``claim_stt_owner`` pins the first STT processor seen as the utterance's
+        metric owner. Pass ``False`` when merely enumerating candidates.
+        """
         targets: list[tuple[str, Any]] = []
         if processor.has_role(PROCESSOR_ROLE_LLM):
             operation = self._llm_operations.get_metrics_target(processor.processor)
@@ -125,7 +135,7 @@ class _MetricsHandlerMixin(_PipecatObserverMixinBase):
                 targets.append((PROCESSOR_ROLE_LLM, operation))
         if processor.has_role(PROCESSOR_ROLE_STT):
             if self._active_stt_span is not None:
-                if self._stt_metric_processor is None:
+                if claim_stt_owner and self._stt_metric_processor is None:
                     self._stt_metric_processor = processor.processor
                 if self._stt_metric_processor is processor.processor:
                     targets.append((PROCESSOR_ROLE_STT, self._active_stt_span))

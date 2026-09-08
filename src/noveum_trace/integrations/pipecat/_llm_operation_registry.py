@@ -65,6 +65,11 @@ class LLMOperationRecord:
     thought_signatures: list[str] = field(default_factory=list)
     markers: list[dict[str, Any]] = field(default_factory=list)
     requested_function_calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # IDs minted for calls that arrived without a tool_call_id. The batch from
+    # FunctionCallsStartedFrame queues its minted IDs here so the matching ID-less
+    # FunctionCallInProgressFrame resolves positionally instead of minting again.
+    unclaimed_synthesized_call_ids: list[str] = field(default_factory=list)
+    synthesized_call_count: int = 0
     executed_function_calls: list[dict[str, Any]] = field(default_factory=list)
     function_call_results: list[dict[str, Any]] = field(default_factory=list)
     raw_metrics: list[LLMMetricObservation] = field(default_factory=list)

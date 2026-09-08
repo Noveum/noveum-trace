@@ -340,7 +340,6 @@ class NoveumTraceObserver(
         self._llm_thought_buffer: list[str] = []
         self._llm_thoughts_list: list[str] = []
         self._llm_thought_signatures_list: list[str] = []
-        self._pending_thought_signatures: list[str] = []
 
         # Audio buffers (populated only when record_audio=True)
         self._stt_audio_buffer: list[Any] = []
@@ -1246,8 +1245,7 @@ class NoveumTraceObserver(
                         if handler:
                             await handler(data)
                         if fid is not None:
-                            self._processed_frame_ids.add(fid)
-                            self._frame_id_history.append(fid)
+                            self._mark_frame_processed(fid)
 
                     if fid is not None:
                         route_key = (fid, id(destination))
@@ -1284,10 +1282,7 @@ class NoveumTraceObserver(
                 if fid is not None:
                     if fid in self._processed_frame_ids:
                         return
-                    self._processed_frame_ids.add(fid)
-                    self._frame_id_history.append(fid)
-                    if len(self._processed_frame_ids) > len(self._frame_id_history):
-                        self._processed_frame_ids = set(self._frame_id_history)
+                    self._mark_frame_processed(fid)
                 handler = self._frame_handlers.get(type(frame))
                 if handler:
                     await handler(data)
@@ -1304,12 +1299,7 @@ class NoveumTraceObserver(
                         if fid is not None:
                             if fid in self._processed_frame_ids:
                                 return
-                            self._processed_frame_ids.add(fid)
-                            self._frame_id_history.append(fid)
-                            if len(self._processed_frame_ids) > len(
-                                self._frame_id_history
-                            ):
-                                self._processed_frame_ids = set(self._frame_id_history)
+                            self._mark_frame_processed(fid)
                         handler = self._frame_handlers.get(type(frame))
                         if handler:
                             await handler(data)
@@ -1350,20 +1340,7 @@ class NoveumTraceObserver(
                 return
 
             if fid is not None:
-                self._processed_frame_ids.add(fid)
-                self._frame_id_history.append(fid)
-                if len(self._processed_frame_ids) > len(self._frame_id_history):
-                    # Window eviction: oldest IDs are being dropped while frames may
-                    # still be in-flight through downstream processors.  If this fires
-                    # frequently it means MAX_FRAME_DEDUP_HISTORY is too small and audio
-                    # frames could be double-buffered, producing choppy WAV output.
-                    logger.warning(
-                        "Dedup window full (%d slots): evicting oldest frame IDs. "
-                        "Consider increasing MAX_FRAME_DEDUP_HISTORY (currently %d).",
-                        len(self._frame_id_history),
-                        MAX_FRAME_DEDUP_HISTORY,
-                    )
-                    self._processed_frame_ids = set(self._frame_id_history)
+                self._mark_frame_processed(fid)
 
             handler = self._frame_handlers.get(type(data.frame))
             if handler:
@@ -1451,6 +1428,28 @@ class NoveumTraceObserver(
         except Exception as e:
             logger.warning("Failed to create span '%s': %s", name, e, exc_info=True)
             return None
+
+    def _mark_frame_processed(self, fid: int) -> None:
+        """Record a processed frame ID and keep the dedup set inside its window.
+
+        ``_frame_id_history`` is a bounded deque that silently evicts its oldest
+        entry once full; the set mirror does not, so every add site must resync
+        through here or the set grows without bound.
+        """
+        self._processed_frame_ids.add(fid)
+        self._frame_id_history.append(fid)
+        if len(self._processed_frame_ids) > len(self._frame_id_history):
+            # Window eviction: oldest IDs are being dropped while frames may
+            # still be in-flight through downstream processors.  If this fires
+            # frequently it means MAX_FRAME_DEDUP_HISTORY is too small and audio
+            # frames could be double-buffered, producing choppy WAV output.
+            logger.warning(
+                "Dedup window full (%d slots): evicting oldest frame IDs. "
+                "Consider increasing MAX_FRAME_DEDUP_HISTORY (currently %d).",
+                len(self._frame_id_history),
+                MAX_FRAME_DEDUP_HISTORY,
+            )
+            self._processed_frame_ids = set(self._frame_id_history)
 
     def _finish_managed_span(self, span: Any) -> None:
         """Finish a child through its trace when that trace still owns it."""
@@ -1844,7 +1843,6 @@ class NoveumTraceObserver(
         self._pending_llm_context.clear()
         self._global_llm_context_generation = 0
         self._global_llm_context_consumed.clear()
-        self._pending_thought_signatures.clear()
         self._llm_operations.clear()
         self._processor_registry.clear()
         self._metric_fingerprints.clear()

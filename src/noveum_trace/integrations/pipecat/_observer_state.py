@@ -63,9 +63,6 @@ class _PipecatObserverState:
     _llm_thought_buffer: list[str]
     _llm_thoughts_list: list[str]
     _llm_thought_signatures_list: list[str]
-    # Thought signatures delivered out-of-band via LLMMessagesAppendFrame (Gemini),
-    # collected during a response and flushed to llm.thought_signatures at its end (B8).
-    _pending_thought_signatures: list[str]
 
     _stt_audio_buffer: list[Any]
     _stt_raw_audio_buffer: list[Any]

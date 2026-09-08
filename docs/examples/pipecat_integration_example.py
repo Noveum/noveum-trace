@@ -415,7 +415,6 @@ If they ask for something not on the menu, politely let them know and suggest al
             tts,  # Text-to-Speech
             transport.output(),  # Transport bot output
             assistant_aggregator,  # Assistant spoken responses
-            audio_buffer,  # Full-conversation stereo recording
         ]
     )
 

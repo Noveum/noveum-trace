@@ -502,7 +502,6 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         # Operation finalizers own the data-bearing buffers. These scalar fields
         # remain only for compatibility with direct-handler callers.
         self._llm_text_buffer.clear()
-        self._pending_thought_signatures.clear()
         self._pending_function_calls.clear()
         self._function_call_owner.clear()
         self._resolved_function_call_ids.clear()

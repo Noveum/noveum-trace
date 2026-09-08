@@ -253,7 +253,8 @@ async def test_gemini_thought_signature_captured_and_not_leaked() -> None:
 @pytest.mark.asyncio
 async def test_thought_signature_only_append_is_fully_dropped_from_input() -> None:
     """B9: an append frame carrying ONLY a thought_signature message adds nothing to
-    the pending context (no empty/garbage stash)."""
+    the pending context (no empty/garbage stash). With no LLM operation to own it
+    the signature has no correlation key and is discarded, not parked."""
     from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
 
     obs, trace, turn = _new_obs()
@@ -266,7 +267,13 @@ async def test_thought_signature_only_append_is_fully_dropped_from_input() -> No
         _data(ff.LLMMessagesAppendFrame(messages=[sig_msg]))
     )
     assert "messages" not in obs._pending_llm_context
-    assert obs._pending_thought_signatures == ["S1"]
+    assert not hasattr(obs, "_pending_thought_signatures")
+    # A later operation must not inherit the orphaned signature.
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span = obs._active_llm_span
+    await obs._handle_llm_response_end(_data(ff.LLMFullResponseEndFrame(), source))
+    assert "llm.thought_signatures" not in span.attributes
 
 
 # --------------------------------------------------------------------------- #

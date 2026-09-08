@@ -213,10 +213,11 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
 
         B8/B9: Gemini delivers thought signatures through this frame as
         ``{"type": "thought_signature", "signature": ...}`` messages. Those are
-        captured into ``_pending_thought_signatures`` (flushed to
-        ``llm.thought_signatures`` at response end) and kept OUT of the stashed
-        context — otherwise the opaque signature blob leaks into the next LLM
-        span's ``llm.input``.
+        attached to the exact emitting operation's ``thought_signatures`` and kept
+        OUT of the stashed context — otherwise the opaque signature blob leaks
+        into the next LLM span's ``llm.input``. A signature whose operation cannot
+        be resolved has no correlation key and is dropped: parking it in shared
+        state would hand it to whichever operation happens to end next.
         """
         frame = data.frame
         new_msgs = getattr(frame, "messages", None)
@@ -237,7 +238,11 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                         else:
                             operation.thought_signatures[empty_index] = sig
                     else:
-                        self._pending_thought_signatures.append(sig)
+                        logger.debug(
+                            "Dropping thought signature with no resolvable LLM "
+                            "operation (source=%r)",
+                            getattr(data, "source", None),
+                        )
                 continue
             kept.append(m)
         if not kept:
@@ -475,18 +480,6 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         operation = self._resolve_llm_operation(data)
         if operation is None:
             return
-        # Preserve unmatched Gemini signatures collected through source-less append
-        # frames without reintroducing shared output/thought buffers. A Gemini
-        # signature belongs to the preceding bare thought-end, so fill empty
-        # placeholders before appending any genuinely unpaired signatures.
-        for signature in self._pending_thought_signatures:
-            try:
-                empty_index = operation.thought_signatures.index("")
-            except ValueError:
-                operation.thought_signatures.append(signature)
-            else:
-                operation.thought_signatures[empty_index] = signature
-        self._pending_thought_signatures.clear()
         self._finalize_llm_operation(
             operation,
             complete=True,
@@ -653,6 +646,45 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         return None
 
     @staticmethod
+    def _mint_tool_call_id(operation: LLMOperationRecord, ordinal: int) -> str:
+        """Mint ``<operation>:tool-<n>`` and advance the per-operation counter.
+
+        The counter only ever moves forward, so a later mint can never collide
+        with an ID minted positionally from a FunctionCallsStartedFrame batch.
+        """
+        operation.synthesized_call_count = max(
+            operation.synthesized_call_count, ordinal
+        )
+        return f"{operation.operation_id}:tool-{ordinal}"
+
+    def _resolve_tool_call_id(
+        self, operation: LLMOperationRecord, original_id: str
+    ) -> str:
+        """Return the operation-scoped ID for an in-progress call frame.
+
+        Frames carrying an ID keep it. An ID-less frame resolves positionally to
+        the next unclaimed ID minted by FunctionCallsStartedFrame; once that batch
+        is consumed a fresh ID is minted so the two paths never diverge.
+        """
+        if original_id:
+            return original_id
+        if operation.unclaimed_synthesized_call_ids:
+            return operation.unclaimed_synthesized_call_ids.pop(0)
+        return self._mint_tool_call_id(operation, operation.synthesized_call_count + 1)
+
+    @staticmethod
+    def _uncorrelated_call_dict(
+        tool_call_id: str, fc_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build a result entry from the frame alone when no request was recorded."""
+        call_dict: dict[str, Any] = {"tool_call_id": tool_call_id}
+        if fc_data.get("function_name"):
+            call_dict["name"] = fc_data["function_name"]
+        if fc_data.get("arguments") is not None:
+            call_dict["arguments"] = fc_data["arguments"]
+        return call_dict
+
+    @staticmethod
     def _write_function_state(operation: LLMOperationRecord) -> None:
         """Late-enrich a logically completed span with operation-owned tool state."""
         if operation.requested_function_calls:
@@ -677,9 +709,13 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         for request_order, function_call in enumerate(func_calls):
             call_data = extract_function_call_data(function_call)
             original_id = call_data.get("tool_call_id", "")
-            tool_call_id = original_id or (
-                f"{operation.operation_id}:tool-{request_order + 1}"
+            tool_call_id = original_id or self._mint_tool_call_id(
+                operation, request_order + 1
             )
+            if tool_call_id in operation.requested_function_calls:
+                # Double-broadcast of the same batch: keep the first record and
+                # do not queue the minted ID a second time.
+                continue
             call_dict: dict[str, Any] = {
                 "tool_call_id": tool_call_id,
                 "request_order": request_order,
@@ -690,7 +726,8 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
                 call_dict["arguments"] = call_data["arguments"]
             if not original_id:
                 call_dict["original_tool_call_id"] = ""
-            operation.requested_function_calls.setdefault(tool_call_id, call_dict)
+                operation.unclaimed_synthesized_call_ids.append(tool_call_id)
+            operation.requested_function_calls[tool_call_id] = call_dict
             self._function_call_owner[tool_call_id] = operation
         if operation.phase != "active":
             self._write_function_state(operation)
@@ -709,10 +746,7 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
         if operation is None:
             self._record_unmatched_llm_frame(data)
             return
-        tool_call_id = original_tool_call_id or (
-            f"{operation.operation_id}:tool-"
-            f"{len(operation.requested_function_calls) + 1}"
-        )
+        tool_call_id = self._resolve_tool_call_id(operation, original_tool_call_id)
 
         if tool_call_id in operation.requested_function_calls:
             existing = operation.requested_function_calls[tool_call_id]
@@ -749,12 +783,15 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             return
         call_dict = operation.requested_function_calls.get(tool_call_id)
         if call_dict is None:
+            # No recorded request to correlate with (ID-less frame, or an ID the
+            # request path never saw). Keep the result rather than dropping it;
+            # it is built from the frame alone so it carries no request_order.
             logger.debug(
-                "FunctionCallResultFrame with no matching call "
-                "(tool_call_id=%r); dropping duplicate",
+                "FunctionCallResultFrame with no recorded request "
+                "(tool_call_id=%r); recording uncorrelated result",
                 tool_call_id,
             )
-            return
+            call_dict = self._uncorrelated_call_dict(tool_call_id, fc_data)
         result_dict: dict[str, Any] = {**call_dict}
         if "result" in fc_data:
             result_dict["result"] = fc_data["result"]
@@ -773,11 +810,15 @@ class _LLMHandlersMixin(_PipecatObserverMixinBase):
             return
 
         frame = data.frame
-        tool_call_id = getattr(frame, "tool_call_id", "")
+        fc_data = extract_function_call_data(frame)
+        tool_call_id = fc_data.get("tool_call_id", "")
         operation = self._operation_for_tool_frame(data, tool_call_id)
         if operation is None:
             return
-        call_dict = operation.requested_function_calls.get(tool_call_id, {})
+        call_dict = operation.requested_function_calls.get(tool_call_id)
+        if call_dict is None:
+            # Same shape as an uncorrelated result: never a bare {"cancelled": True}.
+            call_dict = self._uncorrelated_call_dict(tool_call_id, fc_data)
         result_dict: dict[str, Any] = {**call_dict, "cancelled": True}
         if result_dict not in operation.function_call_results:
             operation.function_call_results.append(result_dict)

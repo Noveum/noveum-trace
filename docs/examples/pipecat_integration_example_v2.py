@@ -65,7 +65,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.deepgram.tts import DeepgramTTSService
+from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.base_transport import TransportParams
@@ -275,7 +275,17 @@ async def run_bot(transport, runner_args: RunnerArguments, tracer: NoveumPipecat
     logger.info("Starting drive-thru order bot")
 
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-    tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+    elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+    elevenlabs_voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+    if not elevenlabs_api_key or not elevenlabs_voice_id:
+        raise ValueError("Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in your .env")
+    tts = ElevenLabsTTSService(
+        api_key=elevenlabs_api_key,
+        settings=ElevenLabsTTSService.Settings(
+            model="eleven_flash_v2_5",
+            voice=elevenlabs_voice_id,
+        ),
+    )
     llm = GoogleLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
         model="gemini-2.5-flash",
