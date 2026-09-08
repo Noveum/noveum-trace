@@ -21,9 +21,7 @@ if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
 from noveum_trace.integrations._common import coerce_datetime  # noqa: E402
-from noveum_trace.integrations.openai_agents import (
-    processor as processor_module,
-)  # noqa: E402
+from noveum_trace.integrations.openai_agents import processor as processor_module  # noqa: E402
 from noveum_trace.integrations.openai_agents.processor import (  # noqa: E402
     NoveumTraceProcessor,
     setup_openai_agents_tracing,
