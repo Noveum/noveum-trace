@@ -11,8 +11,8 @@ no-op until keys are configured. Run explicitly with:
     pytest tests/integration/guard/test_real_calls.py -m integration -v
 
 Covered plan steps:
-  Step 1 — sync call through noveum_trace.guard.http_client()
-  Step 6 — async call through noveum_trace.guard.async_http_client()
+  Step 1 — sync call through the Guard transport with an SDK-native client
+  Step 6 — async call through the Guard transport with an SDK-native client
            (exercises NoveumAsyncTransport + response.aread())
   Step 7 — concurrency under a real cap: 20 threads, tight max_usd, real calls.
            Expect a mix of allowed/blocked outcomes and current_spend <= cap.
@@ -40,7 +40,6 @@ try:
 except ImportError:  # dotenv optional
     pass
 
-import noveum_trace
 from noveum_trace.guard.api_client import GuardAPIClient
 from noveum_trace.guard.engine import PolicyEngine
 from noveum_trace.guard.policies.cost_cap import CostCapPolicy
@@ -49,6 +48,8 @@ from noveum_trace.guard.types import EnforcementMode, PolicyContext
 
 try:
     import anthropic
+
+    from tests.integration.guard.anthropic_client import async_http_client, http_client
 
     ANTHROPIC_AVAILABLE = True
 except ImportError:  # provider SDK optional
@@ -287,7 +288,7 @@ class TestStep1Sync:
 
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         start_total = time.time()
@@ -327,7 +328,7 @@ class TestStep1Sync:
 
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         with pytest.raises(anthropic.PermissionDeniedError):
@@ -363,7 +364,7 @@ class TestStep6Async:
 
         client = anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.async_http_client(engine, ctx),
+            http_client=async_http_client(engine, ctx),
         )
         try:
             start_total = time.time()
@@ -404,7 +405,7 @@ class TestStep6Async:
 
         client = anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.async_http_client(engine, ctx),
+            http_client=async_http_client(engine, ctx),
         )
         try:
             with pytest.raises(anthropic.PermissionDeniedError):
@@ -459,7 +460,7 @@ class TestStep7ConcurrencyRealCap:
             # Each thread gets its own client; they share the engine/api (and cap).
             client = anthropic.Anthropic(
                 api_key=ANTHROPIC_API_KEY,
-                http_client=noveum_trace.guard.http_client(engine, ctx),
+                http_client=http_client(engine, ctx),
             )
             try:
                 client.messages.create(
@@ -540,7 +541,7 @@ class TestStreaming:
 
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         start_total = time.time()
@@ -589,7 +590,7 @@ class TestStreaming:
 
         client = anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.async_http_client(engine, ctx),
+            http_client=async_http_client(engine, ctx),
         )
 
         try:

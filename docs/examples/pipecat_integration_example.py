@@ -399,7 +399,7 @@ If they ask for something not on the menu, politely let them know and suggest al
     # Records the full stereo conversation (user=left, bot=right) for Noveum Trace.
     # NoveumTraceObserver auto-detects this in attach_to_task() and uploads a
     # pipecat.full_conversation span at the end of the session.
-    AudioBufferProcessor(num_channels=2)
+    audio_buffer = AudioBufferProcessor(num_channels=2)
 
     # Observer was created in bot() so that the Noveum composite transport
     # could be constructed with noveum_observer=trace_obs already wired in.
@@ -414,6 +414,7 @@ If they ask for something not on the menu, politely let them know and suggest al
             llm,  # LLM with function calling
             tts,  # Text-to-Speech
             transport.output(),  # Transport bot output
+            audio_buffer,  # Full stereo conversation recording
             assistant_aggregator,  # Assistant spoken responses
         ]
     )
