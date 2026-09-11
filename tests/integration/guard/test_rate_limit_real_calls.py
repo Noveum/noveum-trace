@@ -27,7 +27,6 @@ try:
 except ImportError:  # dotenv optional
     pass
 
-import noveum_trace
 from noveum_trace.guard.api_client import GuardAPIClient
 from noveum_trace.guard.engine import PolicyEngine
 from noveum_trace.guard.policies.rate_limit import RateLimitPolicy
@@ -35,6 +34,8 @@ from noveum_trace.guard.types import PolicyContext
 
 try:
     import anthropic
+
+    from tests.integration.guard.anthropic_client import async_http_client, http_client
 
     ANTHROPIC_AVAILABLE = True
 except ImportError:  # provider SDK optional
@@ -106,7 +107,7 @@ class TestRequestCountLimit:
         )
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         for _ in range(2):
@@ -124,7 +125,7 @@ class TestRequestCountLimit:
         )
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         # First two calls consume the request budget for this window.
@@ -154,7 +155,7 @@ class TestTokenCountLimit:
         )
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         resp = client.messages.create(model=MODEL, messages=_messages(), max_tokens=16)
@@ -178,7 +179,7 @@ class TestAsyncRequestCountLimit:
         )
         client = anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.async_http_client(engine, ctx),
+            http_client=async_http_client(engine, ctx),
         )
         try:
             resp = await client.messages.create(
@@ -216,7 +217,7 @@ class TestMultipleWindowsRealCalls:
         )
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=noveum_trace.guard.http_client(engine, ctx),
+            http_client=http_client(engine, ctx),
         )
 
         client.messages.create(model=MODEL, messages=_messages(), max_tokens=16)

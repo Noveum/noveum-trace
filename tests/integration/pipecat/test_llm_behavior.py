@@ -109,8 +109,9 @@ async def test_llm_context_stash_flushes_real_json_values_and_resets() -> None:
     await obs._handle_llm_set_tool_choice(
         _data(_ff().LLMSetToolChoiceFrame(tool_choice="auto"))
     )
+    source = types.SimpleNamespace(_settings=None)
     await obs._handle_llm_response_start(
-        _data(_ff().LLMFullResponseStartFrame(), types.SimpleNamespace(_settings=None))
+        _data(_ff().LLMFullResponseStartFrame(), source)
     )
 
     span = obs._active_llm_span
@@ -119,7 +120,10 @@ async def test_llm_context_stash_flushes_real_json_values_and_resets() -> None:
     ]
     assert json.loads(span.attributes["llm.tools"]) == [tool]
     assert span.attributes["llm.tool_choice"] == json.dumps("auto")
-    assert obs._pending_llm_context == {}
+    # Source-less context is a broadcast. Keep it until teardown so every LLM
+    # processor can consume this generation once.
+    assert obs._pending_llm_context
+    assert obs._global_llm_context_consumed[id(source)] == 3
 
 
 # --------------------------------------------------------------------------- #
@@ -156,9 +160,12 @@ async def test_llm_messages_append_extends_stashed_messages() -> None:
 @pytest.mark.asyncio
 async def test_llm_thoughts_pinned_to_exact_values_and_ordering() -> None:
     # Guards: per-block concatenation, block boundaries, None-signature -> ''.
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
 
     ff = _ff()
     await obs._handle_llm_thought_start(types.SimpleNamespace())
@@ -180,9 +187,12 @@ async def test_llm_thoughts_pinned_to_exact_values_and_ordering() -> None:
 @pytest.mark.asyncio
 async def test_llm_unclosed_thought_flushed_on_response_end() -> None:
     # Guards: the unclosed-thought fallback flush in _handle_llm_response_end.
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
 
     ff = _ff()
     await obs._handle_llm_thought_start(types.SimpleNamespace())
@@ -205,9 +215,12 @@ async def test_gemini_thought_signature_captured_and_not_leaked() -> None:
     leaks into the next span's llm.input."""
     from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
 
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
     ff = _ff()
 
     # A bare thought block (Gemini: LLMThoughtEndFrame carries no signature)...
@@ -240,7 +253,8 @@ async def test_gemini_thought_signature_captured_and_not_leaked() -> None:
 @pytest.mark.asyncio
 async def test_thought_signature_only_append_is_fully_dropped_from_input() -> None:
     """B9: an append frame carrying ONLY a thought_signature message adds nothing to
-    the pending context (no empty/garbage stash)."""
+    the pending context (no empty/garbage stash). With no LLM operation to own it
+    the signature has no correlation key and is discarded, not parked."""
     from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
 
     obs, trace, turn = _new_obs()
@@ -253,7 +267,13 @@ async def test_thought_signature_only_append_is_fully_dropped_from_input() -> No
         _data(ff.LLMMessagesAppendFrame(messages=[sig_msg]))
     )
     assert "messages" not in obs._pending_llm_context
-    assert obs._pending_thought_signatures == ["S1"]
+    assert not hasattr(obs, "_pending_thought_signatures")
+    # A later operation must not inherit the orphaned signature.
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(_data(ff.LLMFullResponseStartFrame(), source))
+    span = obs._active_llm_span
+    await obs._handle_llm_response_end(_data(ff.LLMFullResponseEndFrame(), source))
+    assert "llm.thought_signatures" not in span.attributes
 
 
 # --------------------------------------------------------------------------- #
@@ -262,9 +282,12 @@ async def test_thought_signature_only_append_is_fully_dropped_from_input() -> No
 @pytest.mark.asyncio
 async def test_function_call_result_dict_carries_full_content() -> None:
     # Guards: in-progress->result move + full field extraction (name/args/result/run_llm).
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
 
     ff = _ff()
     await obs._handle_function_call_start(
@@ -311,9 +334,12 @@ async def test_function_call_result_dict_carries_full_content() -> None:
 @pytest.mark.asyncio
 async def test_duplicate_function_call_in_progress_deduped_by_tool_call_id() -> None:
     # Guards: handler-level tool_call_id dedupe (upstream+downstream double-push).
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
 
     ff = _ff()
     # Two DISTINCT frame objects sharing tool_call_id — frame-id dedupe would not
@@ -557,16 +583,19 @@ async def test_metrics_token_usage_and_cost_pinned() -> None:
     pytest.importorskip("pipecat.metrics.metrics")
     from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData
 
-    obs, trace, turn = _new_obs()
-    span = trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
-    obs._active_llm_span = span
+    obs, _trace, _turn = _new_obs()
+    source = types.SimpleNamespace(_settings=None)
+    await obs._handle_llm_response_start(
+        _data(_ff().LLMFullResponseStartFrame(), source)
+    )
+    span = obs._active_llm_span
 
     usage = LLMTokenUsage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000)
     metrics_data = LLMUsageMetricsData(
         processor="llm", model="gpt-4o-mini", value=usage
     )
     frame = _ff().MetricsFrame(data=[metrics_data])
-    await obs._handle_metrics(_data(frame))
+    await obs._handle_metrics(_data(frame, source))
 
     assert span.attributes["llm.input_tokens"] == 1000
     assert span.attributes["llm.output_tokens"] == 1000
@@ -579,11 +608,13 @@ async def test_metrics_token_usage_and_cost_pinned() -> None:
     assert span.attributes["llm.cost.output"] == pytest.approx(expected["output_cost"])
     assert span.attributes["llm.cost.total"] == pytest.approx(expected["total_cost"])
     assert span.attributes["llm.cost.currency"] == "USD"
-    assert obs._metrics_accumulator["total_input_tokens"] == 1000
-    assert obs._metrics_accumulator["total_output_tokens"] == 1000
-    assert obs._metrics_accumulator["total_cost"] == pytest.approx(
-        expected["total_cost"]
-    )
+    operation = obs._llm_operations.get_active(source)
+    assert operation.canonical_metrics["llm_usage"].value["prompt_tokens"] == 1000
+    assert operation.canonical_metrics["llm_usage"].value["completion_tokens"] == 1000
+    # Conversation rollups are derived once from finalized unique operations;
+    # individual metric channels no longer mutate additive totals eagerly.
+    assert obs._metrics_accumulator["total_input_tokens"] == 0
+    assert obs._metrics_accumulator["total_output_tokens"] == 0
 
 
 # --------------------------------------------------------------------------- #

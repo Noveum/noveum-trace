@@ -61,11 +61,22 @@ class _ErrorCaptureMixin(_PipecatObserverMixinBase):
         error_msg = str(getattr(frame, "error", "Unknown error"))
         error_type = type(frame).__name__
 
-        for span in filter(None, [self._active_llm_span, self._active_tts_span]):
+        llm_operation = self._resolve_llm_operation(data, include_metrics_pending=True)
+        if llm_operation is not None:
+            llm_operation.error = {"message": error_msg}
+            if llm_operation.phase == "metrics_pending":
+                llm_operation.terminal_status = "error"
+            span = llm_operation.span
             span.attributes["pipecat_span_status"] = "error"
             span.attributes["pipecat_span_status_message"] = error_msg
-            # D1: native status so native "status = error" filters see the failure.
-            span.set_status(SpanStatus.ERROR, error_msg)
+            self._mark_operation_span_error(span, error_msg)
+
+        # Keep the existing TTS behavior: Pipecat does not always supply enough
+        # service/context identity here to attribute a provider-level TTS error.
+        if self._active_tts_span is not None:
+            self._active_tts_span.attributes["pipecat_span_status"] = "error"
+            self._active_tts_span.attributes["pipecat_span_status_message"] = error_msg
+            self._mark_operation_span_error(self._active_tts_span, error_msg)
 
         if self._current_turn_span:
             self._current_turn_span.attributes["pipecat_span_status"] = "error"
@@ -112,6 +123,18 @@ class _ErrorCaptureMixin(_PipecatObserverMixinBase):
                 pass
 
         logger.debug("NoveumTraceObserver: recorded %s — %s", error_type, error_msg)
+
+    @staticmethod
+    def _mark_operation_span_error(span: Any, message: str) -> None:
+        """Apply a late error to an active or logically-completed span."""
+        if getattr(span, "is_finished", lambda: False)() is True:
+            # Span.set_status intentionally ignores finished spans. A completed
+            # operation retained for late correlation is still mutable until its
+            # containing trace is exported.
+            span.status = SpanStatus.ERROR
+            span.status_message = message
+            return
+        span.set_status(SpanStatus.ERROR, message)
 
     async def _handle_system_log(self, data: Any) -> None:
         """

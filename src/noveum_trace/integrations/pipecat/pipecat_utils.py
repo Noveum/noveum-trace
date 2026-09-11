@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import wave
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from noveum_trace.integrations.pipecat.pipecat_constants import (
@@ -315,6 +316,252 @@ def truncate_for_trace_attr(text: str, max_len: int = MAX_TEXT_BUFFER_LENGTH) ->
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class NormalizedMetricData:
+    """One Pipecat metric item, kept separate from its frame siblings."""
+
+    native_class: str
+    family: str
+    value: Any
+    unit: str | None
+    processor: str | None
+    model: str | None
+
+
+def _metric_item_metadata(item: Any) -> tuple[str | None, str | None]:
+    processor = getattr(item, "processor", None)
+    model = getattr(item, "model", None)
+    return (
+        str(processor) if processor is not None else None,
+        str(model) if model is not None else None,
+    )
+
+
+def _structured_metric_value(item: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+    """Preserve present structured fields, including false and zero values."""
+    return {
+        field: getattr(item, field)
+        for field in fields
+        if getattr(item, field, None) is not None
+    }
+
+
+def _unknown_metric_value(item: Any) -> Any:
+    """Best-effort diagnostic value for an unsupported metric class."""
+    if hasattr(item, "value"):
+        return item.value
+    try:
+        if hasattr(item, "model_dump"):
+            data = item.model_dump()
+        elif hasattr(item, "dict"):
+            data = item.dict()
+        else:
+            data = {
+                key: value
+                for key, value in vars(item).items()
+                if not key.startswith("_")
+            }
+        if isinstance(data, dict):
+            return {
+                key: value
+                for key, value in data.items()
+                if key not in ("processor", "model")
+            }
+    except Exception as exc:
+        logger.debug("Failed to preserve unknown metric value: %s", exc)
+    return None
+
+
+def normalize_metrics_data(frame: Any) -> list[NormalizedMetricData]:
+    """Return one normalized record for every item in ``MetricsFrame.data``."""
+    records: list[NormalizedMetricData] = []
+    try:
+        from pipecat.metrics import metrics as pipecat_metrics
+        from pipecat.metrics.metrics import (
+            LLMUsageMetricsData,
+            ProcessingMetricsData,
+            TTFBMetricsData,
+            TTSUsageMetricsData,
+        )
+
+        optional_types = {
+            class_name: getattr(pipecat_metrics, class_name, None)
+            for class_name in (
+                "TTFAMetricsData",
+                "STTUsageMetricsData",
+                "TextAggregationMetricsData",
+                "TurnMetricsData",
+                "SmartTurnMetricsData",
+            )
+        }
+
+        for item in getattr(frame, "data", []):
+            try:
+                native_class = type(item).__name__
+                processor, model = _metric_item_metadata(item)
+                if isinstance(item, TTFBMetricsData):
+                    value = getattr(item, "value", None)
+                    if value is None:
+                        value = getattr(item, "ttfb", None)
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "ttfb",
+                            float(value) if value is not None else None,
+                            "seconds",
+                            processor,
+                            model,
+                        )
+                    )
+                elif isinstance(item, LLMUsageMetricsData):
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "llm_usage",
+                            _llm_token_usage_to_dict(getattr(item, "value", None)),
+                            "tokens",
+                            processor,
+                            model,
+                        )
+                    )
+                elif optional_types["TTFAMetricsData"] and isinstance(
+                    item, optional_types["TTFAMetricsData"]
+                ):
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "ttfa",
+                            _structured_metric_value(
+                                item, ("ttfa", "ttfb", "leading_silence")
+                            ),
+                            "seconds",
+                            processor,
+                            model,
+                        )
+                    )
+                elif isinstance(item, ProcessingMetricsData):
+                    value = getattr(item, "value", None)
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "processing",
+                            float(value) if value is not None else None,
+                            "seconds",
+                            processor,
+                            model,
+                        )
+                    )
+                elif optional_types["STTUsageMetricsData"] and isinstance(
+                    item, optional_types["STTUsageMetricsData"]
+                ):
+                    usage = getattr(item, "value", None)
+                    audio_seconds = getattr(usage, "audio_seconds", None)
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "stt_usage",
+                            (
+                                {"audio_seconds": float(audio_seconds)}
+                                if audio_seconds is not None
+                                else {}
+                            ),
+                            "seconds",
+                            processor,
+                            model,
+                        )
+                    )
+                elif isinstance(item, TTSUsageMetricsData):
+                    value = getattr(item, "value", None)
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "tts_usage",
+                            int(value) if value is not None else None,
+                            "characters",
+                            processor,
+                            model,
+                        )
+                    )
+                elif optional_types["TextAggregationMetricsData"] and isinstance(
+                    item, optional_types["TextAggregationMetricsData"]
+                ):
+                    value = getattr(item, "value", None)
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "text_aggregation",
+                            float(value) if value is not None else None,
+                            "seconds",
+                            processor,
+                            model,
+                        )
+                    )
+                elif optional_types["SmartTurnMetricsData"] and isinstance(
+                    item, optional_types["SmartTurnMetricsData"]
+                ):
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "smart_turn",
+                            _structured_metric_value(
+                                item,
+                                (
+                                    "is_complete",
+                                    "probability",
+                                    "e2e_processing_time_ms",
+                                    "inference_time_ms",
+                                    "server_total_time_ms",
+                                ),
+                            ),
+                            None,
+                            processor,
+                            model,
+                        )
+                    )
+                elif optional_types["TurnMetricsData"] and isinstance(
+                    item, optional_types["TurnMetricsData"]
+                ):
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "turn",
+                            _structured_metric_value(
+                                item,
+                                (
+                                    "is_complete",
+                                    "probability",
+                                    "e2e_processing_time_ms",
+                                ),
+                            ),
+                            None,
+                            processor,
+                            model,
+                        )
+                    )
+                else:
+                    records.append(
+                        NormalizedMetricData(
+                            native_class,
+                            "unknown",
+                            _unknown_metric_value(item),
+                            None,
+                            processor,
+                            model,
+                        )
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Failed to normalize metrics item %s: %s",
+                    type(item).__name__,
+                    exc,
+                )
+    except ImportError:
+        logger.debug("Could not import Pipecat metric data types")
+    except Exception as exc:
+        logger.debug("Failed to normalize metrics data: %s", exc)
+    return records
+
+
 def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
     """Flatten LLMTokenUsage (Pydantic) or similar to prompt/completion/total keys."""
     out: dict[str, Any] = {}
@@ -337,6 +584,11 @@ def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
                     usage, "cache_creation_input_tokens", None
                 ),
                 "reasoning_tokens": getattr(usage, "reasoning_tokens", None),
+                "input_audio_tokens": getattr(usage, "input_audio_tokens", None),
+                "output_audio_tokens": getattr(usage, "output_audio_tokens", None),
+                "cache_read_input_audio_tokens": getattr(
+                    usage, "cache_read_input_audio_tokens", None
+                ),
             }
         for key, out_key in (
             ("prompt_tokens", "prompt_tokens"),
@@ -345,6 +597,9 @@ def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
             ("cache_read_input_tokens", "cache_read_tokens"),
             ("cache_creation_input_tokens", "cache_creation_tokens"),
             ("reasoning_tokens", "reasoning_tokens"),
+            ("input_audio_tokens", "input_audio_tokens"),
+            ("output_audio_tokens", "output_audio_tokens"),
+            ("cache_read_input_audio_tokens", "cache_read_input_audio_tokens"),
         ):
             val = data.get(key)
             if val is not None:
@@ -357,6 +612,11 @@ def _llm_token_usage_to_dict(usage: Any) -> dict[str, Any]:
     except Exception as e:
         logger.debug("Failed to flatten LLM token usage: %s", e)
     return out
+
+
+def normalize_llm_token_usage(usage: Any) -> dict[str, Any]:
+    """Normalize token usage from either a metrics item or a standalone frame."""
+    return _llm_token_usage_to_dict(usage)
 
 
 def reasoning_is_extra_output(
@@ -418,114 +678,51 @@ def extract_metrics_data(frame: Any) -> dict[str, Any]:
     Metric payload types are defined in ``pipecat.metrics.metrics`` (not ``frames``).
     """
     result: dict[str, Any] = {}
-    try:
-        from pipecat.metrics.metrics import (
-            LLMUsageMetricsData,
-            ProcessingMetricsData,
-            TTFBMetricsData,
-            TTSUsageMetricsData,
-        )
-
-        TextAggregationMetricsData: type[Any] | None = None
-        try:
-            from pipecat.metrics.metrics import TextAggregationMetricsData as _TAG
-        except ImportError:
-            pass
-        else:
-            TextAggregationMetricsData = _TAG
-
-        TurnMetricsData: type[Any] | None = None
-        try:
-            from pipecat.metrics.metrics import TurnMetricsData as _TMD
-        except ImportError:
-            pass
-        else:
-            TurnMetricsData = _TMD
-
-        SmartTurnMetricsData: type[Any] | None = None
-        try:
-            from pipecat.metrics.metrics import SmartTurnMetricsData as _STMD
-        except ImportError:
-            pass
-        else:
-            SmartTurnMetricsData = _STMD
-
-        for item in getattr(frame, "data", []):
-            try:
-                if isinstance(item, TTFBMetricsData):
-                    val = getattr(item, "value", None) or getattr(item, "ttfb", None)
-                    if val is not None:
-                        result["ttfb_seconds"] = float(val)
-                    processor = getattr(item, "processor", None)
-                    if processor:
-                        result["ttfb_processor"] = str(processor)
-
-                elif isinstance(item, LLMUsageMetricsData):
-                    usage = getattr(item, "value", None)
-                    merged = _llm_token_usage_to_dict(usage)
-                    result.update(merged)
-                    model = getattr(item, "model", None)
-                    if model:
-                        result["llm_model"] = str(model)
-                    # Primary signal for reasoning_is_extra_output().
-                    processor = getattr(item, "processor", None)
-                    if processor:
-                        result["llm_processor"] = str(processor)
-
-                elif isinstance(item, ProcessingMetricsData):
-                    val = getattr(item, "value", None)
-                    if val is not None:
-                        result["processing_seconds"] = float(val)
-
-                elif isinstance(item, TTSUsageMetricsData):
-                    val = getattr(item, "value", None)
-                    if val is not None:
-                        result["tts_characters"] = int(val)
-
-                elif TextAggregationMetricsData and isinstance(
-                    item, TextAggregationMetricsData
-                ):
-                    val = getattr(item, "value", None)
-                    if val is not None:
-                        result["text_aggregation_seconds"] = float(val)
-
-                elif SmartTurnMetricsData and isinstance(item, SmartTurnMetricsData):
-                    if getattr(item, "is_complete", None) is not None:
-                        result["turn_eou_is_complete"] = bool(item.is_complete)
-                    if getattr(item, "probability", None) is not None:
-                        result["turn_eou_confidence"] = float(item.probability)
-                    if getattr(item, "e2e_processing_time_ms", None) is not None:
-                        result["turn_eou_processing_time_ms"] = float(
-                            item.e2e_processing_time_ms
-                        )
-                    if getattr(item, "inference_time_ms", None) is not None:
-                        result["turn_eou_inference_ms"] = float(item.inference_time_ms)
-                    if getattr(item, "server_total_time_ms", None) is not None:
-                        result["turn_eou_server_total_ms"] = float(
-                            item.server_total_time_ms
-                        )
-
-                elif TurnMetricsData and isinstance(item, TurnMetricsData):
-                    if getattr(item, "is_complete", None) is not None:
-                        result["turn_eou_is_complete"] = bool(item.is_complete)
-                    if getattr(item, "probability", None) is not None:
-                        result["turn_eou_confidence"] = float(item.probability)
-                    if getattr(item, "e2e_processing_time_ms", None) is not None:
-                        result["turn_eou_processing_time_ms"] = float(
-                            item.e2e_processing_time_ms
-                        )
-
-            except Exception as item_err:
-                logger.debug(
-                    "Failed to parse metrics item %s: %s", type(item).__name__, item_err
+    for metric in normalize_metrics_data(frame):
+        if metric.family == "ttfb":
+            if metric.value is not None:
+                result["ttfb_seconds"] = metric.value
+            if metric.processor is not None:
+                result["ttfb_processor"] = metric.processor
+        elif metric.family == "ttfa":
+            for source_key, result_key in (
+                ("ttfa", "ttfa_seconds"),
+                ("ttfb", "ttfa_ttfb_seconds"),
+                ("leading_silence", "ttfa_leading_silence_seconds"),
+            ):
+                if source_key in metric.value:
+                    result[result_key] = metric.value[source_key]
+        elif metric.family == "llm_usage":
+            result.update(metric.value)
+            if metric.model is not None:
+                result["llm_model"] = metric.model
+            if metric.processor is not None:
+                result["llm_processor"] = metric.processor
+        elif metric.family == "processing" and metric.value is not None:
+            result["processing_seconds"] = metric.value
+        elif metric.family == "stt_usage":
+            if "audio_seconds" in metric.value:
+                result["stt_audio_seconds"] = metric.value["audio_seconds"]
+        elif metric.family == "tts_usage" and metric.value is not None:
+            result["tts_characters"] = metric.value
+        elif metric.family == "text_aggregation" and metric.value is not None:
+            result["text_aggregation_seconds"] = metric.value
+        elif metric.family in ("turn", "smart_turn"):
+            value = metric.value
+            if "is_complete" in value:
+                result["turn_eou_is_complete"] = bool(value["is_complete"])
+            if "probability" in value:
+                result["turn_eou_confidence"] = float(value["probability"])
+            if "e2e_processing_time_ms" in value:
+                result["turn_eou_processing_time_ms"] = float(
+                    value["e2e_processing_time_ms"]
                 )
-
-    except ImportError:
-        logger.debug(
-            "Could not import Pipecat metrics data types from pipecat.metrics.metrics"
-        )
-    except Exception as e:
-        logger.debug("Failed to extract metrics data: %s", e)
+            if "inference_time_ms" in value:
+                result["turn_eou_inference_ms"] = float(value["inference_time_ms"])
+            if "server_total_time_ms" in value:
+                result["turn_eou_server_total_ms"] = float(
+                    value["server_total_time_ms"]
+                )
 
     return result
 

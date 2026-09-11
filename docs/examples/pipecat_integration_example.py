@@ -414,8 +414,8 @@ If they ask for something not on the menu, politely let them know and suggest al
             llm,  # LLM with function calling
             tts,  # Text-to-Speech
             transport.output(),  # Transport bot output
+            audio_buffer,  # Full stereo conversation recording
             assistant_aggregator,  # Assistant spoken responses
-            audio_buffer,  # Full-conversation stereo recording
         ]
     )
 

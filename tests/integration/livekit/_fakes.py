@@ -28,24 +28,11 @@ pytest.importorskip("livekit.agents")
 
 from livekit import rtc  # noqa: E402
 from livekit.agents.llm import LLM as BaseLLM  # noqa: E402
-from livekit.agents.llm import (
-    ChatChunk,
-    ChoiceDelta,
-    CompletionUsage,
-    FunctionToolCall,
-)
+from livekit.agents.llm import ChatChunk, ChoiceDelta, CompletionUsage, FunctionToolCall
 from livekit.agents.stt import STT as BaseSTT  # noqa: E402
-from livekit.agents.stt import (
-    SpeechData,
-    SpeechEvent,
-    SpeechEventType,
-    STTCapabilities,
-)
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTCapabilities
 from livekit.agents.tts import TTS as BaseTTS  # noqa: E402
-from livekit.agents.tts import (
-    SynthesizedAudio,
-    TTSCapabilities,
-)
+from livekit.agents.tts import SynthesizedAudio, TTSCapabilities
 
 
 # --------------------------------------------------------------------------- #

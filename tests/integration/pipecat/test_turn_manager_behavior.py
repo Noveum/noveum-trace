@@ -151,18 +151,20 @@ async def test_end_current_turn_preserves_inflight_stt() -> None:
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_interruption_internal_cancels_and_clears() -> None:
-    # Guards: cancelled-status on llm/tts + late-billing backrefs + the full
-    # buffer cleanup + turn.was_interrupted on interruption.
-    obs = _obs_with_trace()
+    # Guards: operation finalizers preserve partial output while clearing their
+    # mutable buffers and retaining late-metric correlation.
+    obs = _obs_with_trace(record_audio=False)
     await obs._start_new_turn()
     turn = obs._current_turn_span
 
     llm = obs._trace.create_span(name="pipecat.llm", parent_span_id=turn.span_id)
     tts = obs._trace.create_span(name="pipecat.tts", parent_span_id=turn.span_id)
+    llm_source = types.SimpleNamespace(name="llm")
+    llm_operation = obs._llm_operations.start(llm_source, span=llm)
+    llm_operation.output_chunks.append("x")
     obs._active_llm_span = llm
     obs._active_tts_span = tts
     obs._tts_source_processor = object()
-    obs._llm_text_buffer = ["x"]
     obs._tts_text_buffer = [("y", False)]
     obs._tts_text_interim_buffer = [("z", False)]
     obs._tts_audio_buffer = [object()]
@@ -176,6 +178,10 @@ async def test_interruption_internal_cancels_and_clears() -> None:
     assert tts.attributes["pipecat_span_status"] == "cancelled"
     assert llm.is_finished()
     assert tts.is_finished()
+    assert llm.attributes["llm.output"] == "x"
+    assert llm.attributes["llm.output.complete"] is False
+    assert tts.attributes["tts.input_text"] == "y"
+    assert tts.attributes["tts.output.complete"] is False
     assert obs._active_llm_span is None
     assert obs._active_tts_span is None
     # Backrefs let late MetricsFrames bill the interrupted call.
@@ -183,7 +189,6 @@ async def test_interruption_internal_cancels_and_clears() -> None:
     assert obs._last_tts_span is tts
     assert obs._tts_source_processor is None
     assert turn.attributes["turn.was_interrupted"] is True
-    assert obs._llm_text_buffer == []
     assert obs._tts_text_buffer == []
     assert obs._tts_text_interim_buffer == []  # interim buffer cleared too (was #13)
     assert obs._tts_audio_buffer == []

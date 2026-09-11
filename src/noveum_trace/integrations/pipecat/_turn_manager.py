@@ -29,9 +29,12 @@ logger = logging.getLogger(__name__)
 
 # Accessed via the outer module's sentinel at import time
 try:
+    # isort: off
     from pipecat.observers.base_observer import (  # noqa: F401
         BaseObserver as _PipecatBaseObserver,
     )
+
+    # isort: on
 
     _PIPECAT_AVAILABLE = True
 except ImportError:
@@ -477,30 +480,20 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
     async def _handle_interruption_internal(
         self, interrupted_by_user: bool = True  # noqa: ARG002
     ) -> None:
-        """Cancel active LLM/TTS/STT spans and buffers; mark turn as interrupted."""
-        # Discard any partial thought accumulated so far
-        self._llm_thought_buffer.clear()
-        self._llm_thoughts_list.clear()
-        self._llm_thought_signatures_list.clear()
-        self._pending_thought_signatures.clear()
+        """Finalize partial LLM/TTS output and mark the turn interrupted."""
+        for operation in list(self._llm_operations.active_operations):
+            self._finalize_llm_operation(
+                operation,
+                complete=False,
+                termination_reason="user_interruption",
+                terminal_status="cancelled",
+            )
 
-        if self._active_llm_span:
-            llm_span = self._active_llm_span
-            llm_span.attributes["pipecat_span_status"] = "cancelled"
-            llm_span.finish()
-            self._active_llm_span = None
-            # Backref — the LLM API may still bill tokens for an interrupted call,
-            # so allow MetricsFrame to reach this span.
-            self._last_llm_span = llm_span
-
-        if self._active_tts_span:
-            tts_span = self._active_tts_span
-            tts_span.attributes["pipecat_span_status"] = "cancelled"
-            tts_span.finish()
-            self._active_tts_span = None
-            self._tts_source_processor = None
-            # Backref — same reasoning as above for TTS character billing.
-            self._last_tts_span = tts_span
+        await self._finalize_tts_operation(
+            complete=False,
+            termination_reason="user_interruption",
+            terminal_status="cancelled",
+        )
 
         # STT span and audio buffer are intentionally left untouched here.
         # Interruptions are triggered by the user starting to speak, so there is
@@ -509,13 +502,11 @@ class _TurnManagerMixin(_PipecatObserverMixinBase):
         # _handle_vad_stt_start / _handle_transcription own the STT lifecycle.
 
         if self._current_turn_span:
-
             self._current_turn_span.attributes["turn.was_interrupted"] = True
 
+        # Operation finalizers own the data-bearing buffers. These scalar fields
+        # remain only for compatibility with direct-handler callers.
         self._llm_text_buffer.clear()
-        self._tts_text_buffer.clear()
-        self._tts_text_interim_buffer.clear()
-        self._tts_audio_buffer.clear()
         self._pending_function_calls.clear()
         self._function_call_owner.clear()
         self._resolved_function_call_ids.clear()

@@ -1,14 +1,9 @@
 """
 Value-asserting regression tests for the Pipecat Metrics subsystem (§E, MET-1..7).
 
-Covers ``_handlers_metrics._MetricsHandlerMixin._handle_metrics`` (routing / merge /
-EOU buffering) and ``pipecat_utils.extract_metrics_data`` (per-type parsing).
-
-This subsystem **never creates spans** — it writes attributes onto pre-existing
-LLM / TTS / turn spans (so it cannot itself produce orphans).  These tests drive
-real ``Trace`` objects and real ``pipecat.metrics.metrics`` payloads and assert the
-emitted attribute *names*, *values*, coercions, cost computation, the EOU
-buffer→drain contract, and the TTFB routing precedence — per PIPECAT_TEST_PLAN.md.
+Covers typed routing, usage/cost capture, EOU buffering, and the legacy flat-parser
+compatibility helper. Ambiguous attribution is covered separately by
+``test_handlers_metrics.py`` because it intentionally creates diagnostic spans.
 """
 
 from __future__ import annotations
@@ -33,6 +28,9 @@ from pipecat.metrics.metrics import (  # noqa: E402
 )
 
 from noveum_trace.core.trace import Trace  # noqa: E402
+from noveum_trace.integrations.pipecat._processor_registry import (  # noqa: E402
+    PROCESSOR_ROLE_LLM,
+)
 from noveum_trace.integrations.pipecat.pipecat_observer import (  # noqa: E402
     NoveumTraceObserver,
 )
@@ -52,9 +50,19 @@ def _new_obs() -> NoveumTraceObserver:
     return obs
 
 
-def _metrics_data(*items):
+def _metrics_data(*items, source=None):
     """Wrap metric payload items in the ``data=...``/``frame`` shape handlers expect."""
-    return types.SimpleNamespace(frame=MetricsFrame(data=list(items)))
+    return types.SimpleNamespace(frame=MetricsFrame(data=list(items)), source=source)
+
+
+def _llm_target(obs, name: str = "llm"):
+    """Create one explicitly correlated LLM operation for metric tests."""
+    source = types.SimpleNamespace(name=name)
+    obs.register_processor_role(source, PROCESSOR_ROLE_LLM)
+    span = obs._trace.create_span(name="pipecat.llm")
+    obs._llm_operations.start(source, span=span, processor_name=name)
+    obs._active_llm_span = span  # public compatibility alias
+    return source, span
 
 
 # --------------------------------------------------------------------------- #
@@ -66,14 +74,14 @@ async def test_metrics_write_to_finished_span_via_direct_attributes() -> None:
     # silently drop every metric — the COMMON case, since pipecat emits MetricsFrame
     # after the LLM span has already finished.
     obs = _new_obs()
-    span = obs._trace.create_span(name="pipecat.llm")
+    source, span = _llm_target(obs)
+    obs._llm_operations.complete(source)
     span.finish()
     assert span.is_finished()
-    obs._last_llm_span = span  # most-recently-closed LLM span is the target
 
     usage = LLMTokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
     item = LLMUsageMetricsData(processor="llm", model="gpt-4o-mini", value=usage)
-    await obs._handle_metrics(_metrics_data(item))
+    await obs._handle_metrics(_metrics_data(item, source=source))
 
     # Despite the span being finished, the metrics were written directly.
     assert span.attributes["llm.input_tokens"] == 10
@@ -96,8 +104,7 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     # Guards: full token+cache+cost+accumulator merge + cache_read_input_tokens→
     # cache_read_tokens rename. Replaces the sloppy >= accumulator assertion.
     obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    obs._active_llm_span = llm
+    source, llm = _llm_target(obs)
 
     usage = LLMTokenUsage(
         prompt_tokens=10,
@@ -107,7 +114,7 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
         reasoning_tokens=3,
     )
     item = LLMUsageMetricsData(processor="llm", model="gpt-4o-mini", value=usage)
-    await obs._handle_metrics(_metrics_data(item))
+    await obs._handle_metrics(_metrics_data(item, source=source))
 
     # D9: reasoning tokens (3) are billed at the output rate, but for this
     # OpenAI-compatible model they are ALREADY inside completion_tokens
@@ -131,12 +138,10 @@ async def test_token_usage_writes_full_attr_set_cost_and_accumulator() -> None:
     )
     assert llm.attributes["llm.cost.currency"] == "USD"
 
-    # Conversation-level accumulator increments by exactly these values.
-    assert obs._metrics_accumulator["total_input_tokens"] == 10
-    assert obs._metrics_accumulator["total_output_tokens"] == 20
-    assert obs._metrics_accumulator["total_cost"] == pytest.approx(
-        expected["total_cost"]
-    )
+    operation = obs._llm_operations.get_active(source)
+    assert operation.canonical_metrics["llm_usage"].value["prompt_tokens"] == 10
+    assert operation.canonical_metrics["llm_usage"].value["completion_tokens"] == 20
+    assert obs._metrics_accumulator["total_input_tokens"] == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -149,8 +154,7 @@ async def test_gemini_reasoning_tokens_are_priced_as_extra_output() -> None:
     # (google/llm.py), so billable output = completion + reasoning = 23. Dropping the
     # addend here would undercharge llm.cost.output for every thinking model.
     obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    obs._active_llm_span = llm
+    source, llm = _llm_target(obs, "GoogleLLMService#0")
 
     # total_token_count (33) already includes thoughts, per the Gemini API contract.
     usage = LLMTokenUsage(
@@ -159,7 +163,7 @@ async def test_gemini_reasoning_tokens_are_priced_as_extra_output() -> None:
     item = LLMUsageMetricsData(
         processor="GoogleLLMService#0", model="gemini-2.5-flash", value=usage
     )
-    await obs._handle_metrics(_metrics_data(item))
+    await obs._handle_metrics(_metrics_data(item, source=source))
 
     expected = estimate_cost("gemini-2.5-flash", input_tokens=10, output_tokens=23)
 
@@ -175,8 +179,7 @@ async def test_openai_reasoning_tokens_are_not_double_charged() -> None:
     # breakdown INSIDE completion_tokens (openai/base_llm.py), so pricing
     # completion + reasoning would bill the same 3 tokens twice.
     obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    obs._active_llm_span = llm
+    source, llm = _llm_target(obs, "OpenAILLMService#0")
 
     usage = LLMTokenUsage(
         prompt_tokens=10, completion_tokens=20, total_tokens=30, reasoning_tokens=3
@@ -184,7 +187,7 @@ async def test_openai_reasoning_tokens_are_not_double_charged() -> None:
     item = LLMUsageMetricsData(
         processor="OpenAILLMService#0", model="gpt-4o-mini", value=usage
     )
-    await obs._handle_metrics(_metrics_data(item))
+    await obs._handle_metrics(_metrics_data(item, source=source))
 
     priced_on_20 = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=20)
     priced_on_23 = estimate_cost("gpt-4o-mini", input_tokens=10, output_tokens=23)
@@ -218,15 +221,16 @@ async def test_llm_usage_metrics_frame_reasoning_pricing_matches_metrics_frame(
     # LLMTokenUsage directly rather than via extract_metrics_data, so it needs its own
     # provider branch — otherwise the two paths disagree about the same LLM call.
     obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    obs._active_llm_span = llm
+    source, llm = _llm_target(obs, processor)
 
     tokens = LLMTokenUsage(
         prompt_tokens=10, completion_tokens=20, total_tokens=total, reasoning_tokens=3
     )
     # LLMUsageMetricsFrame does not exist in pipecat 1.3.0; stub its duck type.
     frame = types.SimpleNamespace(tokens=tokens, model=model, processor=processor)
-    await obs._handle_llm_usage_metrics(types.SimpleNamespace(frame=frame))
+    await obs._handle_llm_usage_metrics(
+        types.SimpleNamespace(frame=frame, source=source)
+    )
 
     expected = estimate_cost(
         model, input_tokens=10, output_tokens=expected_output_tokens
@@ -407,87 +411,11 @@ def test_extract_metrics_data_llm_usage_and_turn_types() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# MET-6 — TTFB routing precedence: LLM wins; TTS-only fallback                  #
+# MET-6 — the legacy flat parser also preserves exact zero values             #
 # --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_ttfb_routes_to_llm_when_both_spans_present() -> None:
-    # Guards: case A — with both an LLM and a TTS target, an LLM-named processor
-    # routes TTFB to the LLM span and leaves the TTS span untouched.
-    obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    tts = obs._trace.create_span(name="pipecat.tts")
-    obs._active_llm_span = llm
-    obs._active_tts_span = tts
-
-    await obs._handle_metrics(
-        _metrics_data(TTFBMetricsData(processor="OpenAILLMService", value=0.1))
-    )
-
-    assert llm.attributes["llm.time_to_first_token_ms"] == pytest.approx(100.0)
-    assert "tts.time_to_first_byte_ms" not in tts.attributes
-
-
-@pytest.mark.asyncio
-async def test_ttfb_falls_back_to_tts_when_only_tts_present() -> None:
-    # Guards: case B — with only a TTS target, even an LLM-named processor falls
-    # back onto the TTS span (elif tts_target branch).
-    obs = _new_obs()
-    tts = obs._trace.create_span(name="pipecat.tts")
-    obs._active_tts_span = tts
-    obs._active_llm_span = None
-    obs._last_llm_span = None
-
-    await obs._handle_metrics(
-        _metrics_data(TTFBMetricsData(processor="OpenAILLMService", value=0.2))
-    )
-
-    assert tts.attributes["tts.time_to_first_byte_ms"] == pytest.approx(200.0)
-
-
-@pytest.mark.asyncio
-async def test_ttfb_processor_with_both_tts_and_llm_routes_to_llm() -> None:
-    # Guards: case C — tts_only requires "tts" in proc AND "llm" not in proc; a
-    # processor name containing both must route to the LLM span, not TTS.
-    obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    tts = obs._trace.create_span(name="pipecat.tts")
-    obs._active_llm_span = llm
-    obs._active_tts_span = tts
-
-    await obs._handle_metrics(
-        _metrics_data(TTFBMetricsData(processor="tts_and_llm_combo", value=0.3))
-    )
-
-    assert llm.attributes["llm.time_to_first_token_ms"] == pytest.approx(300.0)
-    assert "tts.time_to_first_byte_ms" not in tts.attributes
-
-
-# --------------------------------------------------------------------------- #
-# MET-7 — TTFB value of exactly 0.0 drops ttfb_seconds (observe-then-pin bug)  #
-# --------------------------------------------------------------------------- #
-def test_ttfb_zero_value_keeps_processor_but_drops_seconds_pinned() -> None:
-    # PIN CURRENT (latent inconsistency, NOT an orphan bug): extract uses
-    # `getattr(value) or getattr(ttfb)`, so a falsy 0.0 falls through and no
-    # ttfb_seconds key is emitted — though ttfb_processor still is. Every other
-    # metric uses `is not None` and keeps 0.0. Pins the falsy-or behavior so a
-    # future fix to `is not None` is test-visible.
+def test_ttfb_zero_value_is_preserved() -> None:
     result = extract_metrics_data(
         MetricsFrame(data=[TTFBMetricsData(processor="OpenAILLMService", value=0.0)])
     )
-    assert "ttfb_seconds" not in result
+    assert result["ttfb_seconds"] == 0.0
     assert result["ttfb_processor"] == "OpenAILLMService"
-
-
-@pytest.mark.asyncio
-async def test_ttfb_zero_value_writes_no_latency_to_span_pinned() -> None:
-    # PIN CURRENT: because the parser drops ttfb_seconds for a 0.0 value (above),
-    # the handler writes no llm.time_to_first_token_ms onto the LLM span.
-    obs = _new_obs()
-    llm = obs._trace.create_span(name="pipecat.llm")
-    obs._active_llm_span = llm
-
-    await obs._handle_metrics(
-        _metrics_data(TTFBMetricsData(processor="OpenAILLMService", value=0.0))
-    )
-
-    assert "llm.time_to_first_token_ms" not in llm.attributes

@@ -31,9 +31,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from livekit.agents.tts import TTS as BaseTTS
-    from livekit.agents.tts import (
-        SynthesizedAudio,
-    )
+    from livekit.agents.tts import SynthesizedAudio
 
     LIVEKIT_AVAILABLE = True
 except ImportError as e:

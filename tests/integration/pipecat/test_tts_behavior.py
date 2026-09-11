@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import types
 import uuid
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +28,7 @@ pytest.importorskip("pipecat.metrics.metrics")
 pytestmark = pytest.mark.asyncio
 
 _UPLOAD = "noveum_trace.integrations.pipecat._handlers_tts.upload_audio_frames"
+_TO_THREAD = "noveum_trace.integrations.pipecat._handlers_tts.asyncio.to_thread"
 
 
 def _make_obs(*, capture_text: bool = True, record_audio: bool = True):
@@ -75,6 +77,152 @@ async def test_tts_started_span_is_turn_child_with_voice_model(
     assert span.attributes["tts.model"] == "tts-1"
     assert obs._tts_source_processor is src
     assert obs._last_tts_span is None  # cleared on every new TTS start
+
+
+async def test_tts_request_opens_span_and_prestart_metrics_attach(
+    ff, real_trace_with_turn
+):
+    """Request-stage metrics belong to the span before TTSStarted arrives."""
+    from pipecat.metrics.metrics import (
+        ProcessingMetricsData,
+        TextAggregationMetricsData,
+        TTSUsageMetricsData,
+    )
+
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+    src = _source(voice="nova")
+    obs.register_processor_role(src, "tts")
+    context_id = "ctx-request-first"
+    processor_name = obs._processor_registry.get(src).name
+
+    token = ff.LLMTextFrame("Hello")
+    await obs.on_push_frame(
+        types.SimpleNamespace(frame=token, source=object(), destination=src)
+    )
+    span = obs._active_tts_span
+    assert span.attributes["tts.aggregation_started_at"] == span.start_time.isoformat()
+    assert "tts.requested_at" not in span.attributes
+
+    # Pipecat stops the first text-aggregation metric immediately before it
+    # emits the first context-bearing AggregatedTextFrame.
+    pre_request_metrics = ff.MetricsFrame(
+        data=[TextAggregationMetricsData(processor=processor_name, value=0.01)]
+    )
+    await obs.on_push_frame(
+        types.SimpleNamespace(frame=pre_request_metrics, source=src)
+    )
+
+    first = ff.AggregatedTextFrame("Hello", "sentence", context_id=context_id)
+    second = ff.AggregatedTextFrame("world", "sentence", context_id=context_id)
+    # The upstream copy must not consume the frame ID before the TTS service
+    # itself emits the context-bearing request boundary.
+    await obs.on_push_frame(
+        types.SimpleNamespace(frame=first, source=object(), destination=src)
+    )
+    assert obs._active_tts_span is span
+    await obs.on_push_frame(types.SimpleNamespace(frame=first, source=src))
+    await obs.on_push_frame(types.SimpleNamespace(frame=second, source=src))
+
+    assert span is obs._active_tts_span
+    assert span.parent_span_id == turn.span_id
+    assert span.attributes["tts.context_id"] == context_id
+    assert (
+        datetime.fromisoformat(span.attributes["tts.requested_at"]) >= span.start_time
+    )
+    assert "tts.started_at" not in span.attributes
+
+    metrics = ff.MetricsFrame(
+        data=[
+            TTSUsageMetricsData(processor=processor_name, value=5),
+            TTSUsageMetricsData(processor=processor_name, value=5),
+            ProcessingMetricsData(processor=processor_name, value=0.1),
+            ProcessingMetricsData(processor=processor_name, value=0.2),
+            TextAggregationMetricsData(processor=processor_name, value=0.02),
+        ]
+    )
+    await obs.on_push_frame(types.SimpleNamespace(frame=metrics, source=src))
+
+    started = ff.TTSStartedFrame(context_id=context_id)
+    await obs.on_push_frame(types.SimpleNamespace(frame=started, source=src))
+    assert span is obs._active_tts_span
+    assert "tts.started_at" in span.attributes
+
+    await obs.on_push_frame(
+        types.SimpleNamespace(
+            frame=ff.TTSStoppedFrame(context_id=context_id), source=src
+        )
+    )
+    # A late provider delta updates the native total without replacing the
+    # canonical complete-input count derived at finalization.
+    await obs.on_push_frame(
+        types.SimpleNamespace(
+            frame=ff.MetricsFrame(
+                data=[TTSUsageMetricsData(processor=processor_name, value=7)]
+            ),
+            source=src,
+        )
+    )
+
+    assert len([item for item in trace.spans if item.name == "pipecat.tts"]) == 1
+    assert not [item for item in trace.spans if item.name.startswith("pipecat.metric")]
+    assert span.attributes["tts.input_text"] == "Hello world"
+    assert span.attributes["tts.input_characters"] == 11
+    assert span.attributes["tts.characters"] == 11
+    assert span.attributes["tts.provider_reported_characters"] == 17
+    assert span.attributes["tts.processing_observations_ms"] == pytest.approx(
+        [100, 200]
+    )
+    assert span.attributes["tts.processing_total_ms"] == pytest.approx(300)
+    assert span.attributes["tts.text_aggregation_observations_ms"] == pytest.approx(
+        [10, 20]
+    )
+    assert span.attributes["tts.text_aggregation_ms"] == pytest.approx(30)
+
+
+async def test_skip_tts_text_does_not_open_tts_operation(ff, real_trace_with_turn):
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+    src = _source(voice="nova")
+    obs.register_processor_role(src, "tts")
+    frame = ff.LLMTextFrame("This text must not be synthesized")
+    frame.skip_tts = True
+
+    await obs.on_push_frame(
+        types.SimpleNamespace(frame=frame, source=object(), destination=src)
+    )
+
+    assert obs._active_tts_span is None
+    assert not [span for span in trace.spans if span.name == "pipecat.tts"]
+
+
+async def test_tts_request_without_started_preserves_input_on_interruption(
+    ff, real_trace_with_turn
+):
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+    src = _source(voice="nova")
+    obs.register_processor_role(src, "tts")
+    request = ff.AggregatedTextFrame(
+        "Prepared but interrupted", "sentence", context_id="ctx-no-start"
+    )
+
+    await obs.on_push_frame(types.SimpleNamespace(frame=request, source=src))
+    span = obs._active_tts_span
+    await obs._handle_interruption_internal(interrupted_by_user=True)
+
+    assert span.is_finished()
+    assert span.attributes["tts.input_text"] == "Prepared but interrupted"
+    assert span.attributes["tts.input_characters"] == len("Prepared but interrupted")
+    assert span.attributes["tts.output.complete"] is False
+    assert span.attributes["tts.termination_reason"] == "user_interruption"
+    assert "tts.started_at" not in span.attributes
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +288,41 @@ async def test_tts_text_flushed_on_finalizer_force_close(ff, real_trace_with_tur
 
     assert tts_span.attributes["tts.input_text"] == "Hello, world."
     assert tts_span.is_finished()
+
+
+async def test_tts_interruption_preserves_partial_text_and_is_idempotent(
+    ff, real_trace_with_turn
+):
+    """An interruption finalizes partial synthesis without exporting cancelled."""
+    from noveum_trace.core.span import SpanStatus
+
+    trace, turn = real_trace_with_turn
+    obs = _make_obs(record_audio=False)
+    obs._trace = trace
+    obs._current_turn_span = turn
+    source = _source(voice="v")
+
+    await obs._handle_tts_started(
+        types.SimpleNamespace(frame=ff.TTSStartedFrame(), source=source)
+    )
+    span = obs._active_tts_span
+    await obs._handle_tts_text(
+        types.SimpleNamespace(
+            frame=ff.TTSTextFrame(text="Partial response", aggregated_by="sentence"),
+            source=source,
+        )
+    )
+
+    await obs._handle_interruption_internal(interrupted_by_user=True)
+    first_end_time = span.end_time
+    await obs._handle_interruption_internal(interrupted_by_user=True)
+
+    assert span.attributes["tts.input_text"] == "Partial response"
+    assert span.attributes["tts.output.complete"] is False
+    assert span.attributes["tts.termination_reason"] == "user_interruption"
+    assert span.attributes["pipecat_span_status"] == "cancelled"
+    assert span.status is SpanStatus.OK
+    assert span.end_time == first_end_time
 
 
 # --------------------------------------------------------------------------- #
@@ -331,7 +514,11 @@ async def test_tts_timing_attributes(ff, real_trace_with_turn):
     assert span.attributes["tts.started_at"] == span.start_time.isoformat()
 
     # 100 frames x 10ms (320 bytes @ 16k mono 16-bit) = 1000ms of audio.
-    with patch(_UPLOAD, return_value=True):
+    with (
+        patch(_UPLOAD, return_value=True),
+        patch(_TO_THREAD, side_effect=lambda fn, *args: fn(*args)),
+        patch.object(obs, "_get_client", return_value=None),
+    ):
         for _ in range(100):
             await obs._handle_tts_audio(
                 types.SimpleNamespace(
@@ -397,7 +584,11 @@ async def test_tts_audio_upload_success(ff, real_trace_with_turn):
         )
     assert len(obs._tts_audio_buffer) == 2
 
-    with patch(_UPLOAD, return_value=True) as up:
+    with (
+        patch(_UPLOAD, return_value=True) as up,
+        patch(_TO_THREAD, side_effect=lambda fn, *args: fn(*args)),
+        patch.object(obs, "_get_client", return_value=None),
+    ):
         await obs._handle_tts_stopped(types.SimpleNamespace())
 
     audio_uuid = span.attributes["tts.audio_uuid"]
@@ -444,7 +635,11 @@ async def test_tts_audio_upload_failure(ff, real_trace_with_turn, upload_kwargs)
     audio = _audio_frame(ff)
     await obs._handle_tts_audio(types.SimpleNamespace(frame=audio, source=src))
 
-    with patch(_UPLOAD, **upload_kwargs):
+    with (
+        patch(_UPLOAD, **upload_kwargs),
+        patch(_TO_THREAD, side_effect=lambda fn, *args: fn(*args)),
+        patch.object(obs, "_get_client", return_value=None),
+    ):
         await obs._handle_tts_stopped(types.SimpleNamespace())
 
     assert span.attributes["pipecat_span_status"] == "upload_failed"

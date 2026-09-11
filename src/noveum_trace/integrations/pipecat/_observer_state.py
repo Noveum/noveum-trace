@@ -36,6 +36,10 @@ class _PipecatObserverState:
     _turn_start_time: Optional[float]
     _pending_turn_eou_metrics: dict[str, Any]
 
+    _llm_operations: Any
+    _processor_registry: Any
+    _metric_fingerprints: dict[str, set[str]]
+
     _active_llm_span: Any
     _active_tts_span: Any
     _pending_function_calls: dict[str, dict[str, Any]]
@@ -44,20 +48,21 @@ class _PipecatObserverState:
 
     _last_llm_span: Any
     _last_tts_span: Any
+    _last_tts_source_processor: Any
 
     _llm_text_buffer: list[str]
+    _tts_request_text_buffer: list[tuple[str, bool]]
     _tts_text_buffer: list[tuple[str, bool]]
     _tts_text_interim_buffer: list[tuple[str, bool]]
     _transcription_buffer: list[str]
 
     _pending_llm_context: dict[str, Any]
+    _global_llm_context_generation: int
+    _global_llm_context_consumed: dict[int, int]
 
     _llm_thought_buffer: list[str]
     _llm_thoughts_list: list[str]
     _llm_thought_signatures_list: list[str]
-    # Thought signatures delivered out-of-band via LLMMessagesAppendFrame (Gemini),
-    # collected during a response and flushed to llm.thought_signatures at its end (B8).
-    _pending_thought_signatures: list[str]
 
     _stt_audio_buffer: list[Any]
     _stt_raw_audio_buffer: list[Any]
@@ -65,6 +70,13 @@ class _PipecatObserverState:
     _warned_no_stt_for_raw: bool
     _tts_audio_buffer: list[Any]
     _tts_source_processor: Any
+    _tts_context_id: Optional[str]
+    _tts_request_frame_id: Optional[int]
+    _tts_start_frame_id: Optional[int]
+    _stt_metric_processor: Any
+    _stt_start_frame_id: Optional[int]
+    _last_stt_span: Any
+    _last_stt_metric_processor: Any
 
     _audio_buffer_processor: Any
     _abp_is_recording: bool
@@ -103,6 +115,11 @@ class _PipecatObserverState:
 
     _processed_frame_ids: set[int]
     _frame_id_history: deque[int]
+    _processed_llm_input_routes: set[tuple[int, int]]
+    _llm_input_route_history: deque[tuple[int, int]]
+    _llm_input_frame_types: set[type]
+    _processed_tts_input_routes: set[tuple[int, int]]
+    _tts_input_route_history: deque[tuple[int, int]]
 
     _frame_handlers: dict[type, Any]
 
@@ -119,6 +136,8 @@ class _PipecatObserverMethods(Protocol):
 
     def _get_client(self) -> Any: ...
 
+    def _finish_managed_span(self, span: Any) -> None: ...
+
     async def _sink_segment_audio(
         self,
         frames: list[Any],
@@ -131,6 +150,27 @@ class _PipecatObserverMethods(Protocol):
     async def _start_new_turn(self, turn_number: Optional[int] = None) -> None: ...
 
     async def _finish_conversation(self, cancelled: bool = False) -> None: ...
+
+    def _resolve_llm_operation(
+        self, data: Any, *, include_metrics_pending: bool = False
+    ) -> Any: ...
+
+    def _finalize_llm_operation(
+        self,
+        operation: Any,
+        *,
+        complete: bool,
+        termination_reason: str,
+        terminal_status: str,
+    ) -> None: ...
+
+    async def _finalize_tts_operation(
+        self,
+        *,
+        complete: bool,
+        termination_reason: str,
+        terminal_status: str,
+    ) -> Any: ...
 
     def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...
 
@@ -155,6 +195,8 @@ class _PipecatObserverMixinBase(_PipecatObserverState):
 
         def _get_client(self) -> Any: ...
 
+        def _finish_managed_span(self, span: Any) -> None: ...
+
         async def _sink_segment_audio(
             self,
             frames: list[Any],
@@ -167,6 +209,27 @@ class _PipecatObserverMixinBase(_PipecatObserverState):
         async def _start_new_turn(self, turn_number: Optional[int] = None) -> None: ...
 
         async def _finish_conversation(self, cancelled: bool = False) -> None: ...
+
+        def _resolve_llm_operation(
+            self, data: Any, *, include_metrics_pending: bool = False
+        ) -> Any: ...
+
+        def _finalize_llm_operation(
+            self,
+            operation: Any,
+            *,
+            complete: bool,
+            termination_reason: str,
+            terminal_status: str,
+        ) -> None: ...
+
+        async def _finalize_tts_operation(
+            self,
+            *,
+            complete: bool,
+            termination_reason: str,
+            terminal_status: str,
+        ) -> Any: ...
 
         def _bounded_append_stt_frame(self, buffer: list[Any], frame: Any) -> None: ...
 
