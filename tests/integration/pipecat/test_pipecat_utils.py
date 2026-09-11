@@ -124,6 +124,7 @@ def test_normalize_metrics_data_keeps_structured_usage_per_item() -> None:
 
 
 def test_normalize_metrics_data_preserves_unknown_items() -> None:
+    pytest.importorskip("pipecat.metrics.metrics")
     from noveum_trace.integrations.pipecat.pipecat_utils import normalize_metrics_data
 
     class _FutureMetricsData:
