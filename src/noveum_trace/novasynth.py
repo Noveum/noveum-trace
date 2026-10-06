@@ -288,7 +288,7 @@ class CallQueue:
         import httpx
 
         try:
-            with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
+            with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
                 if method == "POST":
                     resp = client.post(
                         url, headers=self._headers(), params=self._params, json=json

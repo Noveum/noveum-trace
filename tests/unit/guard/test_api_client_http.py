@@ -576,3 +576,18 @@ class TestFetchRemotePolicies:
         api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
         with pytest.raises(GuardBackendUnavailable):
             api.fetch_remote_policies("proj")
+
+
+def test_never_follows_redirects(monkeypatch):
+    _patch(monkeypatch, get_resp=_Resp(200, {"cost": {}}))
+    seen: list[dict] = []
+    make = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: (seen.append(kw), make(**kw))[1])
+    api = HttpGuardAPIClient(api_key="k", base_url="https://api.noveum.ai")
+    api.get_state("proj")
+    try:
+        api.fetch_remote_policies("proj")
+    except Exception:
+        pass  # only the client construction matters here
+    assert len(seen) == 2
+    assert all(kw.get("follow_redirects") is False for kw in seen)
