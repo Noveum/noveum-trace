@@ -1107,7 +1107,7 @@ class HttpTransport:
                 )
 
             # Check response
-            if response.status_code in [200, 201]:
+            if 200 <= response.status_code < 300:
                 logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
                     safe_preview = self._get_safe_response_preview(
@@ -1378,7 +1378,7 @@ class HttpTransport:
             # Log response
             logger.info(f"📡 IMAGE RESPONSE: Status {response.status_code}")
 
-            if response.status_code in [200, 201]:
+            if 200 <= response.status_code < 300:
                 logger.info(f"✅ Successfully sent image {image_uuid}")
             elif response.status_code == 429:
                 log_error_always(

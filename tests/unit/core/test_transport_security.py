@@ -117,3 +117,19 @@ def test_redirect_response_is_not_treated_as_delivered(path):
             transport._send_single_image(
                 {"image_uuid": "i", "image_data": b"x", "metadata": {}}
             )
+
+
+@pytest.mark.parametrize("status", [200, 201, 202, 204])
+@pytest.mark.parametrize("path", ["batch", "image"])
+def test_any_2xx_response_is_delivered(path, status):
+    with patch("noveum_trace.transport.http_transport.BatchProcessor"):
+        transport = HttpTransport(Config.create(api_key="k"))
+    transport.session.post = Mock(
+        return_value=Mock(status_code=status, text="", headers={})
+    )
+    if path == "batch":
+        transport._send_trace_batch([{"trace_id": "t"}])
+    else:
+        transport._send_single_image(
+            {"image_uuid": "i", "image_data": b"x", "metadata": {}}
+        )
