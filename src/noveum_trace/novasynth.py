@@ -319,6 +319,13 @@ class CallQueue:
                 f"NovaSynth {method} {url} rejected with HTTP 400 — "
                 f"{_error_message(resp)}"
             )
+        if 300 <= resp.status_code < 400:
+            # Redirects are never followed (the key must only reach base_url),
+            # so polling again would just hit the same redirect.
+            raise ConfigurationError(
+                f"NovaSynth {method} {url} was redirected (HTTP "
+                f"{resp.status_code}); redirects are not followed — check base_url."
+            )
         if resp.status_code != 200:
             _log.warning("novasynth %s %s: HTTP %d", method, path, resp.status_code)
             return {}

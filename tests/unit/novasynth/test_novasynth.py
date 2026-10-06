@@ -486,3 +486,11 @@ def test_never_follows_redirects(monkeypatch, clock):
     list(_queue(["a"]).iter_calls())
     assert seen
     assert all(kw.get("follow_redirects") is False for kw in seen)
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+def test_redirect_fails_fast_instead_of_polling(monkeypatch, clock, status):
+    _patch(monkeypatch, post_resps=[_Resp(status, {})])
+    with pytest.raises(ConfigurationError, match=f"HTTP {status}"):
+        next(_queue(["a"]).iter_calls())
+    assert clock.sleeps == []  # failed on the first response, no polling
