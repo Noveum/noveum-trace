@@ -164,7 +164,13 @@ class Config:
     @endpoint.setter
     def endpoint(self, value: str) -> None:
         """Set the endpoint in transport configuration."""
+        previous = self.transport.endpoint
         self.transport.endpoint = value
+        try:
+            self._validate()
+        except ConfigurationError:
+            self.transport.endpoint = previous
+            raise
 
     @classmethod
     def create(
@@ -231,6 +237,13 @@ class Config:
         # Validate endpoint URL format
         endpoint = self.transport.endpoint
         if endpoint:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(endpoint)
+            # Checked first, because the format errors below echo the URL.
+            if parsed.username or parsed.password:
+                raise ConfigurationError("Endpoint URL must not contain credentials")
+
             # Check if it's a valid URL with proper scheme
             if not endpoint.startswith(("http://", "https://")):
                 raise ConfigurationError(
@@ -246,12 +259,6 @@ class Config:
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
 
-            from urllib.parse import urlparse
-
-            parsed = urlparse(endpoint)
-            if parsed.username or parsed.password:
-                # Don't echo the URL: it holds the credentials.
-                raise ConfigurationError("Endpoint URL must not contain credentials")
             insecure = parsed.scheme == "http" or (
                 not self.transport.ssl_verify and not self.transport.ca_bundle
             )
@@ -411,8 +418,9 @@ class Config:
                     compression=transport_data.get("compression", False),
                     ssl_verify=transport_data.get("ssl_verify", True),
                     ca_bundle=transport_data.get("ca_bundle"),
-                    allow_insecure_transport=transport_data.get(
-                        "allow_insecure_transport", False
+                    allow_insecure_transport=_parse_config_bool(
+                        transport_data.get("allow_insecure_transport", False),
+                        field_name="transport.allow_insecure_transport",
                     ),
                 )
             else:

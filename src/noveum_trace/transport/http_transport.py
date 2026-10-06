@@ -1151,6 +1151,10 @@ class HttpTransport:
                     response_text=self._get_safe_response_preview(response),
                 )
                 response.raise_for_status()
+                # raise_for_status ignores 3xx; a redirect is never a delivery.
+                raise TransportError(
+                    f"Trace batch returned unexpected status {response.status_code}"
+                )
 
         except requests.exceptions.Timeout as e:
             log_error_always(
@@ -1393,6 +1397,10 @@ class HttpTransport:
                     image_uuid=image_uuid,
                 )
                 response.raise_for_status()
+                # raise_for_status ignores 3xx; a redirect is never a delivery.
+                raise TransportError(
+                    f"Image upload returned unexpected status {response.status_code}"
+                )
 
         except requests.exceptions.Timeout as e:
             log_error_always(
