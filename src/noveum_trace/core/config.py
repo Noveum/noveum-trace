@@ -97,6 +97,8 @@ class TransportConfig:
     )
     # Path to custom CA bundle for corporate proxies
     ca_bundle: Optional[str] = None
+    # Opt-in for non-local http:// endpoints or ssl_verify=False
+    allow_insecure_transport: bool = False
 
 
 @dataclass
@@ -108,7 +110,7 @@ class SecurityConfig:
     encrypt_data: bool = True
     data_residency: Optional[str] = None
     pii_enabled: bool = False
-    pii_salt: Optional[str] = DEFAULT_PII_SALT
+    pii_salt: Optional[str] = field(default=DEFAULT_PII_SALT, repr=False)
 
 
 @dataclass
@@ -127,7 +129,7 @@ class Config:
 
     # Core settings
     project: Optional[str] = None
-    api_key: Optional[str] = None
+    api_key: Optional[str] = field(default=None, repr=False)
     environment: str = "development"
     service_version: Optional[str] = None
 
@@ -203,6 +205,7 @@ class Config:
         # Handle endpoint override after initialization
         if endpoint is not None:
             config.transport.endpoint = endpoint
+            config._validate()
 
         return config
 
@@ -242,6 +245,25 @@ class Config:
             url_pattern = r"^https?://[a-zA-Z0-9\-._~:/?#[\]@!$&\'()*+,;=%]+$"
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
+
+            from urllib.parse import urlparse
+
+            parsed = urlparse(endpoint)
+            if parsed.username or parsed.password:
+                # Don't echo the URL: it holds the credentials.
+                raise ConfigurationError("Endpoint URL must not contain credentials")
+            insecure = parsed.scheme == "http" or (
+                not self.transport.ssl_verify and not self.transport.ca_bundle
+            )
+            opted_in = self.transport.allow_insecure_transport or os.getenv(
+                "NOVEUM_ALLOW_INSECURE_TRANSPORT", ""
+            ).lower() in ("true", "1", "yes", "on")
+            if insecure and not opted_in:
+                raise ConfigurationError(
+                    "Insecure transport refused: use https:// with certificate "
+                    "verification, or set NOVEUM_ALLOW_INSECURE_TRANSPORT=true "
+                    "for local development only."
+                )
 
         if self.security.pii_enabled:
             salt = self.security.pii_salt
@@ -294,6 +316,7 @@ class Config:
                 "compression": self.transport.compression,
                 "ssl_verify": self.transport.ssl_verify,
                 "ca_bundle": self.transport.ca_bundle,
+                "allow_insecure_transport": self.transport.allow_insecure_transport,
             },
             "security": {
                 "redact_pii": self.security.redact_pii,
@@ -388,6 +411,9 @@ class Config:
                     compression=transport_data.get("compression", False),
                     ssl_verify=transport_data.get("ssl_verify", True),
                     ca_bundle=transport_data.get("ca_bundle"),
+                    allow_insecure_transport=transport_data.get(
+                        "allow_insecure_transport", False
+                    ),
                 )
             else:
                 # If transport is not a dict, use default
