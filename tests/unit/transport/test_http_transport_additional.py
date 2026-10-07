@@ -507,9 +507,11 @@ class TestHttpTransportPiiPseudonymization:
     def test_dev_file_is_owner_only(self, tmp_path):
         transport = self._transport(tmp_path)
         trace = self._trace(note="x")
+        path = tmp_path / f"{trace.trace_id}.json"
+        path.write_text("{}")
+        path.chmod(0o644)  # a reused file from an older write keeps wide permissions
         transport.send_trace_now(trace)
-        mode = (tmp_path / f"{trace.trace_id}.json").stat().st_mode & 0o777
-        assert mode == 0o600
+        assert path.stat().st_mode & 0o777 == 0o600
 
     @pytest.mark.disable_transport_mocking  # conftest stubs HttpTransport.__init__
     def test_old_dev_files_deleted_at_startup(self, tmp_path):

@@ -939,6 +939,8 @@ class HttpTransport:
             out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             # Created owner-only from the start (no effect on Windows).
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            if hasattr(os, "fchmod"):  # also tightens a reused, older file
+                os.fchmod(fd, 0o600)
             with open(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
         except OSError as e:
