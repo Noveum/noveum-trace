@@ -14,7 +14,10 @@ from typing import Any, Optional, Union
 import yaml
 
 from noveum_trace.utils.exceptions import ConfigurationError
-from noveum_trace.utils.pii_redaction import compile_custom_patterns
+from noveum_trace.utils.pii_redaction import (
+    compile_custom_patterns,
+    validate_phone_regions,
+)
 
 
 def _parse_config_bool(value: Any, *, field_name: str) -> bool:
@@ -114,6 +117,10 @@ class SecurityConfig:
     data_residency: Optional[str] = None
     pii_enabled: bool = False
     pii_salt: Optional[str] = DEFAULT_PII_SALT
+    # Countries whose local phone formats (no country code) are detected, as ISO
+    # 3166 codes. ``None`` uses the SDK default (AE, SA, QA, EG, TR, GB, IN, US);
+    # ``[]`` detects only numbers written with ``+<country code>``.
+    pii_phone_regions: Optional[list[str]] = None
 
 
 @dataclass
@@ -281,6 +288,11 @@ class Config:
                 raise ConfigurationError(
                     f"security.custom_redaction_patterns: {e}"
                 ) from e
+            if self.security.pii_phone_regions is not None:
+                try:
+                    validate_phone_regions(self.security.pii_phone_regions)
+                except ValueError as e:
+                    raise ConfigurationError(f"security.pii_phone_regions: {e}") from e
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -315,6 +327,7 @@ class Config:
                 "data_residency": self.security.data_residency,
                 "pii_enabled": self.security.pii_enabled,
                 "pii_salt": self.security.pii_salt,
+                "pii_phone_regions": self.security.pii_phone_regions,
             },
             "integrations": {
                 "langchain": self.integrations.langchain,
@@ -426,6 +439,7 @@ class Config:
                         field_name="security.pii_enabled",
                     ),
                     pii_salt=security_data.get("pii_salt", DEFAULT_PII_SALT),
+                    pii_phone_regions=security_data.get("pii_phone_regions"),
                 )
             else:
                 # If security is not a dict, use default

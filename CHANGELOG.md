@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.x] — Current (2026)
 
+### 1.5.26
+
+- **PII redaction no longer hides person, place, or organisation names.** The spaCy NER path and the `pii_redaction` extra are removed (the spaCy model was never downloaded by the SDK, so in most installs it was silently inactive). Name detection now happens server-side on Noveum ingestion.
+- **PII redaction**: added detection for Emirates IDs, IBANs (all registered countries), phone numbers for any country (via `phonenumbers`, now a core dependency), and 11–16 digit bank account numbers.
+- **PII redaction**: `security.custom_redaction_patterns` is now applied (list, or `{"LABEL": "regex"}` mapping); custom matches take precedence over built-in detectors. New `security.pii_phone_regions` sets which countries' local phone formats are detected.
+- **PII redaction**: `trace_id`, `span_id`, `parent_span_id`, timestamps, durations, full-UUID values, and dates/times inside text are left unchanged. Tokens ignore whitespace and letter case, so `050 123 4567` and `0501234567` get the same token.
+
 ### 1.5.21
 
 - **Pipecat**: Added a public synchronous `NoveumTraceObserver.attach_to_task_sync(task)` method for hosts that wire the observer OUTSIDE an event loop. It registers all observers, the `on_pipeline_finished` safety net, STT detection, and the `AudioBufferProcessor` `on_audio_data` handler synchronously, but does NOT start audio recording — the host calls `AudioBufferProcessor.start_recording()` itself (or uses the async `attach_to_task()`, which now delegates its synchronous wiring to `attach_to_task_sync` and only awaits the recording-start step).

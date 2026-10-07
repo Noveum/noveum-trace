@@ -10,6 +10,7 @@ from noveum_trace.utils.pii_redaction import (
     compile_custom_patterns,
     detect_pii_types,
     redact_pii,
+    validate_phone_regions,
 )
 
 
@@ -124,12 +125,38 @@ class TestPiiPseudonymizeDict:
         ):
             assert out_span[key] == span[key]
         assert out["trace_id"] == trace["trace_id"]
-        assert out["session_id"] == "a@b.co"
         assert out_span["events"][0]["timestamp"] == "12:28:58.495185"
-        assert out_span["attributes"]["llm.request_id"] == "a@b.co"
-        # Non-skipped fields are still pseudonymized
+        # Other *_id fields can hold PII and are pseudonymized
+        assert out["session_id"].startswith("EMAIL_")
+        assert out_span["attributes"]["llm.request_id"].startswith("EMAIL_")
         assert "a@b.co" not in out_span["events"][0]["name"]
         assert "33123456" not in out_span["attributes"]["note"]
+
+    def test_pii_in_other_id_fields_is_pseudonymized(self) -> None:
+        out = PiiPseudonymizer("salt").pseudonymize_dict(
+            {
+                "user_id": "john.smith@corp.com",
+                "customer_id": "+971 50 123 4567",
+                "emirates_id": "784-1990-0000001-0",
+                "attributes": {"stt.user_id": "+971501234567"},
+            }
+        )
+        assert out["user_id"].startswith("EMAIL_")
+        assert out["customer_id"].startswith("PHONE_")
+        assert out["emirates_id"].startswith("EMIRATES_ID_")
+        assert out["attributes"]["stt.user_id"].startswith("PHONE_")
+
+    @pytest.mark.parametrize(
+        "uid",
+        [
+            "79743800-f951-4c17-9cda-c5ca2f4826cf",
+            "44841593-b4b8-45c0-9cfb-48482fb59f60",
+            "80076983-E3D2-4B19-A9D4-C1C4EC833017",
+        ],
+    )
+    def test_full_uuid_values_untouched(self, uid: str) -> None:
+        out = PiiPseudonymizer("salt").pseudonymize_dict({"user_id": uid, "x": [uid]})
+        assert out == {"user_id": uid, "x": [uid]}
 
     def test_nested(self) -> None:
         p = PiiPseudonymizer("salt")
@@ -144,6 +171,53 @@ def _labels(text: str, **kw) -> list[str]:
     """Labels of the pseudonym tokens produced for ``text``, left to right."""
     out = PiiPseudonymizer("salt", **kw).pseudonymize(text)
     return re.findall(rf"([A-Z_]+?)_[a-f0-9]{{{TOKEN_SUFFIX_LENGTH}}}", out)
+
+
+class TestTokenCanonicalization:
+    @pytest.mark.parametrize(
+        "a,b",
+        [
+            ("050 123 4567", "0501234567"),
+            ("+971 50 123 4567", "+971501234567"),
+            ("AE07 0331 2345 6789 0123 456", "AE070331234567890123456"),
+            ("John.Smith@Corp.com", "john.smith@corp.com"),
+            ("784 1990 0000001 0", "784199000000010"),
+            ("4111 1111 1111 1111", "4111111111111111"),
+        ],
+    )
+    def test_same_value_same_token(self, a: str, b: str) -> None:
+        p = PiiPseudonymizer("salt")
+        assert p.pseudonymize(a) == p.pseudonymize(b)
+
+    def test_country_code_kept(self) -> None:
+        # Only whitespace and case are normalized; +971 and 0 prefixes differ.
+        p = PiiPseudonymizer("salt")
+        assert p.pseudonymize("+971501234567") != p.pseudonymize("0501234567")
+
+
+class TestPhoneRegions:
+    def test_default_includes_qatar(self) -> None:
+        assert _labels("order 55123456") == ["PHONE"]
+
+    def test_custom_regions_drop_qatar_local(self) -> None:
+        p = PiiPseudonymizer("salt", phone_regions=["AE", "SA"])
+        assert p.pseudonymize("order 55123456 total AED 61234567") == (
+            "order 55123456 total AED 61234567"
+        )
+        assert p.pseudonymize("call +974 5512 3456").startswith("call PHONE_")
+        assert p.pseudonymize("call 050 123 4567").startswith("call PHONE_")
+
+    def test_empty_regions_only_plus_numbers(self) -> None:
+        p = PiiPseudonymizer("salt", phone_regions=[])
+        assert p.pseudonymize("call 050 123 4567") == "call 050 123 4567"
+        assert p.pseudonymize("call +971 50 123 4567").startswith("call PHONE_")
+
+    def test_lowercase_codes_accepted(self) -> None:
+        assert validate_phone_regions(["ae", " sa "]) == ("AE", "SA")
+
+    def test_invalid_regions_ignored_by_pseudonymizer(self) -> None:
+        p = PiiPseudonymizer("salt", phone_regions=["XX"])
+        assert p.pseudonymize("order 55123456").startswith("order PHONE_")
 
 
 class TestEmiratesId:
@@ -355,3 +429,32 @@ def test_config_ignores_invalid_custom_pattern_when_pii_off() -> None:
 
     config = Config(security=SecurityConfig(custom_redaction_patterns={"BAD": "("}))
     assert config.security.custom_redaction_patterns == {"BAD": "("}
+
+
+def test_config_phone_regions_validated_when_pii_on() -> None:
+    from noveum_trace.core.config import Config, SecurityConfig
+    from noveum_trace.utils.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="pii_phone_regions"):
+        Config(
+            security=SecurityConfig(
+                pii_enabled=True, pii_salt="salt", pii_phone_regions=["XX"]
+            )
+        )
+    Config(security=SecurityConfig(pii_phone_regions=["XX"]))  # PII off: unchecked
+
+
+def test_config_phone_regions_from_dict() -> None:
+    from noveum_trace.core.config import Config
+
+    config = Config.from_dict(
+        {
+            "security": {
+                "pii_enabled": True,
+                "pii_salt": "salt",
+                "pii_phone_regions": ["AE", "SA"],
+            }
+        }
+    )
+    assert config.security.pii_phone_regions == ["AE", "SA"]
+    assert config.to_dict()["security"]["pii_phone_regions"] == ["AE", "SA"]

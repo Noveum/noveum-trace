@@ -11,6 +11,7 @@ the Noveum ingestion endpoints.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import hmac
 import logging
@@ -39,7 +40,8 @@ _PHONE_MIN_DIGITS = 8
 
 # Regions whose *local* formats (no country code, e.g. UAE ``050 123 4567``) are
 # recognised. Numbers written with ``+`` / an international prefix are found
-# for every country regardless of this list.
+# for every country regardless of this list. Override per deployment with
+# ``security.pii_phone_regions``.
 PHONE_REGIONS: tuple[str, ...] = ("AE", "SA", "QA", "EG", "TR", "GB", "IN", "US")
 
 # Cheap pre-check: libphonenumber is only worth running on text with 7+ digits.
@@ -144,12 +146,36 @@ def _validate_intl_phone(m: re.Match[str]) -> Optional[int]:
     return m.start() + end
 
 
-def _find_phones(text: str) -> Iterator[tuple[int, int]]:
+def validate_phone_regions(regions: Any) -> tuple[str, ...]:
+    """
+    Normalize ``security.pii_phone_regions`` to upper-case ISO 3166 codes.
+
+    Raises ``ValueError`` if it is not a list of region codes known to
+    libphonenumber.
+    """
+    if not isinstance(regions, (list, tuple)) or not all(
+        isinstance(r, str) for r in regions
+    ):
+        raise ValueError(
+            "pii_phone_regions must be a list of ISO 3166 region codes, e.g. "
+            '["AE", "SA"]'
+        )
+    normalized = tuple(r.strip().upper() for r in regions)
+    if phonenumbers is not None:
+        unknown = [r for r in normalized if r not in phonenumbers.SUPPORTED_REGIONS]
+        if unknown:
+            raise ValueError(f"Unknown phone region(s) in pii_phone_regions: {unknown}")
+    return normalized
+
+
+def _find_phones(
+    text: str, regions: Sequence[str] = PHONE_REGIONS
+) -> Iterator[tuple[int, int]]:
     """Valid phone numbers per libphonenumber, local formats tried per region."""
     if not _PHONE_PREFILTER_RE.search(text):
         return
     seen: set[tuple[int, int]] = set()
-    for region in PHONE_REGIONS:
+    for region in regions or ("ZZ",):
         for m in phonenumbers.PhoneNumberMatcher(
             text, region, leniency=phonenumbers.Leniency.VALID
         ):
@@ -339,8 +365,23 @@ def _overlaps_any(start: int, end: int, spans: Sequence[tuple[int, int, str]]) -
     return any(not (end <= s0 or start >= s1) for s0, s1, _ in spans)
 
 
+def _builtin_patterns(
+    phone_regions: Optional[Sequence[str]],
+) -> tuple[_PiiPattern, ...]:
+    """Built-in patterns, with the phone finder bound to ``phone_regions``."""
+    if phone_regions is None or phonenumbers is None:
+        return _PII_PATTERNS
+    finder = functools.partial(_find_phones, regions=tuple(phone_regions))
+    return tuple(
+        p._replace(finder=finder) if p.finder is _find_phones else p
+        for p in _PII_PATTERNS
+    )
+
+
 def _select_spans(
-    text: str, custom: Sequence[_PiiPattern]
+    text: str,
+    custom: Sequence[_PiiPattern],
+    builtin_patterns: Sequence[_PiiPattern] = _PII_PATTERNS,
 ) -> list[tuple[int, int, str]]:
     """Non-overlapping spans to replace; custom patterns take precedence.
 
@@ -354,7 +395,7 @@ def _select_spans(
     ]
     builtin = [
         (start, end, label)
-        for start, end, label in _find_spans(text, _PII_PATTERNS)
+        for start, end, label in _find_spans(text, builtin_patterns)
         if not _overlaps_any(start, end, blocked)
     ]
     return kept + _non_overlapping_longest_first(builtin)
@@ -422,20 +463,30 @@ def detect_pii_types(text: str, custom_patterns: CustomPatterns = None) -> list[
     return pii_types
 
 
-# Keys whose values are never pseudonymized (at any depth): rewriting ids
-# breaks span parent/child links, and timestamps / durations are not PII but
-# often look like phone numbers (e.g. Qatar's 8-digit numbers). Any key ending
-# in ``_id`` is skipped as well (trace_id, span_id, parent_span_id, ...).
+# Keys whose values are never pseudonymized (at any depth): rewriting the
+# trace-structure ids breaks span parent/child links, and timestamps / durations
+# are not PII but often look like phone numbers. Other ``*_id`` fields (user_id,
+# customer_id, ...) are pseudonymized: they can hold emails or phone numbers, and
+# the same value always maps to the same token, so grouping still works.
 PSEUDONYMIZE_SKIP_KEYS = frozenset(
-    {"timestamp", "start_time", "end_time", "duration", "duration_ms"}
+    {
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "timestamp",
+        "start_time",
+        "end_time",
+        "duration",
+        "duration_ms",
+    }
 )
-PSEUDONYMIZE_SKIP_KEY_SUFFIX = "_id"
 
+# A string value that is exactly a UUID is left alone wherever it appears.
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
 
-def _is_skipped_key(key: Any) -> bool:
-    return isinstance(key, str) and (
-        key in PSEUDONYMIZE_SKIP_KEYS or key.endswith(PSEUDONYMIZE_SKIP_KEY_SUFFIX)
-    )
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 # Hex digits from the HMAC-SHA256 digest used after the ``LABEL_`` prefix in
@@ -448,10 +499,16 @@ class PiiPseudonymizer:
     Deterministic pseudonymization of PII-like spans using HMAC-SHA256 + salt.
 
     Uses ``_PII_PATTERNS`` (regex + ``phonenumbers``) plus optional custom
-    patterns.
+    patterns. ``phone_regions`` overrides ``PHONE_REGIONS`` (the countries whose
+    local, no-country-code formats are recognised).
     """
 
-    def __init__(self, salt: str, custom_patterns: CustomPatterns = None) -> None:
+    def __init__(
+        self,
+        salt: str,
+        custom_patterns: CustomPatterns = None,
+        phone_regions: Optional[Sequence[str]] = None,
+    ) -> None:
         self._salt = salt
         self._salt_bytes = salt.encode("utf-8")
         try:
@@ -461,11 +518,24 @@ class PiiPseudonymizer:
             logger.error("Ignoring custom redaction patterns: %s", e)
             custom = []
         self._custom_patterns = custom
+        regions: Optional[tuple[str, ...]] = None
+        if phone_regions is not None:
+            try:
+                regions = validate_phone_regions(phone_regions)
+            except ValueError as e:
+                logger.error("Ignoring pii_phone_regions, using defaults: %s", e)
+        self._builtin_patterns = _builtin_patterns(regions)
 
     def _token(self, label: str, value: str) -> str:
-        """NFC-normalize ``value``, HMAC-SHA256(salt, value), return LABEL_ + hex suffix."""
+        """HMAC-SHA256(salt, canonical value), return LABEL_ + hex suffix.
+
+        The value is NFC-normalized, stripped of whitespace and lower-cased first,
+        so ``050 123 4567`` / ``0501234567`` or ``John@Corp.com`` /
+        ``john@corp.com`` get the same token. Country codes and other characters
+        are kept, so ``+971501234567`` and ``0501234567`` still differ.
+        """
         raw = value if isinstance(value, str) else str(value)
-        normalized = unicodedata.normalize("NFC", raw)
+        normalized = _WHITESPACE_RE.sub("", unicodedata.normalize("NFC", raw)).lower()
         digest_hex = hmac.new(
             self._salt_bytes,
             normalized.encode("utf-8"),
@@ -486,10 +556,10 @@ class PiiPseudonymizer:
         """
         if not isinstance(text, str):
             text = str(text)
-        if not text:
+        if not text or _UUID_RE.fullmatch(text):
             return text
 
-        kept = _select_spans(text, self._custom_patterns)
+        kept = _select_spans(text, self._custom_patterns, self._builtin_patterns)
         # Right-to-left by start index descending
         for start, end, label in sorted(kept, key=lambda s: s[0], reverse=True):
             fragment = text[start:end]
@@ -499,12 +569,11 @@ class PiiPseudonymizer:
     def pseudonymize_dict(self, data: Any) -> Any:
         """Recursively walk dicts and lists; pseudonymize every string value.
 
-        Values under ``PSEUDONYMIZE_SKIP_KEYS`` or keys ending in ``_id`` are
-        passed through unchanged.
+        Values under ``PSEUDONYMIZE_SKIP_KEYS`` are passed through unchanged.
         """
         if isinstance(data, dict):
             return {
-                k: v if _is_skipped_key(k) else self.pseudonymize_dict(v)
+                k: v if k in PSEUDONYMIZE_SKIP_KEYS else self.pseudonymize_dict(v)
                 for k, v in data.items()
             }
         if isinstance(data, list):

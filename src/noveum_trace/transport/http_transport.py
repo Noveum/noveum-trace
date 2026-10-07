@@ -81,7 +81,9 @@ class HttpTransport:
             salt = self.config.security.pii_salt
             assert salt is not None and str(salt).strip()
             self._pii_pseudonymizer: Optional[PiiPseudonymizer] = PiiPseudonymizer(
-                salt, self.config.security.custom_redaction_patterns
+                salt,
+                self.config.security.custom_redaction_patterns,
+                self.config.security.pii_phone_regions,
             )
         else:
             self._pii_pseudonymizer = None
