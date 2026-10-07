@@ -7,6 +7,8 @@ including request formatting, authentication, and error handling.
 
 import base64
 import json
+import os
+import re
 import time
 from datetime import datetime, timezone
 from enum import Enum
@@ -39,7 +41,7 @@ from noveum_trace.utils.logging import (
     log_http_response,
     log_trace_flow,
 )
-from noveum_trace.utils.pii_redaction import PiiPseudonymizer
+from noveum_trace.utils.pii_redaction import PiiPseudonymizer, mask_secrets
 
 _MOCK_TYPES: tuple[type[Any], ...]
 
@@ -57,6 +59,24 @@ except ImportError:
     _MOCK_TYPES = ()
 
 logger = get_sdk_logger("transport.http_transport")
+
+_DEV_TRACE_MAX_AGE_SECONDS = 7 * 24 * 3600
+# Names _dev_trace_filename_stem produces: a trace id, or unknown_<ns>.
+_DEV_TRACE_NAME_RE = re.compile(r"[0-9A-Fa-f-]{32,36}|unknown_\d+")
+_STACK_TRACE_KEYS = ("stacktrace", "stack_trace", "traceback")
+
+
+def _strip_stack_traces(data: Any) -> Any:
+    """Recursively drop stack-trace fields (``exception.stacktrace`` and the like)."""
+    if isinstance(data, dict):
+        return {
+            k: _strip_stack_traces(v)
+            for k, v in data.items()
+            if not (isinstance(k, str) and k.lower().endswith(_STACK_TRACE_KEYS))
+        }
+    if isinstance(data, list):
+        return [_strip_stack_traces(item) for item in data]
+    return data
 
 
 class HttpTransport:
@@ -87,6 +107,8 @@ class HttpTransport:
             )
         else:
             self._pii_pseudonymizer = None
+        if self.config.dev_mode:
+            self._delete_old_dev_traces()
 
         logger.info(
             f"HTTP transport initialized for endpoint: {self.config.transport.endpoint}"
@@ -353,7 +375,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}),
             "timestamp": time.time(),
         }
 
@@ -398,7 +420,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}),
             "timestamp": time.time(),
         }
         self._send_single_audio(audio_item)
@@ -461,7 +483,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "image_uuid": image_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}),
             "timestamp": time.time(),
         }
 
@@ -821,7 +843,18 @@ class HttpTransport:
         if getattr(self.config, "otel_compat", False):
             self._augment_trace_otel(trace_data)
 
-        return trace_data
+        # Protect here, once: the queue, dev files, logs and network all see the
+        # result. A failure raises, so export_trace drops the trace, never sends raw.
+        return self._protect(trace_data)
+
+    def _protect(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Strip stack traces (unless enabled), mask secrets, then pseudonymize."""
+        if not self.config.tracing.capture_stack_traces:
+            data = _strip_stack_traces(data)
+        data = mask_secrets(data)
+        if self._pii_pseudonymizer is not None:
+            data = self._pii_pseudonymizer.pseudonymize_dict(data)
+        return data
 
     def _augment_trace_otel(self, trace_data: dict[str, Any]) -> None:
         """
@@ -879,6 +912,22 @@ class HttpTransport:
         safe = "".join(c for c in str(trace_id) if c.isalnum() or c in "-_")
         return safe if safe else f"unknown_{time.time_ns()}"
 
+    def _delete_old_dev_traces(self) -> None:
+        """Age-based cleanup so dev trace files don't accumulate."""
+        out_dir = Path(
+            self.config.dev_traces_dir or DEFAULT_DEV_TRACES_DIR
+        ).expanduser()
+        cutoff = time.time() - _DEV_TRACE_MAX_AGE_SECONDS
+        for path in out_dir.glob("*.json"):
+            # Only files this SDK wrote (trace-id names): the folder may be shared.
+            if not _DEV_TRACE_NAME_RE.fullmatch(path.stem):
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError as e:
+                logger.warning("dev_mode: failed to delete old trace %s: %s", path, e)
+
     def _write_dev_trace_json_file(self, trace: dict[str, Any]) -> None:
         """Write one trace dict to ``{trace_id}.json`` (caller checks dev_mode)."""
         dir_str = self.config.dev_traces_dir or DEFAULT_DEV_TRACES_DIR
@@ -886,11 +935,12 @@ class HttpTransport:
         stem = self._dev_trace_filename_stem(trace)
         path = out_dir / f"{stem}.json"
         try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(trace, indent=2, default=str, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            text = json.dumps(trace, indent=2, default=str, ensure_ascii=False)
+            out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Created owner-only from the start (no effect on Windows).
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with open(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
         except OSError as e:
             logger.warning("dev_mode: failed to write trace JSON to %s: %s", path, e)
         except (TypeError, ValueError) as e:
@@ -945,15 +995,11 @@ class HttpTransport:
 
         self._write_dev_trace_payload(payload)
 
-        post_body: dict[str, Any] = payload
-        if self._pii_pseudonymizer is not None:
-            post_body = self._pii_pseudonymizer.pseudonymize_dict(payload)
-
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=post_body,
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
@@ -1097,15 +1143,11 @@ class HttpTransport:
 
         self._write_dev_trace_payload(payload)
 
-        post_payload: dict[str, Any] = payload
-        if self._pii_pseudonymizer is not None:
-            post_payload = self._pii_pseudonymizer.pseudonymize_dict(payload)
-
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=post_payload,
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )

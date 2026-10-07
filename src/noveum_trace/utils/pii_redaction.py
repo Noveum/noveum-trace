@@ -31,6 +31,36 @@ logger = logging.getLogger(__name__)
 # ``{"LABEL": "regex"}`` mapping. Same shape as ``SecurityConfig.custom_redaction_patterns``.
 CustomPatterns = Union[list[str], dict[str, str], None]
 
+# Integers are pseudonymized only in identifier-named fields (``user.phone``,
+# ``card_number``), so durations, counts and timestamps stay numeric.
+_PII_INT_FIELD_RE = re.compile(
+    r"(?:^|[._-])(?:phone|mobile|aadhaar|card|account|ssn|pan)"
+    r"(?:[_-]?(?:no|num|number))?$",
+    re.IGNORECASE,
+)
+
+# Secrets are masked whatever the PII setting: matched on the key's last segment
+# (so ``total_tokens`` is left alone) or on well-known credential formats.
+_SECRET_KEY_RE = re.compile(
+    r"(?:^|[._-])(?:api[_-]?key|(?:client[_-]?)?secret|secret[_-]?key|passw(?:or)?d"
+    r"|authorization|access[_-]?key|private[_-]?key|credentials?"
+    r"|(?:access|refresh|auth|session)[_-]?token)$",
+    re.IGNORECASE,
+)
+_SECRET_VALUE_RE = re.compile(
+    r"\bsk-[A-Za-z0-9_-]{16,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}"
+    r"|\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"
+)
+# Secret-named pairs inside text, e.g. JSON-serialized state: "api_key": "...".
+# Quoted values are masked up to the closing quote (escaped JSON included).
+_SECRET_PAIR_RE = re.compile(
+    r"""([\w.-]*(?:api[_-]?key|secret|passw(?:or)?d|authorization|access[_-]?key"""
+    r"""|private[_-]?key|credentials?|(?:access|refresh|auth|session)[_-]?token)"""
+    r"""\\?["']?\s*[:=]\s*(?:Bearer\s+)?)(?:(\\?["'])[^"'\\]+|[^\s"'\\,;&}]+)""",
+    re.IGNORECASE,
+)
+SECRET_MASK = "***"
+
 # Strip from URL match end only (prose often appends . , ) ] } : ; ! ? ' ")
 _URL_TRAILING_PUNCT = frozenset(".,;:!?)]}'\"")
 
@@ -259,8 +289,19 @@ _PII_PATTERNS: tuple[_PiiPattern, ...] = (
         "credit_card",
         re.compile(r"(?<![\w-])\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}(?![\w-])"),
     ),
+    # Not touching word chars or hyphens, so UUID blocks (span/trace ids) never match.
+    _PiiPattern(
+        "AADHAAR",
+        "aadhaar",
+        re.compile(r"(?<![\w-])\d{4}[\s-]?\d{4}[\s-]?\d{4}(?![\w-])"),
+    ),
+    _PiiPattern("PAN", "pan", re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")),
     # Any country (``+``/``00`` prefixed) and local formats for PHONE_REGIONS.
     *_PHONE_PATTERNS,
+    # Indian mobiles, with or without +91 (kept even if IN is not in the regions).
+    _PiiPattern(
+        "PHONE", "phone", re.compile(r"(?:\+91[\s-]?)?\b[6-9]\d{4}[\s-]?\d{5}\b")
+    ),
     # Legacy US-style / bare 10-digit formats (kept regardless of validity).
     _PiiPattern("PHONE", "phone", re.compile(r"\b\d{3}-\d{3}-\d{4}\b")),
     _PiiPattern("PHONE", "phone", re.compile(r"\b\(\d{3}\)\s*\d{3}-\d{4}\b")),
@@ -489,6 +530,27 @@ _UUID_RE = re.compile(
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+def mask_secrets(data: Any) -> Any:
+    """Recursively replace credential-looking keys' values and key formats."""
+    if isinstance(data, dict):
+        return {
+            k: (
+                SECRET_MASK
+                if isinstance(k, str) and _SECRET_KEY_RE.search(k)
+                else mask_secrets(v)
+            )
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [mask_secrets(item) for item in data]
+    if isinstance(data, str):
+        data = _SECRET_VALUE_RE.sub(SECRET_MASK, data)
+        return _SECRET_PAIR_RE.sub(
+            lambda m: m.group(1) + (m.group(2) or "") + SECRET_MASK, data
+        )
+    return data
+
+
 # Hex digits from the HMAC-SHA256 digest used after the ``LABEL_`` prefix in
 # pseudonyms (tunable; longer suffixes reduce collision rate among distinct values).
 TOKEN_SUFFIX_LENGTH = 12
@@ -566,18 +628,35 @@ class PiiPseudonymizer:
             text = text[:start] + self._token(label, fragment) + text[end:]
         return text
 
-    def pseudonymize_dict(self, data: Any) -> Any:
-        """Recursively walk dicts and lists; pseudonymize every string value.
+    def pseudonymize_dict(self, data: Any, key: str = "") -> Any:
+        """Recursively pseudonymize string values and keys, and integers held in
+        identifier-named fields (``user.phone``); other numbers stay numeric.
 
         Values under ``PSEUDONYMIZE_SKIP_KEYS`` are passed through unchanged.
         """
         if isinstance(data, dict):
             return {
-                k: v if k in PSEUDONYMIZE_SKIP_KEYS else self.pseudonymize_dict(v)
+                (self.pseudonymize(k) if isinstance(k, str) else k): (
+                    v
+                    if k in PSEUDONYMIZE_SKIP_KEYS
+                    else self.pseudonymize_dict(v, k if isinstance(k, str) else "")
+                )
                 for k, v in data.items()
             }
+        if (
+            isinstance(data, int)
+            and not isinstance(data, bool)
+            and _PII_INT_FIELD_RE.search(key)
+        ):
+            digits = str(data)
+            for start, end, label in _select_spans(
+                digits, self._custom_patterns, self._builtin_patterns
+            ):
+                if start == 0 and end == len(digits):
+                    return self._token(label, digits)
+            return data
         if isinstance(data, list):
-            return [self.pseudonymize_dict(item) for item in data]
+            return [self.pseudonymize_dict(item, key) for item in data]
         if isinstance(data, str):
             return self.pseudonymize(data)
         return data

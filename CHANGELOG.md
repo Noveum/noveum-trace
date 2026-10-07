@@ -240,10 +240,7 @@ The 0.3.0 release introduced a **decorator-based API** (`@trace_llm`, `@trace_ag
 
 #### 🔒 **Security & Privacy**
 
-- **PII Redaction**: Advanced PII detection and redaction utilities
-- **Data Encryption**: Transport-level encryption for sensitive data
-- **Configurable Redaction**: Custom redaction patterns and rules
-- **Data Residency**: Geographic data residency configuration
+- **PII Redaction**: PII detection and redaction utilities
 - **Secure Defaults**: Privacy-first default configuration
 
 #### 🛠️ **Development Experience**

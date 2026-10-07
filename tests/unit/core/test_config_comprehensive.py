@@ -118,7 +118,7 @@ class TestSecurityConfig:
 
         assert config.redact_pii is False
         assert config.custom_redaction_patterns == []
-        assert config.encrypt_data is True
+        assert config.encrypt_data is False
         assert config.data_residency is None
         assert config.pii_enabled is False
         assert config.pii_salt == DEFAULT_PII_SALT
@@ -211,7 +211,7 @@ class TestConfig:
         """Test Config with custom values."""
         tracing = TracingConfig(enabled=False)
         transport = TransportConfig(endpoint="https://custom.api.com")
-        security = SecurityConfig(redact_pii=True)
+        security = SecurityConfig(pii_enabled=True, pii_salt="test-salt")
         integrations = IntegrationConfig(openai={"enabled": True})
 
         config = Config(
@@ -303,7 +303,7 @@ class TestConfig:
         """Test Config.create() method with component configurations."""
         tracing = TracingConfig(enabled=False)
         transport = TransportConfig(timeout=60)
-        security = SecurityConfig(redact_pii=True)
+        security = SecurityConfig(pii_enabled=True, pii_salt="test-salt")
         integrations = IntegrationConfig(openai={"enabled": True})
 
         config = Config.create(
@@ -323,7 +323,7 @@ class TestConfig:
         config = Config(
             project="test-project",
             api_key="test-key",
-            environment="production",
+            environment="staging",
             debug=True,
             log_level="DEBUG",
             dev_mode=True,
@@ -334,7 +334,7 @@ class TestConfig:
 
         assert data["project"] == "test-project"
         assert data["api_key"] == "test-key"
-        assert data["environment"] == "production"
+        assert data["environment"] == "staging"
         assert data["debug"] is True
         assert data["log_level"] == "DEBUG"
         assert data["dev_mode"] is True
@@ -351,7 +351,7 @@ class TestConfig:
         data = {
             "project": "test-project",
             "api_key": "test-key",
-            "environment": "production",
+            "environment": "staging",
             "debug": True,
             "log_level": "DEBUG",
             "dev_mode": True,
@@ -362,7 +362,7 @@ class TestConfig:
 
         assert config.project == "test-project"
         assert config.api_key == "test-key"
-        assert config.environment == "production"
+        assert config.environment == "staging"
         assert config.debug is True
         assert config.log_level == "DEBUG"
         assert config.dev_mode is True
@@ -413,8 +413,7 @@ class TestConfig:
                 "retry_attempts": 5,
             },
             "security": {
-                "redact_pii": True,
-                "custom_redaction_patterns": ["email", "phone"],
+                "pii_salt": "custom-salt",
             },
             "integrations": {
                 "openai": {"enabled": True},
@@ -430,10 +429,8 @@ class TestConfig:
         assert config.transport.endpoint == "https://custom.api.com"
         assert config.transport.timeout == 60
         assert config.transport.retry_attempts == 5
-        assert config.security.redact_pii is True
-        assert config.security.custom_redaction_patterns == ["email", "phone"]
         assert config.security.pii_enabled is False
-        assert config.security.pii_salt == DEFAULT_PII_SALT
+        assert config.security.pii_salt == "custom-salt"
         assert config.integrations.openai == {"enabled": True}
         assert config.integrations.langchain == {"enabled": True, "auto_trace": True}
 
@@ -1089,7 +1086,7 @@ class TestConfigurationIntegration:
             # Configure with partial override
             configure(
                 {
-                    "tracing": {"enabled": False, "capture_performance": True},
+                    "tracing": {"enabled": False, "capture_stack_traces": True},
                     "transport": {"timeout": 60},
                 }
             )
@@ -1100,7 +1097,7 @@ class TestConfigurationIntegration:
             assert config.project == "env-project"  # From environment
             assert config.tracing.enabled is False  # From dict
             assert config.tracing.sample_rate == 1.0  # From environment
-            assert config.tracing.capture_performance is True  # From dict
+            assert config.tracing.capture_stack_traces is True  # From dict
             assert (
                 config.transport.endpoint == "https://env.api.com"
             )  # From environment
@@ -1138,3 +1135,35 @@ class TestConfigurationIntegration:
 
         # Should be different instances
         assert config1 is not config2
+
+
+class TestUnsupportedSettingsRejected:
+    """Inactive settings must fail clearly instead of silently promising."""
+
+    @pytest.mark.parametrize(
+        "kwargs, name",
+        [
+            ({"security": SecurityConfig(redact_pii=True)}, "redact_pii"),
+            ({"security": SecurityConfig(encrypt_data=True)}, "encrypt_data"),
+            ({"security": SecurityConfig(data_residency="in")}, "data_residency"),
+            ({"tracing": TracingConfig(capture_errors=False)}, "capture_errors"),
+            (
+                {"tracing": TracingConfig(capture_performance=True)},
+                "capture_performance",
+            ),
+            ({"environment": "production", "dev_mode": True}, "dev_mode"),
+            ({"environment": "Production", "dev_mode": True}, "dev_mode"),
+            ({"environment": "prod", "dev_mode": True}, "dev_mode"),
+        ],
+    )
+    def test_rejected_with_its_name(self, kwargs, name):
+        with pytest.raises(ConfigurationError, match=name):
+            Config.create(**kwargs)
+
+    def test_defaults_are_accepted(self):
+        config = Config.create()
+        assert config.security.encrypt_data is False
+        assert config.tracing.capture_stack_traces is False
+
+    def test_from_dict_without_security_is_accepted(self):
+        Config.from_dict({"project": "p"})

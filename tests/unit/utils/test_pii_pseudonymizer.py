@@ -458,3 +458,116 @@ def test_config_phone_regions_from_dict() -> None:
     )
     assert config.security.pii_phone_regions == ["AE", "SA"]
     assert config.to_dict()["security"]["pii_phone_regions"] == ["AE", "SA"]
+
+
+# --- detection coverage (synthetic values only) -----------------------------
+
+MUST_CATCH = [
+    "ABCDE1234F",  # PAN
+    "pan AAAPL1234C on file",
+    "1234 5678 9012",  # Aadhaar, spaced
+    "1234-5678-9012",
+    "123456789012",
+    "+91 98765 43210",  # Indian mobile
+    "+919876543210",
+    "98765 43210",
+    "9876543210",
+    "priya@bank.in",
+    "4111 1111 1111 1111",
+    "4111111111111111",
+    "123-45-6789",
+    "415-555-0199",
+    "10.0.0.12",
+    "id 12345678901",  # bank account
+]
+MUST_NOT_CATCH = [
+    "order 20261006",
+    "v1.5.25",
+    "total_tokens 1234",
+    "ABCDE12345",
+    "HTTP 200",
+    "2026-10-06T10:00:00Z",
+    "model gpt-4o",
+    "price 1499.00",
+    "c04cc794-6f08-4251-8d70-d84f8044e887",
+    "3f2a9c1e-1d2b-4c3d-8e4f-123456789012",  # UUID whose last block is 12 digits
+]
+
+
+def test_detection_table(capsys) -> None:
+    p = PiiPseudonymizer("salt")
+    misses = [v for v in MUST_CATCH if p.pseudonymize(v) == v]
+    false_positives = [v for v in MUST_NOT_CATCH if p.pseudonymize(v) != v]
+    print(
+        f"detection: {len(MUST_CATCH) - len(misses)}/{len(MUST_CATCH)} caught, "
+        f"misses={misses}, false_positives={false_positives}"
+    )
+    assert misses == []
+    assert false_positives == []
+
+
+def test_dict_keys_and_identifier_ints_are_pseudonymized() -> None:
+    p = PiiPseudonymizer("salt")
+    out = p.pseudonymize_dict(
+        {"priya@bank.in": 1, "phone": 9876543210, "aadhaar": 123456789012}
+    )
+    assert "priya@bank.in" not in out
+    assert str(out["phone"]).startswith("PHONE_")
+    assert str(out["aadhaar"]).startswith("AADHAAR_")
+
+
+def test_timestamps_and_flags_are_not_pseudonymized() -> None:
+    p = PiiPseudonymizer("salt")
+    data = {
+        "created": 1759740000,
+        "count": 42,
+        "ok": True,
+        "ratio": 0.5,
+        "duration_ns": 7123456789,  # looks like a phone, but not a phone field
+        "span_count": 987654321012,  # "pan" inside "span" must not count
+    }
+    assert p.pseudonymize_dict(data) == data
+
+
+def test_mask_secrets_by_key_name_and_value_pattern() -> None:
+    from noveum_trace.utils.pii_redaction import mask_secrets
+
+    key = "sk-" + "B" * 24
+    out = mask_secrets(
+        {
+            "api_key": "k",
+            "openai.client_secret": "s",
+            "headers": {"Authorization": "Bearer " + "c" * 20},
+            "note": f"used {key} here",
+            "llm.usage.total_tokens": 5,
+            "author": "a",
+        }
+    )
+    assert out["api_key"] == "***"
+    assert out["openai.client_secret"] == "***"
+    assert out["headers"]["Authorization"] == "***"
+    assert out["note"] == "used *** here"
+    assert out["llm.usage.total_tokens"] == 5
+    assert out["author"] == "a"
+
+
+@pytest.mark.parametrize(
+    "text, masked",
+    [
+        (
+            '{"api_key": "gsk_ABCDEF123456", "model": "llama"}',
+            '{"api_key": "***", "model": "llama"}',
+        ),
+        ("password=hunter2&user=bob", "password=***&user=bob"),
+        ("Authorization: Bearer short123", "Authorization: Bearer ***"),
+        ("total_tokens: 1234", "total_tokens: 1234"),
+        ("secretary: Ann", "secretary: Ann"),
+        ('"password": "correct horse battery staple"', '"password": "***"'),
+        ('{\\"api_key\\": \\"abc123\\"}', '{\\"api_key\\": \\"***\\"}'),
+    ],
+)
+def test_mask_secrets_in_serialized_text(text, masked) -> None:
+    # e.g. CrewAI stores Flow state as JSON text, so key names are inside strings
+    from noveum_trace.utils.pii_redaction import mask_secrets
+
+    assert mask_secrets(text) == masked

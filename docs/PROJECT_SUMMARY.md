@@ -117,8 +117,7 @@ noveum-trace-sdk/
 
 ### ✅ Security & Privacy
 
-- **PII redaction utilities** with configurable patterns
-- **Configurable data sanitization** for sensitive information
+- **PII pseudonymization** (`pii_enabled`) before traces are queued or sent
 - **Secure transport** with TLS encryption
 - **Data residency** configuration for compliance
 - **Token-level access control** and authentication

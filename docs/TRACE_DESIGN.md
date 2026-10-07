@@ -33,8 +33,9 @@ predicting a trace, or your prediction will be wrong:
    stores `llm.input.prompts` as the *first 5*, `retrieval.sample_results` as
    the *first 10*. When a producer truncates, it **emits a flag**
    (`retrieval.results_truncated: true`).
-3. **PII redaction.** Text can be redacted/pseudonymized before it lands on a
-   span (`utils/pii_redaction.py`).
+3. **PII pseudonymization.** With `security.pii_enabled`, text is pseudonymized
+   when the trace is prepared for export, before it is queued, written to dev
+   files or sent (`utils/pii_redaction.py`). Spans themselves hold raw values.
 4. **Binary goes out-of-band.** Audio and images are **not** inlined. They are
    uploaded separately and referenced by a UUID attribute
    (`stt.audio_uuid`, `tts.audio_uuid`, `full_conversation.audio_uuid`,
