@@ -175,7 +175,9 @@ def mock_transport_completely(request):
         if self.config.security.pii_enabled:
             salt = self.config.security.pii_salt
             assert salt is not None and str(salt).strip()
-            self._pii_pseudonymizer = PiiPseudonymizer(salt)
+            self._pii_pseudonymizer = PiiPseudonymizer(
+                salt, self.config.security.custom_redaction_patterns
+            )
         else:
             self._pii_pseudonymizer = None
 

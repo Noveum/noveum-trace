@@ -14,6 +14,7 @@ from typing import Any, Optional, Union
 import yaml
 
 from noveum_trace.utils.exceptions import ConfigurationError
+from noveum_trace.utils.pii_redaction import compile_custom_patterns
 
 
 def _parse_config_bool(value: Any, *, field_name: str) -> bool:
@@ -104,7 +105,11 @@ class SecurityConfig:
     """Configuration for security and privacy."""
 
     redact_pii: bool = False
-    custom_redaction_patterns: list[str] = field(default_factory=list)
+    # Extra regexes applied by the PII pseudonymizer (when ``pii_enabled``):
+    # a list (pseudonym label ``CUSTOM``) or a ``{"LABEL": "regex"}`` mapping.
+    custom_redaction_patterns: Union[list[str], dict[str, str]] = field(
+        default_factory=list
+    )
     encrypt_data: bool = True
     data_residency: Optional[str] = None
     pii_enabled: bool = False
@@ -242,6 +247,11 @@ class Config:
             url_pattern = r"^https?://[a-zA-Z0-9\-._~:/?#[\]@!$&\'()*+,;=%]+$"
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
+
+        try:
+            compile_custom_patterns(self.security.custom_redaction_patterns)
+        except ValueError as e:
+            raise ConfigurationError(f"security.custom_redaction_patterns: {e}") from e
 
         if self.security.pii_enabled:
             salt = self.security.pii_salt
