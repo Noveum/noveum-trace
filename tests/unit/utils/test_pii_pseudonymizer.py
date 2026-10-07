@@ -98,6 +98,39 @@ class TestPiiPseudonymizeRegex:
 
 
 class TestPiiPseudonymizeDict:
+    def test_ids_timestamps_durations_untouched(self) -> None:
+        span = {
+            "trace_id": "44841593-b4b8-45c0-9cfb-48482fb59f60",
+            "span_id": "33123456",
+            "parent_span_id": "+971 50 123 4567",
+            "start_time": "2026-10-07 12:28:58.495185+00:00",
+            "end_time": "12:28:58.495185",
+            "duration": "33123456",
+            "duration_ms": 33123456,
+            "events": [{"timestamp": "12:28:58.495185", "name": "a@b.co"}],
+            "attributes": {"note": "call 33123456", "llm.request_id": "a@b.co"},
+        }
+        trace = {"trace_id": span["trace_id"], "session_id": "a@b.co", "spans": [span]}
+        out = PiiPseudonymizer("salt").pseudonymize_dict(trace)
+        out_span = out["spans"][0]
+        for key in (
+            "trace_id",
+            "span_id",
+            "parent_span_id",
+            "start_time",
+            "end_time",
+            "duration",
+            "duration_ms",
+        ):
+            assert out_span[key] == span[key]
+        assert out["trace_id"] == trace["trace_id"]
+        assert out["session_id"] == "a@b.co"
+        assert out_span["events"][0]["timestamp"] == "12:28:58.495185"
+        assert out_span["attributes"]["llm.request_id"] == "a@b.co"
+        # Non-skipped fields are still pseudonymized
+        assert "a@b.co" not in out_span["events"][0]["name"]
+        assert "33123456" not in out_span["attributes"]["note"]
+
     def test_nested(self) -> None:
         p = PiiPseudonymizer("salt")
         data = {"x": "a@b.co", "y": [{"z": "c@d.co"}], "n": 1}
@@ -200,6 +233,14 @@ class TestBankAccount:
     def test_11_to_16_digits(self, n: str) -> None:
         assert _labels(f"acct {n}") == (["CARD"] if len(n) == 16 else ["BANK_ACCOUNT"])
 
+    @pytest.mark.parametrize("end", [".", ". Thanks", "!", "?", ","])
+    def test_sentence_ending_account_number(self, end: str) -> None:
+        out = PiiPseudonymizer("salt").pseudonymize(
+            f"My account number is 123456789012{end}"
+        )
+        assert "123456789012" not in out
+        assert out.endswith(end)
+
     def test_17_digits_and_decimals_ignored(self) -> None:
         assert _labels("12345678901234567") == []
         assert _labels("3.14159265358979") == []
@@ -241,6 +282,38 @@ class TestCustomPatterns:
         assert _labels("a@b.co", custom_patterns=["("]) == ["EMAIL"]
 
 
+class TestProtectedDatesAndTimes:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "12:28:58.495185",
+            "at 12:28:58.495185 ok",
+            "2026-10-07 12:28:58.495185+00:00",
+            "2026-10-07T12:28:58.495185Z",
+            "logged 07/10/2026 12:28:58",
+            "on 07.10.2026",
+            "on 7-10-2026",
+            "at 9:30 PM",
+        ],
+    )
+    def test_dates_and_times_untouched(self, text: str) -> None:
+        assert PiiPseudonymizer("salt").pseudonymize(text) == text
+
+    def test_phone_next_to_time_still_redacted(self) -> None:
+        out = PiiPseudonymizer("salt").pseudonymize(
+            "called +974 3312 3456 at 12:28:58, then 33123456"
+        )
+        assert re.fullmatch(
+            r"called PHONE_[a-f0-9]+ at 12:28:58, then PHONE_[a-f0-9]+", out
+        ), out
+
+    def test_custom_pattern_still_applies_inside_time(self) -> None:
+        assert _labels("12:28:58", custom_patterns={"SECS": r"58"}) == ["SECS"]
+
+    def test_detect_pii_types_ignores_times(self) -> None:
+        assert detect_pii_types("12:28:58.495185") == []
+
+
 class TestSharedPatterns:
     def test_redact_pii_masks_new_types(self) -> None:
         text = "id 784-1990-0000001-0 tel +971 50 123 4567 end."
@@ -253,7 +326,7 @@ class TestSharedPatterns:
     def test_detect_pii_types(self) -> None:
         got = detect_pii_types(
             "x@y.co 784199000000010 AE070331234567890123456 +971501234567 "
-            "12345678901"
+            "98765432109"
         )
         assert set(got) >= {"email", "emirates_id", "iban", "phone", "bank_account"}
 
@@ -268,4 +341,17 @@ def test_config_rejects_invalid_custom_pattern() -> None:
     from noveum_trace.utils.exceptions import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="custom_redaction_patterns"):
-        Config(security=SecurityConfig(custom_redaction_patterns={"BAD": "("}))
+        Config(
+            security=SecurityConfig(
+                pii_enabled=True,
+                pii_salt="salt",
+                custom_redaction_patterns={"BAD": "("},
+            )
+        )
+
+
+def test_config_ignores_invalid_custom_pattern_when_pii_off() -> None:
+    from noveum_trace.core.config import Config, SecurityConfig
+
+    config = Config(security=SecurityConfig(custom_redaction_patterns={"BAD": "("}))
+    assert config.security.custom_redaction_patterns == {"BAD": "("}

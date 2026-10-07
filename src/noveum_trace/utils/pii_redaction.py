@@ -243,8 +243,12 @@ _PII_PATTERNS: tuple[_PiiPattern, ...] = (
     _PiiPattern("SSN", "ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     _PiiPattern("IP", "ip_address", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
     # Bare 11–16 digit runs (bank account numbers); last so specific types win ties.
+    # A trailing "." only blocks the match when a digit follows (a decimal), so a
+    # sentence-ending account number is still caught.
     _PiiPattern(
-        "BANK_ACCOUNT", "bank_account", re.compile(r"(?<![\w.-])\d{11,16}(?![\w.-])")
+        "BANK_ACCOUNT",
+        "bank_account",
+        re.compile(r"(?<![\w.-])\d{11,16}(?![\w-]|\.\d)"),
     ),
 )
 
@@ -314,8 +318,25 @@ def _non_overlapping_longest_first(
     return accepted
 
 
-def _all_patterns(custom_patterns: CustomPatterns) -> list[_PiiPattern]:
-    return compile_custom_patterns(custom_patterns) + list(_PII_PATTERNS)
+# Dates and times in free text are not PII, but their digit runs can look like
+# phone numbers (e.g. ``12:28:58.495185`` contains a valid Qatar number). Built-in
+# matches overlapping these are dropped; custom patterns are not affected.
+_TZ = r"(?:\s?(?:Z|UTC|GMT|[+-]\d{2}:?\d{2}))?"
+_TIME = r"\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d{1,9})?)?(?:\s?[AaPp]\.?[Mm]\.?)?" + _TZ
+_PROTECTED_DATETIME_RE = re.compile(
+    r"(?<![\d:.])(?:"
+    # ISO date, optionally with time: 2026-10-07, 2026-10-07T12:28:58.495185Z
+    rf"\d{{4}}-\d{{2}}-\d{{2}}(?:[T ]{_TIME})?"
+    # Day/month/year: 07/10/2026, 7-10-2026, 07.10.2026 (optionally with time)
+    rf"|\d{{1,2}}([/.-])\d{{1,2}}\1\d{{4}}(?:,?\s{_TIME})?"
+    # Time on its own: 12:28, 12:28:58, 12:28:58.495185, 9:30 PM
+    rf"|{_TIME}"
+    r")(?![\d:])"
+)
+
+
+def _overlaps_any(start: int, end: int, spans: Sequence[tuple[int, int, str]]) -> bool:
+    return any(not (end <= s0 or start >= s1) for s0, s1, _ in spans)
 
 
 def _select_spans(
@@ -325,12 +346,16 @@ def _select_spans(
 
     Custom matches are resolved first, then built-in matches fill the gaps: a
     built-in match overlapping any kept custom match is dropped, even if longer.
+    Built-in matches overlapping a date or time are dropped too.
     """
     kept = _non_overlapping_longest_first(_find_spans(text, custom))
+    blocked = kept + [
+        (m.start(), m.end(), "DATETIME") for m in _PROTECTED_DATETIME_RE.finditer(text)
+    ]
     builtin = [
         (start, end, label)
         for start, end, label in _find_spans(text, _PII_PATTERNS)
-        if all(end <= c0 or start >= c1 for c0, c1, _ in kept)
+        if not _overlaps_any(start, end, blocked)
     ]
     return kept + _non_overlapping_longest_first(builtin)
 
@@ -388,13 +413,29 @@ def detect_pii_types(text: str, custom_patterns: CustomPatterns = None) -> list[
     if not isinstance(text, str):
         text = str(text)
 
+    custom = compile_custom_patterns(custom_patterns)
+    found = {label for _, _, label in _select_spans(text, custom)}
     pii_types: list[str] = []
-    for p in _all_patterns(custom_patterns):
-        if p.detect_name in pii_types:
-            continue
-        if next(p.find(text), None) is not None:
+    for p in list(custom) + list(_PII_PATTERNS):
+        if p.label in found and p.detect_name not in pii_types:
             pii_types.append(p.detect_name)
     return pii_types
+
+
+# Keys whose values are never pseudonymized (at any depth): rewriting ids
+# breaks span parent/child links, and timestamps / durations are not PII but
+# often look like phone numbers (e.g. Qatar's 8-digit numbers). Any key ending
+# in ``_id`` is skipped as well (trace_id, span_id, parent_span_id, ...).
+PSEUDONYMIZE_SKIP_KEYS = frozenset(
+    {"timestamp", "start_time", "end_time", "duration", "duration_ms"}
+)
+PSEUDONYMIZE_SKIP_KEY_SUFFIX = "_id"
+
+
+def _is_skipped_key(key: Any) -> bool:
+    return isinstance(key, str) and (
+        key in PSEUDONYMIZE_SKIP_KEYS or key.endswith(PSEUDONYMIZE_SKIP_KEY_SUFFIX)
+    )
 
 
 # Hex digits from the HMAC-SHA256 digest used after the ``LABEL_`` prefix in
@@ -456,9 +497,16 @@ class PiiPseudonymizer:
         return text
 
     def pseudonymize_dict(self, data: Any) -> Any:
-        """Recursively walk dicts and lists; pseudonymize every string value."""
+        """Recursively walk dicts and lists; pseudonymize every string value.
+
+        Values under ``PSEUDONYMIZE_SKIP_KEYS`` or keys ending in ``_id`` are
+        passed through unchanged.
+        """
         if isinstance(data, dict):
-            return {k: self.pseudonymize_dict(v) for k, v in data.items()}
+            return {
+                k: v if _is_skipped_key(k) else self.pseudonymize_dict(v)
+                for k, v in data.items()
+            }
         if isinstance(data, list):
             return [self.pseudonymize_dict(item) for item in data]
         if isinstance(data, str):

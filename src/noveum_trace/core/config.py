@@ -248,11 +248,6 @@ class Config:
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
 
-        try:
-            compile_custom_patterns(self.security.custom_redaction_patterns)
-        except ValueError as e:
-            raise ConfigurationError(f"security.custom_redaction_patterns: {e}") from e
-
         if self.security.pii_enabled:
             salt = self.security.pii_salt
             if salt is None:
@@ -278,6 +273,14 @@ class Config:
                     "security.pii_salt must not use the deprecated shared default value. "
                     "Set a unique secret for your deployment."
                 )
+            # Only checked when PII is on: the patterns are unused otherwise, and
+            # older configs may carry patterns that were never validated.
+            try:
+                compile_custom_patterns(self.security.custom_redaction_patterns)
+            except ValueError as e:
+                raise ConfigurationError(
+                    f"security.custom_redaction_patterns: {e}"
+                ) from e
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
