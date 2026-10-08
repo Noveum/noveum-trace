@@ -5,7 +5,6 @@ This module handles HTTP communication with the Noveum platform,
 including request formatting, authentication, and error handling.
 """
 
-import base64
 import json
 import os
 import time
@@ -72,6 +71,29 @@ def _strip_stack_traces(data: Any) -> Any:
         }
     if isinstance(data, list):
         return [_strip_stack_traces(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_strip_stack_traces(item) for item in data)
+    return data
+
+
+def _bytes_to_text(value: bytes) -> str:
+    """UTF-8 text so protection can inspect it; other bytes become a placeholder."""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"<bytes: {len(value)} bytes>"
+
+
+def _decode_bytes(data: Any) -> Any:
+    """Recursively replace bytes values with :func:`_bytes_to_text`."""
+    if isinstance(data, bytes):
+        return _bytes_to_text(data)
+    if isinstance(data, dict):
+        return {k: _decode_bytes(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_decode_bytes(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_decode_bytes(item) for item in data)
     return data
 
 
@@ -675,14 +697,10 @@ class HttpTransport:
         if isinstance(obj, Enum):
             return self.trace_to_dict(obj.value, depth + 1, max_depth)
         if isinstance(obj, bytes):
-            # For bytes, return base64 if small, otherwise truncated repr
+            # Not base64: encoded text would hide PII and secrets from _protect.
             if len(obj) <= 1000:
-                try:
-                    return base64.b64encode(obj).decode("utf-8")
-                except Exception:
-                    return f"<bytes: {len(obj)} bytes>"
-            else:
-                return f"<bytes: {len(obj)} bytes>"
+                return _bytes_to_text(obj)
+            return f"<bytes: {len(obj)} bytes>"
 
         # Handle dictionaries with per-key error handling
         if isinstance(obj, dict):
@@ -836,6 +854,7 @@ class HttpTransport:
 
     def _protect(self, data: dict[str, Any], user_data: bool = False) -> dict[str, Any]:
         """Strip stack traces (unless enabled), mask secrets, then pseudonymize."""
+        data = _decode_bytes(data)
         if not self.config.tracing.capture_stack_traces:
             data = _strip_stack_traces(data)
         data = mask_secrets(data)
