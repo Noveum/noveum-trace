@@ -273,18 +273,15 @@ class HttpTransport:
             logger.debug(f"⏭️  Skipping no-op trace {trace.trace_id}")
             return
 
-        # Log trace export details
+        # trace.name is unprotected here; the post-format log shows the protected name.
         span_count = len(trace.spans) if hasattr(trace, "spans") else 0
-        logger.info(
-            f"📤 EXPORTING TRACE: {trace.name} (ID: {trace.trace_id}) - {span_count} spans"
-        )
+        logger.info(f"📤 EXPORTING TRACE: {trace.trace_id} - {span_count} spans")
 
         if log_debug_enabled():
             log_trace_flow(
                 logger,
                 "Exporting trace to transport",
                 trace_id=trace.trace_id,
-                trace_name=trace.name,
                 span_count=span_count,
                 trace_status=getattr(trace, "status", "unknown"),
                 trace_finished=getattr(trace, "_finished", "unknown"),
@@ -369,7 +366,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": self._protect(metadata or {}),
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
 
@@ -414,7 +411,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": self._protect(metadata or {}),
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
         self._send_single_audio(audio_item)
@@ -477,7 +474,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "image_uuid": image_uuid,
-            "metadata": self._protect(metadata or {}),
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
 
@@ -837,13 +834,13 @@ class HttpTransport:
         # result. A failure raises, so export_trace drops the trace, never sends raw.
         return self._protect(trace_data)
 
-    def _protect(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _protect(self, data: dict[str, Any], user_data: bool = False) -> dict[str, Any]:
         """Strip stack traces (unless enabled), mask secrets, then pseudonymize."""
         if not self.config.tracing.capture_stack_traces:
             data = _strip_stack_traces(data)
         data = mask_secrets(data)
         if self._pii_pseudonymizer is not None:
-            data = self._pii_pseudonymizer.pseudonymize_dict(data)
+            data = self._pii_pseudonymizer.pseudonymize_dict(data, user_data=user_data)
         return data
 
     def _augment_trace_otel(self, trace_data: dict[str, Any]) -> None:
@@ -911,8 +908,12 @@ class HttpTransport:
         try:
             text = json.dumps(trace, indent=2, default=str, ensure_ascii=False)
             out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Never truncate or chmod through a planted symlink (O_NOFOLLOW is POSIX).
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if not nofollow and path.is_symlink():
+                raise OSError(f"refusing to write through symlink {path}")
             # Created owner-only from the start (no effect on Windows).
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow, 0o600)
             if hasattr(os, "fchmod"):  # also tightens a reused, older file
                 os.fchmod(fd, 0o600)
             with open(fd, "w", encoding="utf-8") as fh:

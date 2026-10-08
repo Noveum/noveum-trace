@@ -23,7 +23,7 @@ from typing import Any, NamedTuple, Optional, Union
 try:
     import phonenumbers
 except ImportError:  # pragma: no cover - required dependency; regex fallback below
-    phonenumbers = None  # type: ignore[assignment]
+    phonenumbers = None  # type: ignore[assignment,unused-ignore]
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +50,15 @@ _SECRET_KEY_RE = re.compile(
 _SECRET_VALUE_RE = re.compile(
     r"\bsk-[A-Za-z0-9_-]{16,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}"
     r"|\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"
+    r"|\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{22,}"
 )
 # Secret-named pairs inside text, e.g. JSON-serialized state: "api_key": "...".
 # Quoted values are masked up to the closing quote (escaped JSON included).
 _SECRET_PAIR_RE = re.compile(
     r"""([\w.-]*(?:api[_-]?key|secret|passw(?:or)?d|authorization|access[_-]?key"""
     r"""|private[_-]?key|credentials?|(?:access|refresh|auth|session)[_-]?token)"""
-    r"""\\?["']?\s*[:=]\s*(?:Bearer\s+)?)(?:(\\?["'])[^"'\\]+|[^\s"'\\,;&}]+)""",
+    r"""\\?["']?\s*[:=]\s*(?:Bearer\s+)?)"""
+    r"""(?:(\\?["'])(?:\\\\\\.|\\.|[^\\])*?(\2|$)|[^\s"'\\,;&}]+)""",
     re.IGNORECASE,
 )
 SECRET_MASK = "***"
@@ -504,7 +506,7 @@ def detect_pii_types(text: str, custom_patterns: CustomPatterns = None) -> list[
     return pii_types
 
 
-# Keys whose values are never pseudonymized (at any depth): rewriting the
+# Trace-structure keys whose values are never pseudonymized: rewriting the
 # trace-structure ids breaks span parent/child links, and timestamps / durations
 # are not PII but often look like phone numbers. Other ``*_id`` fields (user_id,
 # customer_id, ...) are pseudonymized: they can hold emails or phone numbers, and
@@ -521,6 +523,8 @@ PSEUDONYMIZE_SKIP_KEYS = frozenset(
         "duration_ms",
     }
 )
+# Caller-supplied containers: skip keys inside them are not structural.
+_USER_DATA_KEYS = frozenset({"attributes", "metadata"})
 
 # A string value that is exactly a UUID is left alone wherever it appears.
 _UUID_RE = re.compile(
@@ -534,7 +538,7 @@ def mask_secrets(data: Any) -> Any:
     """Recursively replace credential-looking keys' values and key formats."""
     if isinstance(data, dict):
         return {
-            k: (
+            (mask_secrets(k) if isinstance(k, str) else k): (
                 SECRET_MASK
                 if isinstance(k, str) and _SECRET_KEY_RE.search(k)
                 else mask_secrets(v)
@@ -543,10 +547,16 @@ def mask_secrets(data: Any) -> Any:
         }
     if isinstance(data, list):
         return [mask_secrets(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(mask_secrets(item) for item in data)
     if isinstance(data, str):
         data = _SECRET_VALUE_RE.sub(SECRET_MASK, data)
         return _SECRET_PAIR_RE.sub(
-            lambda m: m.group(1) + (m.group(2) or "") + SECRET_MASK, data
+            lambda m: m.group(1)
+            + (m.group(2) or "")
+            + SECRET_MASK
+            + (m.group(3) or ""),
+            data,
         )
     return data
 
@@ -628,18 +638,25 @@ class PiiPseudonymizer:
             text = text[:start] + self._token(label, fragment) + text[end:]
         return text
 
-    def pseudonymize_dict(self, data: Any, key: str = "") -> Any:
+    def pseudonymize_dict(
+        self, data: Any, key: str = "", user_data: bool = False
+    ) -> Any:
         """Recursively pseudonymize string values and keys, and integers held in
         identifier-named fields (``user.phone``); other numbers stay numeric.
 
-        Values under ``PSEUDONYMIZE_SKIP_KEYS`` are passed through unchanged.
+        Values under ``PSEUDONYMIZE_SKIP_KEYS`` pass through unchanged, except
+        inside caller data (``attributes`` / ``metadata``, or ``user_data=True``).
         """
         if isinstance(data, dict):
             return {
                 (self.pseudonymize(k) if isinstance(k, str) else k): (
                     v
-                    if k in PSEUDONYMIZE_SKIP_KEYS
-                    else self.pseudonymize_dict(v, k if isinstance(k, str) else "")
+                    if k in PSEUDONYMIZE_SKIP_KEYS and not user_data
+                    else self.pseudonymize_dict(
+                        v,
+                        k if isinstance(k, str) else "",
+                        user_data or k in _USER_DATA_KEYS,
+                    )
                 )
                 for k, v in data.items()
             }
@@ -656,7 +673,9 @@ class PiiPseudonymizer:
                     return self._token(label, digits)
             return data
         if isinstance(data, list):
-            return [self.pseudonymize_dict(item, key) for item in data]
+            return [self.pseudonymize_dict(item, key, user_data) for item in data]
+        if isinstance(data, tuple):
+            return tuple(self.pseudonymize_dict(item, key, user_data) for item in data)
         if isinstance(data, str):
             return self.pseudonymize(data)
         return data

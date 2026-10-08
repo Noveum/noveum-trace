@@ -271,6 +271,19 @@ class Config:
             if not re.match(url_pattern, endpoint):
                 raise ConfigurationError(f"Invalid endpoint URL format: {endpoint}")
 
+            insecure = parsed.scheme == "http" or (
+                not self.transport.ssl_verify and not self.transport.ca_bundle
+            )
+            opted_in = self.transport.allow_insecure_transport or os.getenv(
+                "NOVEUM_ALLOW_INSECURE_TRANSPORT", ""
+            ).lower() in ("true", "1", "yes", "on")
+            if insecure and not opted_in:
+                raise ConfigurationError(
+                    "Insecure transport refused: use https:// with certificate "
+                    "verification, or set NOVEUM_ALLOW_INSECURE_TRANSPORT=true "
+                    "for local development only."
+                )
+
         # Settings the SDK cannot honour must fail, not silently promise.
         unsupported = {
             "security.redact_pii (use security.pii_enabled)": self.security.redact_pii,
@@ -294,18 +307,6 @@ class Config:
                 "dev_mode writes trace files to local disk and is not allowed when "
                 "environment='production'."
             )
-            insecure = parsed.scheme == "http" or (
-                not self.transport.ssl_verify and not self.transport.ca_bundle
-            )
-            opted_in = self.transport.allow_insecure_transport or os.getenv(
-                "NOVEUM_ALLOW_INSECURE_TRANSPORT", ""
-            ).lower() in ("true", "1", "yes", "on")
-            if insecure and not opted_in:
-                raise ConfigurationError(
-                    "Insecure transport refused: use https:// with certificate "
-                    "verification, or set NOVEUM_ALLOW_INSECURE_TRANSPORT=true "
-                    "for local development only."
-                )
 
         if self.security.pii_enabled:
             salt = self.security.pii_salt
@@ -436,7 +437,10 @@ class Config:
                     enabled=tracing_data.get("enabled", True),
                     sample_rate=tracing_data.get("sample_rate", 1.0),
                     max_spans_per_trace=tracing_data.get("max_spans_per_trace", 1000),
-                    capture_errors=tracing_data.get("capture_errors", True),
+                    capture_errors=_parse_config_bool(
+                        tracing_data.get("capture_errors", True),
+                        field_name="tracing.capture_errors",
+                    ),
                     capture_stack_traces=tracing_data.get(
                         "capture_stack_traces", False
                     ),
@@ -485,7 +489,10 @@ class Config:
             security_data = data["security"]
             if isinstance(security_data, dict):
                 config.security = SecurityConfig(
-                    redact_pii=security_data.get("redact_pii", False),
+                    redact_pii=_parse_config_bool(
+                        security_data.get("redact_pii", False),
+                        field_name="security.redact_pii",
+                    ),
                     custom_redaction_patterns=security_data.get(
                         "custom_redaction_patterns", []
                     ),
