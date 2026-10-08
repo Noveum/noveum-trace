@@ -119,7 +119,6 @@ class SecurityConfig:
     data_residency: Optional[str] = None
     pii_enabled: bool = False
     pii_salt: Optional[str] = field(default=DEFAULT_PII_SALT, repr=False)
-    pii_salt: Optional[str] = DEFAULT_PII_SALT
     # Countries whose local phone formats (no country code) are detected, as ISO
     # 3166 codes. ``None`` uses the SDK default (AE, SA, QA, EG, TR, GB, IN, US);
     # ``[]`` detects only numbers written with ``+<country code>``.
