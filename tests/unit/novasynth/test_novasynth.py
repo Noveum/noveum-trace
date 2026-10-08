@@ -476,3 +476,21 @@ def test_summary_accounts_for_every_run_in_the_batch(monkeypatch, clock):
     gen.close()  # d is never reached: it must still be in the count
     assert q.summary() == {"completed": 1, "failed": 1, "ready": 1, "waiting": 1}
     assert sum(q.summary().values()) == len(q.run_ids)
+
+
+def test_never_follows_redirects(monkeypatch, clock):
+    _patch(monkeypatch, post_resps=[_view("a", "arming")], get_resps=[_ready("a")])
+    seen: list[dict] = []
+    make = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: (seen.append(kw), make(**kw))[1])
+    list(_queue(["a"]).iter_calls())
+    assert seen
+    assert all(kw.get("follow_redirects") is False for kw in seen)
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+def test_redirect_fails_fast_instead_of_polling(monkeypatch, clock, status):
+    _patch(monkeypatch, post_resps=[_Resp(status, {})])
+    with pytest.raises(ConfigurationError, match=f"HTTP {status}"):
+        next(_queue(["a"]).iter_calls())
+    assert clock.sleeps == []  # failed on the first response, no polling

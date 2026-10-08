@@ -110,6 +110,8 @@ class NoveumTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         adapter = self._registry.for_request(request)
         if adapter is None:
+            # Drop the query string: some providers put API keys there.
+            url = str(request.url).split("?", 1)[0]
             if self._on_unmatched_request == "block":
                 from noveum_trace.guard.transport.helper import (
                     build_generic_block_response,
@@ -119,15 +121,15 @@ class NoveumTransport(httpx.BaseTransport):
                     "NovaGuard: no adapter found for request %s %s — blocking "
                     "(on_unmatched_request='block')",
                     request.method,
-                    request.url,
+                    url,
                 )
                 return build_generic_block_response(
-                    f"No NovaGuard adapter for {request.method} {request.url}"
+                    f"No NovaGuard adapter for {request.method} {url}"
                 )
             _log.error(
                 "NovaGuard: no adapter found for request %s %s — passing through unguarded",
                 request.method,
-                request.url,
+                url,
             )
             return self._inner.handle_request(request)
 

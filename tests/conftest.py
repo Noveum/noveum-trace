@@ -87,6 +87,12 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def allow_local_http_endpoints(monkeypatch):
+    """Tests use http://localhost endpoints, which need the explicit dev opt-in."""
+    monkeypatch.setenv("NOVEUM_ALLOW_INSECURE_TRANSPORT", "true")
+
+
+@pytest.fixture(autouse=True)
 def prevent_real_api_calls(request):
     """Prevent any real HTTP calls to noveum.ai or other endpoints"""
 
