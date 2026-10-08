@@ -244,8 +244,8 @@ class HttpTransport:
             "2. If behind corporate proxy (Netskope, Zscaler, etc.): "
             "pip install pip-system-certs\n"
             "3. Set custom CA bundle: export NOVEUM_CA_BUNDLE=/path/to/ca.crt\n"
-            "4. Disable SSL verification (debugging only): "
-            "export NOVEUM_SSL_VERIFY=false"
+            "4. Debugging only (never in production): export NOVEUM_SSL_VERIFY=false "
+            "and NOVEUM_ALLOW_INSECURE_TRANSPORT=true"
         )
         log_error_always(logger, help_msg, exc_info=True, url=url, **context)
         raise TransportError(f"SSL error: {ssl_error_msg}") from error
@@ -582,6 +582,8 @@ class HttpTransport:
             logger.warning("⚠️  No API key configured - requests may fail")
 
         session.headers.update(headers)
+        # Data may only go to the configured endpoint, so never follow redirects.
+        session.max_redirects = 0
 
         # Configure SSL verification
         ssl_verify = getattr(self.config.transport, "ssl_verify", True)
@@ -598,11 +600,6 @@ class HttpTransport:
                 "⚠️  SSL verification DISABLED - this is insecure and should only "
                 "be used for debugging. Set ssl_verify=True for production."
             )
-            # Suppress InsecureRequestWarning
-            import urllib3
-            import urllib3.exceptions
-
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         else:
             # Default: use certifi bundle
             session.verify = True
@@ -638,7 +635,6 @@ class HttpTransport:
             logger.debug(f"    retry_backoff: {self.config.transport.retry_backoff}")
             logger.debug(f"    ssl_verify: {ssl_verify}")
             logger.debug(f"    ca_bundle: {ca_bundle or 'default'}")
-            logger.debug(f"    headers: {dict(session.headers)}")
 
         return session
 
@@ -984,14 +980,7 @@ class HttpTransport:
                 timeout=self.config.transport.timeout,
             )
 
-            log_http_response(
-                logger,
-                response.status_code,
-                url,
-                response_headers=(
-                    dict(response.headers) if log_debug_enabled() else None
-                ),
-            )
+            log_http_response(logger, response.status_code, url)
 
             # Check response
             if response.status_code in [200, 201]:
@@ -1108,7 +1097,6 @@ class HttpTransport:
                 trace_count=len(traces),
                 payload_keys=list(payload.keys()),
                 payload_size_chars=len(str(payload)),
-                headers=dict(self.session.headers),
                 compression_enabled=self.config.transport.compression,
             )
 
@@ -1140,13 +1128,12 @@ class HttpTransport:
                     logger,
                     response.status_code,
                     url,
-                    response_headers=dict(response.headers),
                     response_size=len(response.text) if response.text else 0,
                     response_preview=self._get_safe_response_preview(response),
                 )
 
             # Check response
-            if response.status_code in [200, 201]:
+            if 200 <= response.status_code < 300:
                 logger.info(f"✅ Successfully sent batch of {len(traces)} traces")
                 if log_debug_enabled():
                     safe_preview = self._get_safe_response_preview(
@@ -1190,6 +1177,10 @@ class HttpTransport:
                     response_text=self._get_safe_response_preview(response),
                 )
                 response.raise_for_status()
+                # raise_for_status ignores 3xx; a redirect is never a delivery.
+                raise TransportError(
+                    f"Trace batch returned unexpected status {response.status_code}"
+                )
 
         except requests.exceptions.Timeout as e:
             log_error_always(
@@ -1413,7 +1404,7 @@ class HttpTransport:
             # Log response
             logger.info(f"📡 IMAGE RESPONSE: Status {response.status_code}")
 
-            if response.status_code in [200, 201]:
+            if 200 <= response.status_code < 300:
                 logger.info(f"✅ Successfully sent image {image_uuid}")
             elif response.status_code == 429:
                 log_error_always(
@@ -1432,6 +1423,10 @@ class HttpTransport:
                     image_uuid=image_uuid,
                 )
                 response.raise_for_status()
+                # raise_for_status ignores 3xx; a redirect is never a delivery.
+                raise TransportError(
+                    f"Image upload returned unexpected status {response.status_code}"
+                )
 
         except requests.exceptions.Timeout as e:
             log_error_always(

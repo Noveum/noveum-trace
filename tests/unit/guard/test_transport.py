@@ -772,3 +772,49 @@ class TestAsyncTransport:
         adapter.parse_response.assert_not_called()
         engine.post_call.assert_not_called()
         assert json.loads(await result.aread())["model"] == "gpt-4o"
+
+
+# Unmatched requests: provider keys in the query string never reach logs
+
+
+@pytest.fixture
+def guard_log(caplog):
+    # SDK loggers don't propagate to the root, so attach caplog directly.
+    import logging
+
+    loggers = [
+        logging.getLogger("noveum_trace.guard.transport.sync_transport"),
+        logging.getLogger("noveum_trace.guard.transport.async_transport"),
+    ]
+    for lg in loggers:
+        lg.addHandler(caplog.handler)
+    yield caplog
+    for lg in loggers:
+        lg.removeHandler(caplog.handler)
+
+
+@pytest.mark.parametrize("mode", ["passthrough", "block"])
+def test_unmatched_request_url_query_not_logged(mode, guard_log):
+    secret = "AIzaCANARYSECRET"
+    request = httpx.Request("POST", f"https://example.com/v1/x?key={secret}")
+    transport, _ = _make_transport(
+        MagicMock(), _MockInner(_real_response()), on_unmatched_request=mode
+    )
+    result = transport.handle_request(request)
+    assert "no adapter found" in guard_log.text  # the log line really ran
+    assert secret not in guard_log.text
+    assert secret not in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["passthrough", "block"])
+async def test_unmatched_async_request_url_query_not_logged(mode, guard_log):
+    secret = "AIzaCANARYSECRET"
+    request = httpx.Request("POST", f"https://example.com/v1/x?key={secret}")
+    transport, _ = _make_async_transport(
+        MagicMock(), _MockAsyncInner(_real_response()), on_unmatched_request=mode
+    )
+    result = await transport.handle_async_request(request)
+    assert "no adapter found" in guard_log.text  # the log line really ran
+    assert secret not in guard_log.text
+    assert secret not in result.text

@@ -103,7 +103,7 @@ class HttpGuardAPIClient(GuardAPIClient):
         try:
             import httpx
 
-            with httpx.Client(timeout=self._timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self._timeout, follow_redirects=False) as client:
                 resp = client.get(url, headers=self._headers(), params=self._query())
             if resp.status_code == 200:
                 body = resp.json()
@@ -220,7 +220,7 @@ class HttpGuardAPIClient(GuardAPIClient):
         try:
             import httpx
 
-            with httpx.Client(timeout=self._timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self._timeout, follow_redirects=False) as client:
                 resp = client.get(url, headers=self._headers(), params=self._query())
             if resp.status_code == 200:
                 raw = resp.json()
@@ -297,7 +297,7 @@ class HttpGuardAPIClient(GuardAPIClient):
                 import httpx
 
                 with httpx.Client(
-                    timeout=self._timeout, follow_redirects=True
+                    timeout=self._timeout, follow_redirects=False
                 ) as client:
                     resp = client.post(
                         url,
