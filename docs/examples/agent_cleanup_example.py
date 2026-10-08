@@ -147,14 +147,12 @@ def main():
     print(f"  MAX_AGENT_GRAPHS: {os.getenv('NOVEUM_MAX_AGENT_GRAPHS', '100')}")
     print(f"  MAX_AGENT_WORKFLOWS: {os.getenv('NOVEUM_MAX_AGENT_WORKFLOWS', '100')}")
 
-    print(
-        """
+    print("""
     💡 Tip: You can configure registry limits via environment variables:
     - NOVEUM_MAX_AGENTS=500
     - NOVEUM_MAX_AGENT_GRAPHS=50
     - NOVEUM_MAX_AGENT_WORKFLOWS=50
-    """
-    )
+    """)
 
     # Flush any pending traces
     noveum_trace.flush()
@@ -167,8 +165,7 @@ def demonstrate_production_usage():
     print("\n🏭 Production Usage Patterns")
     print("=" * 50)
 
-    print(
-        """
+    print("""
     1. **Periodic TTL Cleanup** (recommended for most applications):
        ```python
        import threading
@@ -216,8 +213,7 @@ def demonstrate_production_usage():
            # Take action: cleanup, alerting, etc.
            cleanup_by_ttl(ttl_seconds=1800)  # More aggressive cleanup
        ```
-    """
-    )
+    """)
 
 
 if __name__ == "__main__":

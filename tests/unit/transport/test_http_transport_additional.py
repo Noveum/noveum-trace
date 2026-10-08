@@ -1,8 +1,6 @@
 """Additional unit tests for HTTP transport to improve coverage."""
 
 import json
-import sys
-import types
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -405,23 +403,6 @@ class TestHttpTransportEdgeCases:
 
 class TestHttpTransportPiiPseudonymization:
     """PII pseudonymization on POST while dev JSON stays raw."""
-
-    @pytest.fixture(autouse=True)
-    def stub_spacy(self, monkeypatch):
-        class FakeDoc:
-            __slots__ = ("ents", "text")
-
-            def __init__(self, text: str) -> None:
-                self.text = text
-                self.ents: list = []
-
-        class FakeNlp:
-            def __call__(self, text: str) -> FakeDoc:
-                return FakeDoc(text)
-
-        fake_spacy = types.ModuleType("spacy")
-        fake_spacy.load = lambda *_a, **_k: FakeNlp()
-        monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
 
     def test_send_request_dev_raw_post_pseudonymized(self, tmp_path):
         config = Config.create(

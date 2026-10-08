@@ -55,7 +55,7 @@ and the upstream framework's own floor.
 | OpenAI Agents SDK | 3.10+ | `openai-agents>=0.19.2; python_version>='3.10'` |
 | Pipecat | 3.11+ (required by `pipecat-ai`) | `pipecat-ai>=0.0.108`; `pipecat-otel` adds `opentelemetry-api>=1.0.0`, `opentelemetry-sdk>=1.0.0` |
 
-Other extras: `bedrock` (`boto3>=1.34.0`), `pii_redaction` (`spacy>=3.7.0`).
+Other extras: `bedrock` (`boto3>=1.34.0`).
 
 ## 3. Canonical quick-start API per ecosystem
 
