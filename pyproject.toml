@@ -79,7 +79,7 @@ dev = [
 
     # Code quality tools
     "black>=23.0.0",
-    "isort>=5.12.0",
+    "isort>=5.12.0,<9",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 
@@ -119,7 +119,7 @@ test = [
 # Linting dependencies
 lint = [
     "black>=23.0.0",
-    "isort>=5.12.0",
+    "isort>=5.12.0,<9",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "bandit>=1.7.0",
