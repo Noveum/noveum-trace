@@ -8,7 +8,6 @@ including request formatting, authentication, and error handling.
 import base64
 import json
 import os
-import re
 import time
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,9 +59,6 @@ except ImportError:
 
 logger = get_sdk_logger("transport.http_transport")
 
-_DEV_TRACE_MAX_AGE_SECONDS = 7 * 24 * 3600
-# Names _dev_trace_filename_stem produces: a trace id, or unknown_<ns>.
-_DEV_TRACE_NAME_RE = re.compile(r"[0-9A-Fa-f-]{32,36}|unknown_\d+")
 _STACK_TRACE_KEYS = ("stacktrace", "stack_trace", "traceback")
 
 
@@ -107,8 +103,6 @@ class HttpTransport:
             )
         else:
             self._pii_pseudonymizer = None
-        if self.config.dev_mode:
-            self._delete_old_dev_traces()
 
         logger.info(
             f"HTTP transport initialized for endpoint: {self.config.transport.endpoint}"
@@ -911,22 +905,6 @@ class HttpTransport:
             return f"unknown_{time.time_ns()}"
         safe = "".join(c for c in str(trace_id) if c.isalnum() or c in "-_")
         return safe if safe else f"unknown_{time.time_ns()}"
-
-    def _delete_old_dev_traces(self) -> None:
-        """Age-based cleanup so dev trace files don't accumulate."""
-        out_dir = Path(
-            self.config.dev_traces_dir or DEFAULT_DEV_TRACES_DIR
-        ).expanduser()
-        cutoff = time.time() - _DEV_TRACE_MAX_AGE_SECONDS
-        for path in out_dir.glob("*.json"):
-            # Only files this SDK wrote (trace-id names): the folder may be shared.
-            if not _DEV_TRACE_NAME_RE.fullmatch(path.stem):
-                continue
-            try:
-                if path.stat().st_mtime < cutoff:
-                    path.unlink()
-            except OSError as e:
-                logger.warning("dev_mode: failed to delete old trace %s: %s", path, e)
 
     def _write_dev_trace_json_file(self, trace: dict[str, Any]) -> None:
         """Write one trace dict to ``{trace_id}.json`` (caller checks dev_mode)."""

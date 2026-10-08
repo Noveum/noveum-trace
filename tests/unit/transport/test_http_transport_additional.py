@@ -513,24 +513,6 @@ class TestHttpTransportPiiPseudonymization:
         transport.send_trace_now(trace)
         assert path.stat().st_mode & 0o777 == 0o600
 
-    @pytest.mark.disable_transport_mocking  # conftest stubs HttpTransport.__init__
-    def test_old_dev_files_deleted_at_startup(self, tmp_path):
-        import os
-        import time
-
-        old = tmp_path / "1789e89f-8af7-46aa-bc2f-acba6c8604d0.json"
-        new = tmp_path / "2789e89f-8af7-46aa-bc2f-acba6c8604d0.json"
-        not_ours = tmp_path / "package.json"  # dev folder may be shared
-        for path in (old, new, not_ours):
-            path.write_text("{}")
-        week_ago = time.time() - 8 * 24 * 3600
-        os.utime(old, (week_ago, week_ago))
-        os.utime(not_ours, (week_ago, week_ago))
-        self._transport(tmp_path)
-        assert not old.exists()
-        assert new.exists()
-        assert not_ours.exists()
-
     def test_pii_disabled_posts_original_body(self):
         config = Config.create(
             api_key="k",
