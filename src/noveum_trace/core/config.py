@@ -115,7 +115,7 @@ class SecurityConfig:
     custom_redaction_patterns: Union[list[str], dict[str, str]] = field(
         default_factory=list
     )
-    encrypt_data: bool = True
+    encrypt_data: bool = False  # not implemented; True is rejected in _validate
     data_residency: Optional[str] = None
     pii_enabled: bool = False
     pii_salt: Optional[str] = field(default=DEFAULT_PII_SALT, repr=False)
@@ -284,6 +284,30 @@ class Config:
                     "for local development only."
                 )
 
+        # Settings the SDK cannot honour must fail, not silently promise.
+        unsupported = {
+            "security.redact_pii (use security.pii_enabled)": self.security.redact_pii,
+            "security.encrypt_data (transport is HTTPS; storage is a platform setting)": (
+                self.security.encrypt_data
+            ),
+            "security.data_residency (a platform setting)": self.security.data_residency,
+            "tracing.capture_errors=False": not self.tracing.capture_errors,
+            "tracing.capture_performance": self.tracing.capture_performance,
+        }
+        for name, is_set in unsupported.items():
+            if is_set:
+                raise ConfigurationError(
+                    f"{name} is not supported by the SDK; remove it."
+                )
+        if self.dev_mode and (self.environment or "").strip().lower() in (
+            "prod",
+            "production",
+        ):
+            raise ConfigurationError(
+                "dev_mode writes trace files to local disk and is not allowed when "
+                "environment='production'."
+            )
+
         if self.security.pii_enabled:
             salt = self.security.pii_salt
             if salt is None:
@@ -413,7 +437,10 @@ class Config:
                     enabled=tracing_data.get("enabled", True),
                     sample_rate=tracing_data.get("sample_rate", 1.0),
                     max_spans_per_trace=tracing_data.get("max_spans_per_trace", 1000),
-                    capture_errors=tracing_data.get("capture_errors", True),
+                    capture_errors=_parse_config_bool(
+                        tracing_data.get("capture_errors", True),
+                        field_name="tracing.capture_errors",
+                    ),
                     capture_stack_traces=tracing_data.get(
                         "capture_stack_traces", False
                     ),
@@ -462,11 +489,14 @@ class Config:
             security_data = data["security"]
             if isinstance(security_data, dict):
                 config.security = SecurityConfig(
-                    redact_pii=security_data.get("redact_pii", False),
+                    redact_pii=_parse_config_bool(
+                        security_data.get("redact_pii", False),
+                        field_name="security.redact_pii",
+                    ),
                     custom_redaction_patterns=security_data.get(
                         "custom_redaction_patterns", []
                     ),
-                    encrypt_data=security_data.get("encrypt_data", True),
+                    encrypt_data=security_data.get("encrypt_data", False),
                     data_residency=security_data.get("data_residency"),
                     pii_enabled=_parse_config_bool(
                         security_data.get("pii_enabled", False),

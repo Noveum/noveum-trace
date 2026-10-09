@@ -78,7 +78,8 @@ class TestConfigMerging:
                     "sample_rate": 0.5,
                 },
                 "security": {
-                    "redact_pii": True,
+                    "pii_enabled": True,
+                    "pii_salt": "test-salt",
                 },
             }
 
@@ -92,11 +93,11 @@ class TestConfigMerging:
             # Nested overrides applied
             assert config.tracing.enabled is False
             assert config.tracing.sample_rate == 0.5
-            assert config.security.redact_pii is True
+            assert config.security.pii_enabled is True
 
             # Other nested settings remain default
             assert config.tracing.capture_errors is True  # Default
-            assert config.security.encrypt_data is True  # Default
+            assert config.security.encrypt_data is False  # Default
 
     def test_top_level_endpoint_precedence(self):
         """Test that top-level endpoint overrides transport.endpoint consistently."""

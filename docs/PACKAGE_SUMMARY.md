@@ -101,7 +101,7 @@ noveum-trace-sdk/
 ### 🛡️ Security & Configuration
 
 - **Flexible Configuration** - Environment variables, files, and programmatic
-- **PII Redaction** - Configurable patterns for sensitive data
+- **PII Pseudonymization** - `pii_enabled` swaps emails, phones, cards etc. for stable tokens before export
 - **Custom Endpoints** - Support for self-hosted and private deployments
 - **Authentication** - Bearer token and API key support
 - **Data Validation** - Input validation and error handling

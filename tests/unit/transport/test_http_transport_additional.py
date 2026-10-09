@@ -1,13 +1,14 @@
 """Additional unit tests for HTTP transport to improve coverage."""
 
 import json
-from pathlib import Path
+import sys
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
 from noveum_trace.core.config import Config, SecurityConfig
+from noveum_trace.core.trace import Trace
 from noveum_trace.transport.http_transport import HttpTransport
 from noveum_trace.utils.exceptions import TransportError
 
@@ -402,70 +403,115 @@ class TestHttpTransportEdgeCases:
 
 
 class TestHttpTransportPiiPseudonymization:
-    """PII pseudonymization on POST while dev JSON stays raw."""
+    """Protection runs before queueing, so dev JSON, queue and POST all match."""
 
-    def test_send_request_dev_raw_post_pseudonymized(self, tmp_path):
+    def _transport(self, tmp_path, pii=True, **cfg):
         config = Config.create(
             api_key="k",
             project="p",
             endpoint="https://api.test.com",
             dev_mode=True,
             dev_traces_dir=str(tmp_path),
-            security=SecurityConfig(pii_enabled=True, pii_salt="salt-for-test"),
+            security=SecurityConfig(pii_enabled=pii, pii_salt="salt-for-test"),
+            **cfg,
         )
         with patch("noveum_trace.transport.http_transport.BatchProcessor"):
             transport = HttpTransport(config)
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"ok": True}
-        transport.session.post = Mock(return_value=mock_response)
+        response = Mock(status_code=200, text="{}", headers={})
+        response.json.return_value = {"ok": True}
+        transport.session.post = Mock(return_value=response)
+        return transport
 
-        trace_data = {
-            "trace_id": "abc123",
-            "name": "n",
-            "note": "email me@example.com ok",
-        }
-        transport._send_request(trace_data)
+    @staticmethod
+    def _trace(**attributes):
+        trace = Trace("n")
+        for key, value in attributes.items():
+            trace.set_attribute(key, value)
+        trace.finish()
+        return trace
 
-        written = Path(tmp_path) / "abc123.json"
-        assert written.exists()
-        assert "me@example.com" in written.read_text(encoding="utf-8")
+    def test_dev_file_matches_protected_post(self, tmp_path):
+        transport = self._transport(tmp_path)
+        trace = self._trace(note="email me@example.com ok")
+        transport.send_trace_now(trace)
 
-        posted = transport.session.post.call_args.kwargs["json"]
-        assert "me@example.com" not in json.dumps(posted)
-        assert "EMAIL_" in json.dumps(posted)
-        assert trace_data["note"] == "email me@example.com ok"
+        written = (tmp_path / f"{trace.trace_id}.json").read_text("utf-8")
+        posted = transport.session.post.call_args.kwargs["json"]["traces"][0]
+        assert "me@example.com" not in written
+        assert "EMAIL_" in written
+        assert json.loads(written) == json.loads(json.dumps(posted, default=str))
 
-    def test_send_trace_batch_dev_raw_post_pseudonymized(self, tmp_path):
-        config = Config.create(
-            api_key="k",
-            project="p",
-            endpoint="https://api.test.com",
-            dev_mode=True,
-            dev_traces_dir=str(tmp_path),
-            security=SecurityConfig(pii_enabled=True, pii_salt="batch-salt"),
+    def test_trace_is_protected_before_queueing(self, tmp_path):
+        transport = self._transport(tmp_path)
+        trace = self._trace(note="email me@example.com ok")
+        # export_trace queues exactly this (conftest stubs export_trace itself).
+        queued = transport._format_trace_for_export(trace)
+        assert "me@example.com" not in json.dumps(queued, default=str)
+        assert trace.attributes["note"] == "email me@example.com ok"
+
+    def test_upload_metadata_is_protected(self, tmp_path):
+        transport = self._transport(tmp_path)
+        transport.export_audio(
+            b"x", "t", "s", "a1", metadata={"src": "me@example.com", "api_key": "k1"}
         )
-        with patch("noveum_trace.transport.http_transport.BatchProcessor"):
-            transport = HttpTransport(config)
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = "{}"
-        mock_response.headers = {}
-        transport.session.post = Mock(return_value=mock_response)
+        sent = transport.batch_processor.add_audio.call_args.args[0]["metadata"]
+        assert "me@example.com" not in json.dumps(sent)
+        assert sent["api_key"] == "***"
 
-        traces = [{"trace_id": "t1", "note": "a@b.co"}]
-        with patch(
-            "noveum_trace.transport.http_transport.log_debug_enabled",
-            return_value=False,
-        ):
-            transport._send_trace_batch(traces)
+    def test_secrets_masked_even_without_pii(self, tmp_path):
+        transport = self._transport(tmp_path, pii=False)
+        key = "sk-" + "A" * 24
+        out = transport._format_trace_for_export(
+            self._trace(**{"openai.api_key": key, "note": f"used {key}"})
+        )
+        assert key not in json.dumps(out, default=str)
+        assert out["attributes"]["openai.api_key"] == "***"
 
-        assert "a@b.co" in (Path(tmp_path) / "t1.json").read_text(encoding="utf-8")
+    @pytest.mark.parametrize("capture", [False, True])
+    def test_stack_traces_follow_setting(self, tmp_path, capture):
+        from noveum_trace.core.config import TracingConfig
+        from noveum_trace.core.span import Span
 
-        posted = transport.session.post.call_args.kwargs["json"]
-        assert "a@b.co" not in json.dumps(posted)
-        assert "EMAIL_" in json.dumps(posted)
-        assert traces[0]["note"] == "a@b.co"
+        transport = self._transport(
+            tmp_path, tracing=TracingConfig(capture_stack_traces=capture)
+        )
+        trace = Trace("n")
+        span = Span(name="s", trace_id=trace.trace_id)
+        try:
+            raise ValueError("failed for me@example.com")
+        except ValueError as exc:
+            span.record_exception(exc)
+        trace.spans.append(span)
+        trace.finish()
+        out = json.dumps(transport._format_trace_for_export(trace), default=str)
+        assert ("exception.stacktrace" in out) is capture
+        assert "me@example.com" not in out  # exception message is pseudonymized
+
+    def test_streaming_tokens_are_protected(self, tmp_path):
+        from noveum_trace.core.span import Span
+        from noveum_trace.streaming import StreamingSpanManager
+
+        transport = self._transport(tmp_path)
+        trace = Trace("n")
+        manager = StreamingSpanManager(model="m", provider="p")
+        manager.span = Span(name="stream", trace_id=trace.trace_id)
+        manager.add_token("reach me at me@example.com")
+        manager.finish_streaming()
+        trace.spans.append(manager.span)
+        trace.finish()
+        out = json.dumps(transport._format_trace_for_export(trace), default=str)
+        assert "streaming.sample_tokens" in out
+        assert "me@example.com" not in out
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+    def test_dev_file_is_owner_only(self, tmp_path):
+        transport = self._transport(tmp_path)
+        trace = self._trace(note="x")
+        path = tmp_path / f"{trace.trace_id}.json"
+        path.write_text("{}")
+        path.chmod(0o644)  # a reused file from an older write keeps wide permissions
+        transport.send_trace_now(trace)
+        assert path.stat().st_mode & 0o777 == 0o600
 
     def test_pii_disabled_posts_original_body(self):
         config = Config.create(

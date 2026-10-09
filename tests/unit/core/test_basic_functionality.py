@@ -214,7 +214,7 @@ class TestConfig:
             "endpoint": "http://localhost:8082/api/v1",
             "tracing": {
                 "sample_rate": 0.5,
-                "capture_errors": False,
+                "capture_stack_traces": True,
             },
         }
 
@@ -225,7 +225,7 @@ class TestConfig:
         assert config.environment == "production"
         assert config.transport.endpoint == "http://localhost:8082/api/v1"
         assert config.tracing.sample_rate == 0.5
-        assert config.tracing.capture_errors is False
+        assert config.tracing.capture_stack_traces is True
 
     def test_config_from_dict_with_transport_endpoint(self):
         """Test creating config from dictionary with transport.endpoint."""
@@ -287,7 +287,7 @@ class TestConfig:
             "environment": "production",
             "tracing": {
                 "sample_rate": 0.5,
-                "capture_errors": False,
+                "capture_stack_traces": True,
             },
             "transport": {
                 "endpoint": "https://custom.endpoint.com",
@@ -301,7 +301,7 @@ class TestConfig:
         assert config.api_key == "test_key"
         assert config.environment == "production"
         assert config.tracing.sample_rate == 0.5
-        assert config.tracing.capture_errors is False
+        assert config.tracing.capture_stack_traces is True
         assert config.transport.endpoint == "https://custom.endpoint.com"
         assert config.transport.timeout == 60
 

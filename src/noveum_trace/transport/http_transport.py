@@ -5,8 +5,8 @@ This module handles HTTP communication with the Noveum platform,
 including request formatting, authentication, and error handling.
 """
 
-import base64
 import json
+import os
 import time
 from datetime import datetime, timezone
 from enum import Enum
@@ -39,7 +39,7 @@ from noveum_trace.utils.logging import (
     log_http_response,
     log_trace_flow,
 )
-from noveum_trace.utils.pii_redaction import PiiPseudonymizer
+from noveum_trace.utils.pii_redaction import PiiPseudonymizer, mask_secrets
 
 _MOCK_TYPES: tuple[type[Any], ...]
 
@@ -57,6 +57,44 @@ except ImportError:
     _MOCK_TYPES = ()
 
 logger = get_sdk_logger("transport.http_transport")
+
+_STACK_TRACE_KEYS = ("stacktrace", "stack_trace", "traceback")
+
+
+def _strip_stack_traces(data: Any) -> Any:
+    """Recursively drop stack-trace fields (``exception.stacktrace`` and the like)."""
+    if isinstance(data, dict):
+        return {
+            k: _strip_stack_traces(v)
+            for k, v in data.items()
+            if not (isinstance(k, str) and k.lower().endswith(_STACK_TRACE_KEYS))
+        }
+    if isinstance(data, list):
+        return [_strip_stack_traces(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_strip_stack_traces(item) for item in data)
+    return data
+
+
+def _bytes_to_text(value: bytes) -> str:
+    """UTF-8 text so protection can inspect it; other bytes become a placeholder."""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"<bytes: {len(value)} bytes>"
+
+
+def _decode_bytes(data: Any) -> Any:
+    """Recursively replace bytes values with :func:`_bytes_to_text`."""
+    if isinstance(data, bytes):
+        return _bytes_to_text(data)
+    if isinstance(data, dict):
+        return {k: _decode_bytes(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_decode_bytes(item) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_decode_bytes(item) for item in data)
+    return data
 
 
 class HttpTransport:
@@ -257,18 +295,15 @@ class HttpTransport:
             logger.debug(f"⏭️  Skipping no-op trace {trace.trace_id}")
             return
 
-        # Log trace export details
+        # trace.name is unprotected here; the post-format log shows the protected name.
         span_count = len(trace.spans) if hasattr(trace, "spans") else 0
-        logger.info(
-            f"📤 EXPORTING TRACE: {trace.name} (ID: {trace.trace_id}) - {span_count} spans"
-        )
+        logger.info(f"📤 EXPORTING TRACE: {trace.trace_id} - {span_count} spans")
 
         if log_debug_enabled():
             log_trace_flow(
                 logger,
                 "Exporting trace to transport",
                 trace_id=trace.trace_id,
-                trace_name=trace.name,
                 span_count=span_count,
                 trace_status=getattr(trace, "status", "unknown"),
                 trace_finished=getattr(trace, "_finished", "unknown"),
@@ -353,7 +388,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
 
@@ -398,7 +433,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "audio_uuid": audio_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
         self._send_single_audio(audio_item)
@@ -461,7 +496,7 @@ class HttpTransport:
             "trace_id": trace_id,
             "span_id": span_id,
             "image_uuid": image_uuid,
-            "metadata": metadata or {},
+            "metadata": self._protect(metadata or {}, user_data=True),
             "timestamp": time.time(),
         }
 
@@ -662,14 +697,10 @@ class HttpTransport:
         if isinstance(obj, Enum):
             return self.trace_to_dict(obj.value, depth + 1, max_depth)
         if isinstance(obj, bytes):
-            # For bytes, return base64 if small, otherwise truncated repr
+            # Not base64: encoded text would hide PII and secrets from _protect.
             if len(obj) <= 1000:
-                try:
-                    return base64.b64encode(obj).decode("utf-8")
-                except Exception:
-                    return f"<bytes: {len(obj)} bytes>"
-            else:
-                return f"<bytes: {len(obj)} bytes>"
+                return _bytes_to_text(obj)
+            return f"<bytes: {len(obj)} bytes>"
 
         # Handle dictionaries with per-key error handling
         if isinstance(obj, dict):
@@ -817,7 +848,19 @@ class HttpTransport:
         if getattr(self.config, "otel_compat", False):
             self._augment_trace_otel(trace_data)
 
-        return trace_data
+        # Protect here, once: the queue, dev files, logs and network all see the
+        # result. A failure raises, so export_trace drops the trace, never sends raw.
+        return self._protect(trace_data)
+
+    def _protect(self, data: dict[str, Any], user_data: bool = False) -> dict[str, Any]:
+        """Strip stack traces (unless enabled), mask secrets, then pseudonymize."""
+        data = _decode_bytes(data)
+        if not self.config.tracing.capture_stack_traces:
+            data = _strip_stack_traces(data)
+        data = mask_secrets(data)
+        if self._pii_pseudonymizer is not None:
+            data = self._pii_pseudonymizer.pseudonymize_dict(data, user_data=user_data)
+        return data
 
     def _augment_trace_otel(self, trace_data: dict[str, Any]) -> None:
         """
@@ -882,11 +925,18 @@ class HttpTransport:
         stem = self._dev_trace_filename_stem(trace)
         path = out_dir / f"{stem}.json"
         try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(trace, indent=2, default=str, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            text = json.dumps(trace, indent=2, default=str, ensure_ascii=False)
+            out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Never truncate or chmod through a planted symlink (O_NOFOLLOW is POSIX).
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if not nofollow and path.is_symlink():
+                raise OSError(f"refusing to write through symlink {path}")
+            # Created owner-only from the start (no effect on Windows).
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow, 0o600)
+            if hasattr(os, "fchmod"):  # also tightens a reused, older file
+                os.fchmod(fd, 0o600)
+            with open(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
         except OSError as e:
             logger.warning("dev_mode: failed to write trace JSON to %s: %s", path, e)
         except (TypeError, ValueError) as e:
@@ -941,15 +991,11 @@ class HttpTransport:
 
         self._write_dev_trace_payload(payload)
 
-        post_body: dict[str, Any] = payload
-        if self._pii_pseudonymizer is not None:
-            post_body = self._pii_pseudonymizer.pseudonymize_dict(payload)
-
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=post_body,
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
@@ -1085,15 +1131,11 @@ class HttpTransport:
 
         self._write_dev_trace_payload(payload)
 
-        post_payload: dict[str, Any] = payload
-        if self._pii_pseudonymizer is not None:
-            post_payload = self._pii_pseudonymizer.pseudonymize_dict(payload)
-
         try:
             # Send request with explicit Content-Type for JSON
             response = self.session.post(
                 url,
-                json=post_payload,
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self.config.transport.timeout,
             )
