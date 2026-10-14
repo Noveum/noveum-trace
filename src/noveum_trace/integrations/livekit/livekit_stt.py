@@ -23,6 +23,7 @@ from noveum_trace.integrations.livekit.livekit_constants import (
     STT_TRANSCRIPT_DEFAULT_VALUE,
 )
 from noveum_trace.integrations.livekit.livekit_utils import (
+    audio_buffer_frames,
     calculate_audio_duration_ms,
     create_span_attributes,
     upload_audio_frames,
@@ -169,7 +170,7 @@ class LiveKitSTTWrapper(BaseSTT):
         event = await self._base_stt._recognize_impl(buffer, **kwargs)  # noqa: SLF001
 
         # Calculate audio duration
-        duration_ms = calculate_audio_duration_ms(list(buffer))
+        duration_ms = calculate_audio_duration_ms(audio_buffer_frames(buffer))
 
         # Create span if trace exists
         trace = get_current_trace()
@@ -249,7 +250,11 @@ class LiveKitSTTWrapper(BaseSTT):
 
                 # Upload audio frames with explicit span context
                 upload_audio_frames(
-                    list(buffer), audio_uuid, "stt", span.trace_id, span.span_id
+                    audio_buffer_frames(buffer),
+                    audio_uuid,
+                    "stt",
+                    span.trace_id,
+                    span.span_id,
                 )
 
                 span.set_status(SpanStatus.OK)

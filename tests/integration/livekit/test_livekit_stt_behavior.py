@@ -83,6 +83,21 @@ async def test_recognize_impl_uploads_audio_with_span_context(lk_trace, lk_clien
     assert kwargs["metadata"]["type"] == "stt"
 
 
+async def test_recognize_impl_accepts_a_single_audio_frame(lk_trace, lk_client):
+    """Guards: LiveKit's AudioBuffer may be one AudioFrame rather than a list
+    (non-streaming providers such as OpenAI STT get this form). The wrapper used
+    to call list() on it and raise ``'AudioFrame' object is not iterable``."""
+    event = make_speech_event()
+    wrapper = LiveKitSTTWrapper(stt=FakeBaseSTT(recognize_event=event), session_id="s1")
+
+    result = await wrapper._recognize_impl(make_frame(0.5))
+
+    assert result is event
+    span = one_span(lk_trace, "stt.recognize")
+    assert span.attributes["stt.audio_duration_ms"] == 500.0
+    assert lk_client.transport.export_audio.called
+
+
 async def test_recognize_impl_without_trace_creates_no_span(lk_client):
     """Guards: no active trace -> no span, event still returned (no crash)."""
     set_current_trace(None)
