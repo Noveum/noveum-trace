@@ -137,6 +137,25 @@ def save_audio_frames(frames: list[Any], output_path: Path) -> None:
     output_path.write_bytes(wav_bytes)
 
 
+def audio_buffer_frames(buffer: AudioBuffer) -> list[Any]:
+    """
+    Return the frames of an AudioBuffer as a list.
+
+    LiveKit's AudioBuffer is either a list of AudioFrame objects or a single
+    AudioFrame. Non-streaming STT providers (for example OpenAI) receive the
+    single-frame form, which is not iterable.
+
+    Args:
+        buffer: AudioBuffer as passed to STT recognize
+
+    Returns:
+        List of audio frames
+    """
+    if isinstance(buffer, list):
+        return buffer
+    return [buffer]
+
+
 def save_audio_buffer(buffer: AudioBuffer, output_path: Path) -> None:
     """
     Save AudioBuffer (list of frames) as WAV file.
@@ -149,8 +168,7 @@ def save_audio_buffer(buffer: AudioBuffer, output_path: Path) -> None:
         ImportError: If livekit package is not installed
         IOError: If file cannot be written
     """
-    # AudioBuffer is essentially a list of AudioFrame objects
-    save_audio_frames(list(buffer), output_path)
+    save_audio_frames(audio_buffer_frames(buffer), output_path)
 
 
 def calculate_audio_duration_ms(frames: list[Any]) -> float:
