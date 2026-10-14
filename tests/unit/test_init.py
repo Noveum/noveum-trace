@@ -98,3 +98,51 @@ class TestInitServiceVersion:
             noveum_trace.init(project="test-project", api_key="test-key")
 
         assert config_module.get_config().service_version is None
+
+
+class TestInitEndpoint:
+    """Test how ``init()`` resolves the API endpoint."""
+
+    def _reset_state(self):
+        with noveum_trace._client_lock:
+            noveum_trace._client = None
+        config_module._config = None
+
+    def setup_method(self):
+        self._reset_state()
+
+    def teardown_method(self):
+        self._reset_state()
+
+    def test_init_uses_noveum_endpoint_env_when_no_endpoint_given(self):
+        """NOVEUM_ENDPOINT applies when init() is called without endpoint=."""
+        with patch.dict(
+            "os.environ",
+            {"NOVEUM_ENDPOINT": "https://api-dev.example.com/api"},
+            clear=True,
+        ):
+            noveum_trace.init(project="test-project", api_key="test-key")
+
+        assert config_module.get_config().endpoint == "https://api-dev.example.com/api"
+
+    def test_init_explicit_endpoint_overrides_env(self):
+        """An explicit endpoint= argument wins over NOVEUM_ENDPOINT."""
+        with patch.dict(
+            "os.environ",
+            {"NOVEUM_ENDPOINT": "https://api-dev.example.com/api"},
+            clear=True,
+        ):
+            noveum_trace.init(
+                project="test-project",
+                api_key="test-key",
+                endpoint="https://explicit.example.com/api",
+            )
+
+        assert config_module.get_config().endpoint == "https://explicit.example.com/api"
+
+    def test_init_defaults_endpoint_without_env(self):
+        """Without endpoint= or NOVEUM_ENDPOINT, init() uses the default."""
+        with patch.dict("os.environ", {}, clear=True):
+            noveum_trace.init(project="test-project", api_key="test-key")
+
+        assert config_module.get_config().endpoint == noveum_trace.DEFAULT_ENDPOINT

@@ -39,6 +39,7 @@ __author__ = "Noveum Team"
 __email__ = "engineering@noveum.ai"
 __license__ = "Apache-2.0"
 
+import os
 import threading
 import warnings
 from typing import Any, Optional
@@ -144,7 +145,8 @@ def init(
     Args:
         project: Project name for organizing traces
         api_key: Noveum API key (defaults to NOVEUM_API_KEY env var)
-        endpoint: API endpoint (defaults to https://api.noveum.ai/api)
+        endpoint: API endpoint (defaults to the NOVEUM_ENDPOINT env var, then
+            https://api.noveum.ai/api)
         environment: Environment name (dev, staging, prod)
         service_version: Service/application version string (e.g. "v1.0.0").
             Exported as ``service_version`` on each trace. Defaults to the
@@ -185,9 +187,12 @@ def init(
             config["project"] = project
         if api_key is not None:
             config["api_key"] = api_key
-        # Always include endpoint in config to ensure consistent behavior
-        # If None, use the default endpoint
-        config["endpoint"] = endpoint if endpoint is not None else DEFAULT_ENDPOINT
+        # Always include endpoint in config to ensure consistent behavior.
+        # An explicit endpoint wins, then NOVEUM_ENDPOINT, then the default.
+        # The env var has to be read here: configure() lets explicit values
+        # override the environment, so passing the default would hide it.
+        env_endpoint = (os.getenv("NOVEUM_ENDPOINT") or "").strip()
+        config["endpoint"] = endpoint or env_endpoint or DEFAULT_ENDPOINT
         if environment is not None:
             config["environment"] = environment
         if service_version is not None:
@@ -255,7 +260,7 @@ def init(
 
                     _api_client: Any = HttpGuardAPIClient(
                         api_key=_resolved_key,
-                        base_url=endpoint or DEFAULT_ENDPOINT,
+                        base_url=get_config().endpoint,
                         organization_slug=organization,
                     )
                 else:
@@ -263,7 +268,7 @@ def init(
 
                     _api_client = GuardAPIClient(
                         api_key="",
-                        base_url=endpoint or DEFAULT_ENDPOINT,
+                        base_url=get_config().endpoint,
                     )
                 _engine = PolicyEngine(
                     _api_client,
