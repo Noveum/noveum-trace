@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
+import textwrap
 import types
 
 import pytest
@@ -118,3 +121,51 @@ def test_setup_pipecat_tracing_rejects_api_key() -> None:
 
     with pytest.raises(TypeError, match="api_key"):
         setup_pipecat_tracing(api_key="x")  # type: ignore[call-arg]
+
+
+def test_import_noveum_trace_does_not_load_pipecat_transports() -> None:
+    """``import noveum_trace`` must not try every Pipecat transport.
+
+    The package is imported whenever pipecat-ai is installed, and Pipecat logs an
+    ERROR for each transport whose optional extra is missing. Runs in a fresh
+    interpreter because this session has already imported the transports.
+    """
+    pytest.importorskip("pipecat")
+
+    script = textwrap.dedent("""
+        import json
+        import sys
+
+        from loguru import logger
+
+        logger.remove()
+        errors = []
+        logger.add(lambda message: errors.append(message.record["name"]), level="ERROR")
+
+        import noveum_trace  # noqa: F401
+
+        print(json.dumps({
+            "transports_loaded": (
+                "noveum_trace.integrations.pipecat.transports" in sys.modules
+            ),
+            "pipecat_errors": [name for name in errors if name.startswith("pipecat.")],
+        }))
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+
+    outcome = json.loads(result.stdout.strip().splitlines()[-1])
+    assert outcome == {"transports_loaded": False, "pipecat_errors": []}
+
+
+def test_transport_wrappers_load_on_first_access() -> None:
+    pytest.importorskip("pipecat")
+
+    import noveum_trace.integrations.pipecat as m
+    from noveum_trace.integrations.pipecat import transports
+
+    assert m.NoveumSmallWebRTCTransport is transports.NoveumSmallWebRTCTransport
+    assert m.NoveumRawAudioTapMixin is transports.NoveumRawAudioTapMixin
+    with pytest.raises(AttributeError):
+        m.NoveumNotATransport  # noqa: B018
