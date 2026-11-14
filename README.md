@@ -173,7 +173,6 @@ export NOVEUM_ENDPOINT="https://api.noveum.ai/api"
 
 For a complete list of all available environment variables including debug settings, logging configuration, and agent registry limits, see [`.env.example`](.env.example) in the repository root.
 
-
 ## 🏗️ Architecture
 
 ```
