@@ -51,18 +51,6 @@ jobs:
         run: |
           python -m pytest tests/unit/ --cov=src/noveum_trace --cov-report=xml --cov-report=term-missing -v --junitxml=junit.xml -o junit_family=legacy
 
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: Noveum/noveum-trace
-
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   # Run integration tests across the supported pipecat range on all PRs/pushes.
   #
   # The pipecat integration must work on both the declared floor (pipecat-ai
@@ -130,19 +118,6 @@ jobs:
         # only here; on the latest leg they skip.
         run: |
           python -m pytest tests/integration/pipecat/ -v -o junit_family=legacy
-
-      - name: Upload coverage reports to Codecov
-        if: matrix.pipecat-version == 'latest'
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: Noveum/noveum-trace
-
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() && matrix.pipecat-version == 'latest' }}
-        uses: codecov/test-results-action@v1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
 
   lint:
     runs-on: ubuntu-latest
