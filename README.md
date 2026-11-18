@@ -493,6 +493,8 @@ pytest -m agent
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
+The Noveum team maintains this SDK. [Shashank Agarwal](https://www.linkedin.com/in/shashankagarwal2/), Noveum’s founder and CEO, contributes to the project’s [release tooling](https://github.com/Noveum/noveum-trace/pull/100).
+
 ### Development Setup
 
 ```bash
