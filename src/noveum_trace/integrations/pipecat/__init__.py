@@ -48,25 +48,60 @@ Or use the convenience helper::
     await observer.attach_to_task(task)
 """
 
-from typing import Any
+import importlib
+from typing import TYPE_CHECKING, Any
 
 from noveum_trace.integrations.pipecat.custom_spans import NoveumCustomSpanProcessor
 from noveum_trace.integrations.pipecat.pipecat_observer import NoveumTraceObserver
 from noveum_trace.integrations.pipecat.tracer import NoveumPipecatTracer
-from noveum_trace.integrations.pipecat.transports import (
-    NoveumDailyTransport,
-    NoveumFastAPIWebsocketTransport,
-    NoveumHeyGenTransport,
-    NoveumLemonSliceTransport,
-    NoveumLiveKitTransport,
-    NoveumLocalAudioTransport,
-    NoveumRawAudioTapMixin,
-    NoveumSmallWebRTCTransport,
-    NoveumTavusTransport,
-    NoveumTkTransport,
-    NoveumWebsocketClientTransport,
-    NoveumWebsocketServerTransport,
+
+if TYPE_CHECKING:
+    from noveum_trace.integrations.pipecat.transports import (
+        NoveumDailyTransport,
+        NoveumFastAPIWebsocketTransport,
+        NoveumHeyGenTransport,
+        NoveumLemonSliceTransport,
+        NoveumLiveKitTransport,
+        NoveumLocalAudioTransport,
+        NoveumRawAudioTapMixin,
+        NoveumSmallWebRTCTransport,
+        NoveumTavusTransport,
+        NoveumTkTransport,
+        NoveumWebsocketClientTransport,
+        NoveumWebsocketServerTransport,
+    )
+
+# The transport wrappers load on first access, not with this package.
+# transports.py imports every Pipecat transport it can wrap, and Pipecat logs an
+# ERROR for each one whose optional extra is not installed before raising (which
+# transports.py then catches). ``import noveum_trace`` imports this package
+# whenever pipecat-ai is installed, so importing them here logged those errors
+# in every such process, including ones that never use a Noveum transport.
+_LAZY_TRANSPORT_EXPORTS = frozenset(
+    {
+        "NoveumDailyTransport",
+        "NoveumFastAPIWebsocketTransport",
+        "NoveumHeyGenTransport",
+        "NoveumLemonSliceTransport",
+        "NoveumLiveKitTransport",
+        "NoveumLocalAudioTransport",
+        "NoveumRawAudioTapMixin",
+        "NoveumSmallWebRTCTransport",
+        "NoveumTavusTransport",
+        "NoveumTkTransport",
+        "NoveumWebsocketClientTransport",
+        "NoveumWebsocketServerTransport",
+    }
 )
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_TRANSPORT_EXPORTS:
+        transports = importlib.import_module(f"{__name__}.transports")
+        value = getattr(transports, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def setup_pipecat_tracing(**kwargs: Any) -> NoveumTraceObserver:
