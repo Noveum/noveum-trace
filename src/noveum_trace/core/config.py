@@ -63,6 +63,7 @@ DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_BATCH_TIMEOUT = 5.0
 DEFAULT_MAX_QUEUE_SIZE = 1000
+DEFAULT_MAX_REQUEST_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_SPANS_PER_TRACE = 1000
 DEFAULT_DEV_TRACES_DIR = ".noveum_trace_dev"
 # Not a cryptographic default: absence of salt. Pseudonymization requires an
@@ -94,6 +95,7 @@ class TransportConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     batch_timeout: float = DEFAULT_BATCH_TIMEOUT
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
+    max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     compression: bool = True
     ssl_verify: bool = (
         # Set to False to disable SSL verification (NOT recommended for production)
@@ -246,6 +248,12 @@ class Config:
                 f"Invalid timeout: {self.transport.timeout}. Must be greater than 0."
             )
 
+        if self.transport.max_request_bytes < 64 * 1024:
+            raise ConfigurationError(
+                f"Invalid max_request_bytes: {self.transport.max_request_bytes}. "
+                "Must be at least 65536."
+            )
+
         # Validate endpoint URL format
         endpoint = self.transport.endpoint
         if endpoint:
@@ -369,6 +377,7 @@ class Config:
                 "retry_backoff": self.transport.retry_backoff,
                 "batch_size": self.transport.batch_size,
                 "batch_timeout": self.transport.batch_timeout,
+                "max_request_bytes": self.transport.max_request_bytes,
                 "compression": self.transport.compression,
                 "ssl_verify": self.transport.ssl_verify,
                 "ca_bundle": self.transport.ca_bundle,
@@ -467,6 +476,9 @@ class Config:
                     ),
                     max_queue_size=transport_data.get(
                         "max_queue_size", DEFAULT_MAX_QUEUE_SIZE
+                    ),
+                    max_request_bytes=transport_data.get(
+                        "max_request_bytes", DEFAULT_MAX_REQUEST_BYTES
                     ),
                     compression=transport_data.get("compression", False),
                     ssl_verify=transport_data.get("ssl_verify", True),
