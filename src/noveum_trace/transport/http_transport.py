@@ -1106,7 +1106,7 @@ class HttpTransport:
             traces: List of trace data to send
 
         Raises:
-            TransportError: If a request fails or a trace cannot be split
+            TransportError: The first request that failed
         """
         if not traces:
             logger.debug("_send_batch called with empty traces list, skipping")
