@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from noveum_trace.core.trace import Trace
 from noveum_trace.transport.batch_processor import BatchProcessor
-from noveum_trace.transport.trace_chunking import plan_trace_requests
+from noveum_trace.transport.trace_chunking import plan_trace_requests, split_trace
 from noveum_trace.utils import otel_compat
 from noveum_trace.utils.exceptions import TransportError
 from noveum_trace.utils.logging import (
@@ -455,7 +455,16 @@ class HttpTransport:
             raise TransportError("Transport has been shutdown")
 
         trace_data = self._format_trace_for_export(trace)
-        return self._send_request(trace_data)
+        chunks = split_trace(trace_data, self.config.transport.max_request_bytes)
+        if len(chunks) == 1:
+            return self._send_request(trace_data)
+        self._write_dev_trace_payload(
+            {"traces": [trace_data], "timestamp": time.time()}
+        )
+        response: dict[str, Any] = {}
+        for chunk in chunks:
+            response = self._post_trace_request([chunk])
+        return response
 
     def export_image(
         self,
@@ -1088,8 +1097,10 @@ class HttpTransport:
 
         Traces are grouped into requests under
         ``config.transport.max_request_bytes``; a trace larger than that is
-        sent in chunks (see ``trace_chunking``). Requests are sent in order and
-        the first failure stops the batch.
+        sent in chunks (see ``trace_chunking``). Requests are sent in order.
+        When a request fails, the remaining chunks of the traces in it are
+        skipped, other traces are still sent, and the first error is raised
+        once the batch is done.
 
         Args:
             traces: List of trace data to send
@@ -1111,15 +1122,32 @@ class HttpTransport:
                 f"Splitting {len(traces)} traces into {len(requests_to_send)} "
                 f"requests under {self.config.transport.max_request_bytes} bytes"
             )
+        failed_trace_ids: set[Any] = set()
+        first_error: Optional[TransportError] = None
         for request_traces in requests_to_send:
-            self._post_trace_request(request_traces)
+            trace_ids = {trace.get("trace_id") for trace in request_traces}
+            if trace_ids <= failed_trace_ids:
+                continue
+            try:
+                self._post_trace_request(request_traces)
+            except TransportError as error:
+                failed_trace_ids |= trace_ids
+                first_error = first_error or error
+        if first_error is not None:
+            raise first_error
 
-    def _post_trace_request(self, traces: list[dict[str, Any]]) -> None:
+    def _post_trace_request(self, traces: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Send one request body of traces to the Noveum platform.
 
+        A chunk of a large trace goes to ``/v1/traces/chunks``, everything else
+        to ``/v1/traces``.
+
         Args:
             traces: Traces that fit together in one request
+
+        Returns:
+            The parsed response body, or an empty dict when it is not JSON
 
         Raises:
             TransportError: If the request fails
@@ -1136,7 +1164,8 @@ class HttpTransport:
             payload = self._compress_payload(payload)
 
         # Log detailed request information
-        url = self._build_api_url("/v1/traces")
+        is_chunk = any("chunk" in trace for trace in traces)
+        url = self._build_api_url("/v1/traces/chunks" if is_chunk else "/v1/traces")
         logger.info(f"🚀 SENDING BATCH: {len(traces)} traces to {url}")
 
         if log_debug_enabled():
@@ -1188,6 +1217,11 @@ class HttpTransport:
                         response, max_length=2000
                     )
                     logger.debug(f"📋 Response preview: {safe_preview}")
+                try:
+                    parsed = response.json()
+                except ValueError:
+                    parsed = {}
+                return parsed if isinstance(parsed, dict) else {}
             elif response.status_code == 401:
                 log_error_always(
                     logger,

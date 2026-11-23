@@ -1,6 +1,7 @@
 """Traces larger than the request limit are sent in chunks the API can merge."""
 
 import json
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -8,6 +9,8 @@ import pytest
 from noveum_trace.core.config import Config, ConfigurationError
 from noveum_trace.transport.http_transport import HttpTransport
 from noveum_trace.transport.trace_chunking import (
+    _SPAN_SEPARATOR_BYTES,
+    MAX_TRACE_CHUNKS,
     REQUEST_ENVELOPE_BYTES,
     TraceTooLargeError,
     encoded_size,
@@ -105,12 +108,36 @@ class TestSplitTrace:
         assert [len(chunk["spans"]) for chunk in chunks] == [1, 1, 1]
         assert chunks[1]["spans"][0]["span_id"] == "t-call-s1"
 
-    def test_a_trace_whose_fields_alone_do_not_fit_is_refused(self):
+    def test_a_trace_whose_fields_alone_do_not_fit_is_sent_whole(self):
         trace = make_trace("t-call", 3)
         trace["attributes"]["conversation.history"] = "z" * LIMIT
 
+        assert split_trace(trace, LIMIT) == [trace]
+
+    def test_a_trace_needing_more_than_the_chunk_cap_is_refused(self):
+        trace = make_trace("t-huge", MAX_TRACE_CHUNKS + 1, span_bytes=LIMIT)
+
         with pytest.raises(TraceTooLargeError):
             split_trace(trace, LIMIT)
+
+    def test_a_trace_exactly_at_the_limit_is_not_split(self):
+        trace = make_trace("t-edge", 10)
+        size = encoded_size(trace) + REQUEST_ENVELOPE_BYTES
+
+        assert split_trace(trace, size) == [trace]
+        assert len(split_trace(trace, size - 1)) > 1
+
+    def test_chunks_of_non_ascii_content_fit_once_escaped(self):
+        trace = make_trace("t-hindi", 300)
+        for span in trace["spans"]:
+            span["attributes"]["llm.response"] = 'नमस्ते, आपका खाता 🙂 "quoted" ' * 40
+
+        chunks = split_trace(trace, LIMIT)
+
+        assert len(chunks) > 1
+        for chunk in chunks:
+            body = json.dumps({"traces": [chunk], "timestamp": time.time()})
+            assert len(body.encode("utf-8")) <= LIMIT
 
     def test_too_large_is_a_transport_error(self):
         assert issubclass(TraceTooLargeError, TransportError)
@@ -149,15 +176,47 @@ class TestPlanTraceRequests:
     def test_the_envelope_allowance_covers_the_request_wrapper(self):
         assert request_size([]) <= REQUEST_ENVELOPE_BYTES
 
+    def test_packing_stops_at_the_limit_exactly(self):
+        first, second = make_trace("t-a", 5), make_trace("t-b", 5)
+        packed = (
+            REQUEST_ENVELOPE_BYTES
+            + encoded_size(first)
+            + encoded_size(second)
+            + 2 * _SPAN_SEPARATOR_BYTES
+        )
 
-def transport_with(max_request_bytes: int, statuses: list[int]) -> HttpTransport:
-    config = Config.create(api_key="test-key", project="p")
+        assert plan_trace_requests([first, second], packed) == [[first, second]]
+        assert plan_trace_requests([first, second], packed - 1) == [
+            [first],
+            [second],
+        ]
+
+    def test_an_oversized_trace_is_sent_alone_and_does_not_take_others_with_it(self):
+        small = make_trace("t-small", 2)
+        oversized = make_trace("t-big", 2)
+        oversized["attributes"]["conversation.history"] = "z" * LIMIT
+
+        assert plan_trace_requests([small, oversized, small], LIMIT) == [
+            [small],
+            [oversized],
+            [small],
+        ]
+
+
+def transport_with(
+    max_request_bytes: int, statuses: list[int], **config_args
+) -> HttpTransport:
+    config = Config.create(api_key="test-key", project="p", **config_args)
     config.transport.max_request_bytes = max_request_bytes
     with patch("noveum_trace.transport.http_transport.BatchProcessor"):
         transport = HttpTransport(config)
     responses = [Mock(status_code=status, text="{}") for status in statuses]
     transport.session.post = Mock(side_effect=responses)
     return transport
+
+
+def posted_urls(transport: HttpTransport) -> list[str]:
+    return [call.args[0] for call in transport.session.post.call_args_list]
 
 
 def posted_traces(transport: HttpTransport) -> list[list[dict]]:
@@ -176,18 +235,26 @@ class TestHttpTransportSendsChunks:
 
         bodies = posted_traces(transport)
         assert bodies == [[chunk] for chunk in expected]
+        assert all(url.endswith("/v1/traces/chunks") for url in posted_urls(transport))
         for call in transport.session.post.call_args_list:
             assert len(json.dumps(call.kwargs["json"]).encode()) <= LIMIT
 
-    def test_a_failed_chunk_stops_the_batch_and_raises(self):
+    def test_a_failed_chunk_skips_the_rest_of_its_trace_but_not_other_traces(self):
         trace = make_trace("t-call", 300)
+        after = make_trace("t-after", 2)
         chunk_count = len(split_trace(trace, LIMIT))
         transport = transport_with(LIMIT, [200, 413] + [200] * chunk_count)
 
         with pytest.raises(TransportError):
-            transport._send_trace_batch([trace])
+            transport._send_trace_batch([trace, after])
 
-        assert transport.session.post.call_count == 2
+        bodies = posted_traces(transport)
+        assert [body[0]["trace_id"] for body in bodies] == [
+            "t-call",
+            "t-call",
+            "t-after",
+        ]
+        assert posted_urls(transport)[-1].endswith("/v1/traces")
 
     def test_a_batch_that_fits_is_one_request_as_before(self):
         traces = [make_trace("t-a", 2), make_trace("t-b", 2)]
@@ -197,6 +264,7 @@ class TestHttpTransportSendsChunks:
 
         assert posted_traces(transport) == [traces]
         assert all("chunk" not in trace for trace in posted_traces(transport)[0])
+        assert posted_urls(transport)[0].endswith("/v1/traces")
 
     def test_the_default_limit_leaves_room_under_the_api_limit(self):
         config = Config.create(api_key="test-key", project="p")
@@ -213,4 +281,36 @@ class TestHttpTransportSendsChunks:
 
     def test_a_limit_too_small_to_hold_a_trace_is_refused(self):
         with pytest.raises(ConfigurationError):
-            Config.from_dict({"api_key": "k", "transport": {"max_request_bytes": 100}})
+            Config.from_dict(
+                {"api_key": "k", "transport": {"max_request_bytes": 65_535}}
+            )
+        assert (
+            Config.from_dict(
+                {"api_key": "k", "transport": {"max_request_bytes": 65_536}}
+            ).transport.max_request_bytes
+            == 65_536
+        )
+
+    def test_the_synchronous_send_chunks_a_large_trace_too(self):
+        trace = make_trace("t-call", 300)
+        expected = split_trace(trace, LIMIT)
+        transport = transport_with(LIMIT, [200] * len(expected))
+        transport._format_trace_for_export = Mock(return_value=trace)
+
+        transport.send_trace_now(Mock())
+
+        assert posted_traces(transport) == [[chunk] for chunk in expected]
+        assert all(url.endswith("/v1/traces/chunks") for url in posted_urls(transport))
+
+    def test_dev_mode_saves_a_chunked_trace_whole(self, tmp_path):
+        trace = make_trace("t-call", 300)
+        chunk_count = len(split_trace(trace, LIMIT))
+        transport = transport_with(
+            LIMIT, [200] * chunk_count, dev_mode=True, dev_traces_dir=str(tmp_path)
+        )
+
+        transport._send_trace_batch([trace])
+
+        saved = json.loads((tmp_path / "t-call.json").read_text(encoding="utf-8"))
+        assert len(saved["spans"]) == 300
+        assert "chunk" not in saved

@@ -6,7 +6,9 @@ The Noveum API rejects a request body above its limit (50 MiB for
 produce a trace above that. A trace whose serialized size exceeds
 ``max_request_bytes`` is therefore sent as several requests ("chunks"): every
 chunk repeats the trace fields with the total ``span_count``, carries its own
-share of the spans, and is marked with ``chunk = {"index": i, "count": n}``.
+share of the spans, is marked with ``chunk = {"index": i, "count": n}`` and is
+sent to ``/v1/traces/chunks``, which older platforms do not have, so they
+answer 404 instead of storing a chunk as a whole trace.
 The platform stores each chunk's spans under the same trace and runs its
 post-ingest work once, when the last chunk has arrived.
 
@@ -21,7 +23,7 @@ from typing import Any
 
 from noveum_trace.utils.exceptions import TransportError
 
-MAX_TRACE_CHUNKS = 10_000
+MAX_TRACE_CHUNKS = 1_000
 REQUEST_ENVELOPE_BYTES = 256
 _SPAN_SEPARATOR_BYTES = 2
 
@@ -40,11 +42,13 @@ def split_trace(trace: dict[str, Any], max_request_bytes: int) -> list[dict[str,
 
     A trace that fits is returned unchanged. A larger one is returned as
     chunks in send order. A single span larger than the budget gets a chunk of
-    its own, which the API may still reject; nothing is dropped here.
+    its own, which the API may still reject; nothing is dropped here. A trace
+    whose fields alone do not fit is returned whole, as before chunking: the
+    API's own limit is far above the default here and may still accept it.
 
     Raises:
-        TraceTooLargeError: The trace fields alone do not fit in a request, or
-            the trace would need more than ``MAX_TRACE_CHUNKS`` chunks.
+        TraceTooLargeError: The trace would need more than ``MAX_TRACE_CHUNKS``
+            chunks.
     """
     spans = list(trace.get("spans") or [])
     if (
@@ -64,10 +68,7 @@ def split_trace(trace: dict[str, Any], max_request_bytes: int) -> list[dict[str,
     )
     budget = max_request_bytes - REQUEST_ENVELOPE_BYTES - header_size
     if budget <= 0:
-        raise TraceTooLargeError(
-            f"Trace {trace.get('trace_id')} cannot be sent: its fields without spans "
-            f"take {header_size} bytes, over the {max_request_bytes} byte request limit"
-        )
+        return [trace]
 
     groups: list[list[Any]] = []
     current: list[Any] = []
@@ -99,7 +100,8 @@ def plan_trace_requests(
 
     Traces that fit are packed together in their original order. A trace that
     has to be chunked is sent as its own requests, one chunk per request, with
-    the last chunk sent last.
+    the last chunk sent last. A trace too large to fit even alone is sent in a
+    request of its own, so it cannot take other traces down with it.
     """
     requests: list[list[dict[str, Any]]] = []
     pending: list[dict[str, Any]] = []
@@ -122,5 +124,7 @@ def plan_trace_requests(
             flush()
         pending.append(trace)
         pending_size += trace_size
+        if pending_size > max_request_bytes:
+            flush()
     flush()
     return requests
