@@ -12,7 +12,6 @@ from noveum_trace.transport.trace_chunking import (
     _SPAN_SEPARATOR_BYTES,
     MAX_TRACE_CHUNKS,
     REQUEST_ENVELOPE_BYTES,
-    TraceTooLargeError,
     encoded_size,
     plan_trace_requests,
     split_trace,
@@ -114,11 +113,31 @@ class TestSplitTrace:
 
         assert split_trace(trace, LIMIT) == [trace]
 
-    def test_a_trace_needing_more_than_the_chunk_cap_is_refused(self):
-        trace = make_trace("t-huge", MAX_TRACE_CHUNKS + 1, span_bytes=LIMIT)
+    def test_the_platform_chunk_cap_is_1000(self):
+        assert MAX_TRACE_CHUNKS == 1000
 
-        with pytest.raises(TraceTooLargeError):
-            split_trace(trace, LIMIT)
+    def test_a_trace_needing_exactly_1000_chunks_is_chunked(self):
+        trace = make_trace("t-max", 1000, span_bytes=LIMIT)
+
+        chunks = split_trace(trace, LIMIT)
+
+        assert len(chunks) == 1000
+        assert chunks[-1]["chunk"] == {"index": 999, "count": 1000}
+
+    def test_a_trace_needing_more_than_1000_chunks_is_sent_whole(self):
+        trace = make_trace("t-huge", 1001, span_bytes=LIMIT)
+
+        assert split_trace(trace, LIMIT) == [trace]
+
+    def test_a_trace_over_the_chunk_cap_does_not_take_others_with_it(self):
+        small = make_trace("t-small", 2)
+        huge = make_trace("t-huge", 1001, span_bytes=LIMIT)
+
+        assert plan_trace_requests([small, huge, small], LIMIT) == [
+            [small],
+            [huge],
+            [small],
+        ]
 
     def test_a_trace_exactly_at_the_limit_is_not_split(self):
         trace = make_trace("t-edge", 10)
@@ -138,9 +157,6 @@ class TestSplitTrace:
         for chunk in chunks:
             body = json.dumps({"traces": [chunk], "timestamp": time.time()})
             assert len(body.encode("utf-8")) <= LIMIT
-
-    def test_too_large_is_a_transport_error(self):
-        assert issubclass(TraceTooLargeError, TransportError)
 
 
 class TestPlanTraceRequests:
@@ -301,6 +317,29 @@ class TestHttpTransportSendsChunks:
 
         assert posted_traces(transport) == [[chunk] for chunk in expected]
         assert all(url.endswith("/v1/traces/chunks") for url in posted_urls(transport))
+
+    def test_the_first_error_of_a_batch_is_the_one_raised(self):
+        first, second = make_trace("t-first", 2), make_trace("t-second", 2)
+        first["attributes"]["conversation.history"] = "a" * LIMIT
+        transport = transport_with(LIMIT, [429, 403])
+
+        with pytest.raises(TransportError, match="Rate limit exceeded"):
+            transport._send_trace_batch([first, second])
+
+        assert transport.session.post.call_count == 2
+
+    def test_dev_mode_saves_a_synchronously_sent_chunked_trace_whole(self, tmp_path):
+        trace = make_trace("t-call", 300)
+        chunk_count = len(split_trace(trace, LIMIT))
+        transport = transport_with(
+            LIMIT, [200] * chunk_count, dev_mode=True, dev_traces_dir=str(tmp_path)
+        )
+        transport._format_trace_for_export = Mock(return_value=trace)
+
+        transport.send_trace_now(Mock())
+
+        saved = json.loads((tmp_path / "t-call.json").read_text(encoding="utf-8"))
+        assert len(saved["spans"]) == 300
 
     def test_dev_mode_saves_a_chunked_trace_whole(self, tmp_path):
         trace = make_trace("t-call", 300)

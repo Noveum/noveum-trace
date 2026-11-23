@@ -21,15 +21,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from noveum_trace.utils.exceptions import TransportError
-
 MAX_TRACE_CHUNKS = 1_000
 REQUEST_ENVELOPE_BYTES = 256
 _SPAN_SEPARATOR_BYTES = 2
-
-
-class TraceTooLargeError(TransportError):
-    """A trace cannot be split into requests under the size limit."""
 
 
 def encoded_size(value: Any) -> int:
@@ -43,12 +37,9 @@ def split_trace(trace: dict[str, Any], max_request_bytes: int) -> list[dict[str,
     A trace that fits is returned unchanged. A larger one is returned as
     chunks in send order. A single span larger than the budget gets a chunk of
     its own, which the API may still reject; nothing is dropped here. A trace
-    whose fields alone do not fit is returned whole, as before chunking: the
+    whose fields alone do not fit, or that would need more than
+    ``MAX_TRACE_CHUNKS`` chunks, is returned whole, as before chunking: the
     API's own limit is far above the default here and may still accept it.
-
-    Raises:
-        TraceTooLargeError: The trace would need more than ``MAX_TRACE_CHUNKS``
-            chunks.
     """
     spans = list(trace.get("spans") or [])
     if (
@@ -83,10 +74,7 @@ def split_trace(trace: dict[str, Any], max_request_bytes: int) -> list[dict[str,
     groups.append(current)
 
     if len(groups) > MAX_TRACE_CHUNKS:
-        raise TraceTooLargeError(
-            f"Trace {trace.get('trace_id')} would need {len(groups)} requests, "
-            f"over the limit of {MAX_TRACE_CHUNKS}"
-        )
+        return [trace]
     return [
         {**header, "spans": group, "chunk": {"index": index, "count": len(groups)}}
         for index, group in enumerate(groups)
