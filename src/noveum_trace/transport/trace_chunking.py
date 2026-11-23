@@ -1,0 +1,126 @@
+"""
+Split traces into requests that fit under the ingestion body limit.
+
+The Noveum API rejects a request body above its limit (50 MiB for
+``/api/v1/traces``) with HTTP 413, and the trace is lost. A long voice call can
+produce a trace above that. A trace whose serialized size exceeds
+``max_request_bytes`` is therefore sent as several requests ("chunks"): every
+chunk repeats the trace fields with the total ``span_count``, carries its own
+share of the spans, and is marked with ``chunk = {"index": i, "count": n}``.
+The platform stores each chunk's spans under the same trace and runs its
+post-ingest work once, when the last chunk has arrived.
+
+Traces that fit are left untouched and packed together into as few requests
+as the limit allows, so small traces are sent exactly as before.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from noveum_trace.utils.exceptions import TransportError
+
+MAX_TRACE_CHUNKS = 10_000
+REQUEST_ENVELOPE_BYTES = 256
+_SPAN_SEPARATOR_BYTES = 2
+
+
+class TraceTooLargeError(TransportError):
+    """A trace cannot be split into requests under the size limit."""
+
+
+def encoded_size(value: Any) -> int:
+    """Bytes ``value`` takes in a request body, serialized as the HTTP client does."""
+    return len(json.dumps(value, default=str).encode("utf-8"))
+
+
+def split_trace(trace: dict[str, Any], max_request_bytes: int) -> list[dict[str, Any]]:
+    """Return ``trace`` as one or more traces that each fit in a request.
+
+    A trace that fits is returned unchanged. A larger one is returned as
+    chunks in send order. A single span larger than the budget gets a chunk of
+    its own, which the API may still reject; nothing is dropped here.
+
+    Raises:
+        TraceTooLargeError: The trace fields alone do not fit in a request, or
+            the trace would need more than ``MAX_TRACE_CHUNKS`` chunks.
+    """
+    spans = list(trace.get("spans") or [])
+    if (
+        encoded_size(trace) + REQUEST_ENVELOPE_BYTES <= max_request_bytes
+        or len(spans) <= 1
+    ):
+        return [trace]
+
+    header = {key: value for key, value in trace.items() if key != "spans"}
+    header["span_count"] = len(spans)
+    header_size = encoded_size(
+        {
+            **header,
+            "spans": [],
+            "chunk": {"index": MAX_TRACE_CHUNKS, "count": MAX_TRACE_CHUNKS},
+        }
+    )
+    budget = max_request_bytes - REQUEST_ENVELOPE_BYTES - header_size
+    if budget <= 0:
+        raise TraceTooLargeError(
+            f"Trace {trace.get('trace_id')} cannot be sent: its fields without spans "
+            f"take {header_size} bytes, over the {max_request_bytes} byte request limit"
+        )
+
+    groups: list[list[Any]] = []
+    current: list[Any] = []
+    current_size = 0
+    for span in spans:
+        span_size = encoded_size(span) + _SPAN_SEPARATOR_BYTES
+        if current and current_size + span_size > budget:
+            groups.append(current)
+            current, current_size = [], 0
+        current.append(span)
+        current_size += span_size
+    groups.append(current)
+
+    if len(groups) > MAX_TRACE_CHUNKS:
+        raise TraceTooLargeError(
+            f"Trace {trace.get('trace_id')} would need {len(groups)} requests, "
+            f"over the limit of {MAX_TRACE_CHUNKS}"
+        )
+    return [
+        {**header, "spans": group, "chunk": {"index": index, "count": len(groups)}}
+        for index, group in enumerate(groups)
+    ]
+
+
+def plan_trace_requests(
+    traces: list[dict[str, Any]], max_request_bytes: int
+) -> list[list[dict[str, Any]]]:
+    """Group ``traces`` into request bodies that each fit under the limit.
+
+    Traces that fit are packed together in their original order. A trace that
+    has to be chunked is sent as its own requests, one chunk per request, with
+    the last chunk sent last.
+    """
+    requests: list[list[dict[str, Any]]] = []
+    pending: list[dict[str, Any]] = []
+    pending_size = REQUEST_ENVELOPE_BYTES
+
+    def flush() -> None:
+        nonlocal pending, pending_size
+        if pending:
+            requests.append(pending)
+            pending, pending_size = [], REQUEST_ENVELOPE_BYTES
+
+    for trace in traces:
+        pieces = split_trace(trace, max_request_bytes)
+        if len(pieces) > 1:
+            flush()
+            requests.extend([piece] for piece in pieces)
+            continue
+        trace_size = encoded_size(trace) + _SPAN_SEPARATOR_BYTES
+        if pending and pending_size + trace_size > max_request_bytes:
+            flush()
+        pending.append(trace)
+        pending_size += trace_size
+    flush()
+    return requests

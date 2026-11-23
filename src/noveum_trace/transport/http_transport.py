@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from noveum_trace.core.trace import Trace
 from noveum_trace.transport.batch_processor import BatchProcessor
+from noveum_trace.transport.trace_chunking import plan_trace_requests
 from noveum_trace.utils import otel_compat
 from noveum_trace.utils.exceptions import TransportError
 from noveum_trace.utils.logging import (
@@ -1085,15 +1086,44 @@ class HttpTransport:
         """
         Send a batch of traces to the Noveum platform.
 
+        Traces are grouped into requests under
+        ``config.transport.max_request_bytes``; a trace larger than that is
+        sent in chunks (see ``trace_chunking``). Requests are sent in order and
+        the first failure stops the batch.
+
         Args:
             traces: List of trace data to send
 
         Raises:
-            TransportError: If the request fails
+            TransportError: If a request fails or a trace cannot be split
         """
         if not traces:
             logger.debug("_send_batch called with empty traces list, skipping")
             return
+
+        self._write_dev_trace_payload({"traces": traces, "timestamp": time.time()})
+
+        requests_to_send = plan_trace_requests(
+            traces, self.config.transport.max_request_bytes
+        )
+        if len(requests_to_send) > 1:
+            logger.info(
+                f"Splitting {len(traces)} traces into {len(requests_to_send)} "
+                f"requests under {self.config.transport.max_request_bytes} bytes"
+            )
+        for request_traces in requests_to_send:
+            self._post_trace_request(request_traces)
+
+    def _post_trace_request(self, traces: list[dict[str, Any]]) -> None:
+        """
+        Send one request body of traces to the Noveum platform.
+
+        Args:
+            traces: Traces that fit together in one request
+
+        Raises:
+            TransportError: If the request fails
+        """
 
         # Prepare request payload
         payload = {
@@ -1128,8 +1158,6 @@ class HttpTransport:
                 logger.debug(
                     f"    [{i+1}] {trace_name} (ID: {trace_id}) - {span_count} spans"
                 )
-
-        self._write_dev_trace_payload(payload)
 
         try:
             # Send request with explicit Content-Type for JSON
