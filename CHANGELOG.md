@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.x] — Current (2026)
+## [1.6.x] — Current (2026)
+
+### 1.6.0
+
+- **Large traces are no longer rejected.** A trace bigger than `transport_config["max_request_bytes"]` (default 8 MiB) is split into chunks and posted one at a time to `/v1/traces/chunks`; the platform assembles them into a single trace. Long voice calls that used to fail with `413 Payload Too Large` now upload. Requires a Noveum platform that serves `/v1/traces/chunks` (Noveum cloud does from Nov 24, 2026).
+- **Batches stay under the request limit.** Several finished traces are grouped into requests below `max_request_bytes` instead of one request per batch. When a request fails, the rest of that trace's chunks are skipped, other traces are still sent, and the first error is raised after the batch.
+- New setting `transport_config["max_request_bytes"]` (minimum 65536).
+
+## [1.5.x] — 2026
 
 ### 1.5.26
 

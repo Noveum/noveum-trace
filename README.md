@@ -222,7 +222,8 @@ noveum_trace.init(
         "batch_size": 50,
         "batch_timeout": 2.0,
         "retry_attempts": 3,
-        "timeout": 30
+        "timeout": 30,
+        "max_request_bytes": 8 * 1024 * 1024  # larger traces are sent in chunks
     },
     tracing_config={
         "sample_rate": 1.0,
