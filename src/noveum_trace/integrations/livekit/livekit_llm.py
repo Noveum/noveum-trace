@@ -600,9 +600,19 @@ class _WrappedLLMStream:
         if not self._usage:
             return
 
-        attributes["llm.completion_tokens"] = self._usage.completion_tokens
-        attributes["llm.prompt_tokens"] = self._usage.prompt_tokens
-        attributes["llm.total_tokens"] = self._usage.total_tokens
+        completion_tokens = self._usage.completion_tokens
+        prompt_tokens = self._usage.prompt_tokens
+        total_tokens = self._usage.total_tokens
+        attributes["llm.completion_tokens"] = completion_tokens
+        attributes["llm.prompt_tokens"] = prompt_tokens
+        attributes["llm.total_tokens"] = total_tokens
+
+        # Gemini reports thoughts only inside total_tokens; for OpenAI-style usage
+        # total equals prompt plus completion so this is 0.
+        if total_tokens is not None:
+            attributes["llm.reasoning_tokens"] = max(
+                0, total_tokens - (prompt_tokens or 0) - (completion_tokens or 0)
+            )
 
         # Add optional cached token metrics
         if hasattr(self._usage, "prompt_cached_tokens"):

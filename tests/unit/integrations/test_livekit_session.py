@@ -11,6 +11,7 @@ Tests the session tracing functionality in livekit_session.py:
 import asyncio
 from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1916,3 +1917,56 @@ class TestTraceCreationEdgeCases:
                             await manager.session.start(mock_agent)
 
             mock_client.finish_trace.assert_called_once()
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_SESSION_AVAILABLE, reason="LiveKit session not available"
+)
+class TestBuildLLMMetrics:
+    """Test token attributes derived from metrics_collected LLM metrics."""
+
+    @staticmethod
+    def _metrics(**kwargs: Any) -> Mock:
+        metrics = Mock(spec=[])
+        for key, value in kwargs.items():
+            setattr(metrics, key, value)
+        return metrics
+
+    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
+    def test_reasoning_tokens_derived_from_total(self, mock_session: Mock) -> None:
+        """Gemini-style metrics: thoughts are only visible inside total_tokens."""
+        manager = _LiveKitTracingManager(session=mock_session)
+        metrics = self._metrics(
+            prompt_tokens=18, completion_tokens=18, total_tokens=162
+        )
+
+        result = manager._build_llm_metrics(metrics)
+
+        assert result["llm.input_tokens"] == 18
+        assert result["llm.output_tokens"] == 18
+        assert result["llm.total_tokens"] == 162
+        assert result["llm.reasoning_tokens"] == 126
+
+    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
+    def test_reasoning_tokens_zero_when_total_matches(self, mock_session: Mock) -> None:
+        """OpenAI-style metrics: total equals prompt plus completion."""
+        manager = _LiveKitTracingManager(session=mock_session)
+        metrics = self._metrics(prompt_tokens=20, completion_tokens=10, total_tokens=30)
+
+        result = manager._build_llm_metrics(metrics)
+
+        assert result["llm.total_tokens"] == 30
+        assert result["llm.reasoning_tokens"] == 0
+
+    @patch("noveum_trace.integrations.livekit.livekit_session.LIVEKIT_AVAILABLE", True)
+    def test_no_reasoning_tokens_when_total_absent(self, mock_session: Mock) -> None:
+        """No total or reasoning attribute when the metrics lack total_tokens."""
+        manager = _LiveKitTracingManager(session=mock_session)
+        metrics = self._metrics(prompt_tokens=18, completion_tokens=18)
+
+        result = manager._build_llm_metrics(metrics)
+
+        assert result["llm.input_tokens"] == 18
+        assert result["llm.output_tokens"] == 18
+        assert "llm.total_tokens" not in result
+        assert "llm.reasoning_tokens" not in result

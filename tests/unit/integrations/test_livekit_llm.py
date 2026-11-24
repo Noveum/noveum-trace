@@ -542,3 +542,84 @@ class TestWrappedLLMStream:
         # Span should be created
         assert wrapped_stream._span_created
         assert mock_client.start_span.called
+
+
+class TestTokenMetrics:
+    """Test _add_token_metrics, including derived reasoning tokens."""
+
+    @pytest.fixture
+    def wrapped_stream(self, mock_base_llm, mock_chat_context):
+        """Create a wrapped stream with no usage set."""
+        wrapper = LiveKitLLMWrapper(
+            llm=mock_base_llm,
+            session_id="test_session",
+            job_context={"job_id": "test_job"},
+        )
+        return _WrappedLLMStream(
+            base_stream=AsyncStreamMock(iter(())),
+            llm_wrapper=wrapper,
+            chat_ctx=mock_chat_context,
+            tools=[],
+            kwargs={},
+        )
+
+    def test_reasoning_tokens_derived_from_total(self, wrapped_stream):
+        """Gemini-style usage: thoughts are only visible inside total_tokens."""
+        if not LIVEKIT_AVAILABLE:
+            pytest.skip("LiveKit not available")
+        from livekit.agents.llm import CompletionUsage
+
+        wrapped_stream._usage = CompletionUsage(
+            completion_tokens=18, prompt_tokens=18, total_tokens=162
+        )
+        attributes = {}
+        wrapped_stream._add_token_metrics(attributes)
+
+        assert attributes["llm.prompt_tokens"] == 18
+        assert attributes["llm.completion_tokens"] == 18
+        assert attributes["llm.total_tokens"] == 162
+        assert attributes["llm.reasoning_tokens"] == 126
+
+    def test_reasoning_tokens_zero_when_total_matches(self, wrapped_stream):
+        """OpenAI-style usage: total equals prompt plus completion."""
+        if not LIVEKIT_AVAILABLE:
+            pytest.skip("LiveKit not available")
+        from livekit.agents.llm import CompletionUsage
+
+        wrapped_stream._usage = CompletionUsage(
+            completion_tokens=10, prompt_tokens=20, total_tokens=30
+        )
+        attributes = {}
+        wrapped_stream._add_token_metrics(attributes)
+
+        assert attributes["llm.reasoning_tokens"] == 0
+
+    def test_reasoning_tokens_never_negative(self, wrapped_stream):
+        """A provider reporting total below prompt plus completion clamps to 0."""
+        wrapped_stream._usage = Mock(
+            completion_tokens=10, prompt_tokens=20, total_tokens=25, spec=[]
+        )
+        attributes = {}
+        wrapped_stream._add_token_metrics(attributes)
+
+        assert attributes["llm.reasoning_tokens"] == 0
+
+    def test_no_reasoning_tokens_when_total_absent(self, wrapped_stream):
+        """No reasoning attribute is written when total_tokens is missing."""
+        wrapped_stream._usage = Mock(
+            completion_tokens=18, prompt_tokens=18, total_tokens=None, spec=[]
+        )
+        attributes = {}
+        wrapped_stream._add_token_metrics(attributes)
+
+        assert attributes["llm.prompt_tokens"] == 18
+        assert attributes["llm.completion_tokens"] == 18
+        assert "llm.reasoning_tokens" not in attributes
+
+    def test_no_token_attributes_without_usage(self, wrapped_stream):
+        """Nothing is written when no usage was captured."""
+        wrapped_stream._usage = None
+        attributes = {}
+        wrapped_stream._add_token_metrics(attributes)
+
+        assert attributes == {}

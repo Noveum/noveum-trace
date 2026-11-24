@@ -338,6 +338,11 @@ class _WrappedSynthesizeStream:
                     # Build additional attributes
                     additional_attrs = {
                         "tts.input_text": input_text,
+                        # Platform cost pipeline reads tts.characters; the
+                        # "unknown" fallback is not billable text
+                        "tts.characters": (
+                            0 if input_text == "unknown" else len(input_text)
+                        ),
                         "tts.mode": "streaming",
                         "tts.is_final": audio.is_final,
                     }
@@ -551,6 +556,8 @@ class _WrappedChunkedStream:
                 # Build additional attributes
                 additional_attrs = {
                     "tts.input_text": input_text,
+                    # Platform cost pipeline reads tts.characters
+                    "tts.characters": len(input_text),
                     "tts.mode": "batch",
                     "tts.is_final": (
                         self._first_audio.is_final if self._first_audio else True
