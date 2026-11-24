@@ -1134,3 +1134,170 @@ class TestWrappedChunkedStreamErrorHandling:
         await stream.aclose()
 
         mock_base_stream.aclose.assert_called_once()
+
+
+@pytest.mark.skipif(
+    not LIVEKIT_WRAPPER_AVAILABLE, reason="LiveKit wrappers not available"
+)
+class TestTTSCharacters:
+    """Test that TTS spans carry tts.characters for the cost pipeline."""
+
+    @staticmethod
+    def _span_attributes(mock_client):
+        return mock_client.start_span.call_args.kwargs["attributes"]
+
+    @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.upload_audio_frames")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms")
+    @pytest.mark.asyncio
+    async def test_streaming_span_sets_characters(
+        self,
+        mock_calc_duration,
+        mock_upload_audio,
+        mock_get_client,
+        mock_get_trace,
+        mock_trace,
+        mock_client,
+    ):
+        """Streaming path: tts.characters equals len(tts.input_text)."""
+        from noveum_trace.integrations.livekit.livekit_tts import (
+            _WrappedSynthesizeStream,
+        )
+
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_audio.segment_id = "seg_123"
+        mock_audio.request_id = "req_456"
+        mock_audio.delta_text = ""
+        mock_base_stream = AsyncMock()
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+        )
+        stream._input_text = "Hello world"
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+        mock_calc_duration.return_value = 1000.0
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
+
+        await stream.__anext__()
+
+        attributes = self._span_attributes(mock_client)
+        assert attributes["tts.input_text"] == "Hello world"
+        assert attributes["tts.characters"] == len("Hello world")
+
+    @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.upload_audio_frames")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms")
+    @pytest.mark.asyncio
+    async def test_streaming_unknown_fallback_sets_zero_characters(
+        self,
+        mock_calc_duration,
+        mock_upload_audio,
+        mock_get_client,
+        mock_get_trace,
+        mock_trace,
+        mock_client,
+    ):
+        """Streaming path with no text: the "unknown" fallback is 0 characters."""
+        from noveum_trace.integrations.livekit.livekit_tts import (
+            _WrappedSynthesizeStream,
+        )
+
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_audio.segment_id = None
+        mock_audio.request_id = None
+        mock_audio.delta_text = ""
+        mock_base_stream = AsyncMock()
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedSynthesizeStream(
+            base_stream=mock_base_stream,
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+        )
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+        mock_calc_duration.return_value = 1000.0
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
+
+        await stream.__anext__()
+
+        attributes = self._span_attributes(mock_client)
+        assert attributes["tts.input_text"] == "unknown"
+        assert attributes["tts.characters"] == 0
+
+    @patch("noveum_trace.integrations.livekit.livekit_tts.LIVEKIT_AVAILABLE", True)
+    @patch("noveum_trace.integrations.livekit.livekit_tts.get_current_trace")
+    @patch("noveum_trace.get_client")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.upload_audio_frames")
+    @patch("noveum_trace.integrations.livekit.livekit_tts.calculate_audio_duration_ms")
+    @pytest.mark.asyncio
+    async def test_batch_span_sets_characters(
+        self,
+        mock_calc_duration,
+        mock_upload_audio,
+        mock_get_client,
+        mock_get_trace,
+        mock_trace,
+        mock_client,
+    ):
+        """Batch synthesize path: tts.characters equals len(tts.input_text)."""
+        from noveum_trace.integrations.livekit.livekit_tts import _WrappedChunkedStream
+
+        mock_audio = Mock()
+        mock_audio.frame = Mock()
+        mock_audio.is_final = True
+        mock_audio.request_id = "req_456"
+        mock_audio.segment_id = "seg_123"
+        mock_audio.delta_text = "Good morning, caller."
+        mock_base_stream = AsyncMock()
+        mock_base_stream.__anext__ = AsyncMock(return_value=mock_audio)
+
+        stream = _WrappedChunkedStream(
+            base_stream=mock_base_stream,
+            input_text="Good morning, caller.",
+            session_id="session_123",
+            job_context={},
+            provider="cartesia",
+            model="sonic",
+            counter_ref=[0],
+        )
+
+        mock_get_trace.return_value = mock_trace
+        mock_get_client.return_value = mock_client
+        mock_calc_duration.return_value = 1000.0
+        mock_span = Mock()
+        mock_span.trace_id = "trace-123"
+        mock_span.span_id = "span-456"
+        mock_client.start_span.return_value = mock_span
+
+        await stream.__anext__()
+
+        attributes = self._span_attributes(mock_client)
+        assert attributes["tts.input_text"] == "Good morning, caller."
+        assert attributes["tts.characters"] == len("Good morning, caller.")

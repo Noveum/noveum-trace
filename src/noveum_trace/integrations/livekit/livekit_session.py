@@ -599,7 +599,12 @@ class _LiveKitTracingManager:
         if completion_tokens is not None:
             llm_metrics["llm.output_tokens"] = completion_tokens
         if total_tokens is not None:
-            llm_metrics["llm.total_tokens"] = total_tokens
+            llm_metrics.setdefault("llm.total_tokens", total_tokens)
+            # Gemini reports thoughts only inside total_tokens; for OpenAI-style
+            # usage total equals prompt plus completion so this is 0.
+            llm_metrics["llm.reasoning_tokens"] = max(
+                0, total_tokens - (prompt_tokens or 0) - (completion_tokens or 0)
+            )
 
         metadata = getattr(metrics, "metadata", None)
         if metadata:
